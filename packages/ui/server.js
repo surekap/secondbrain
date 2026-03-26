@@ -781,7 +781,13 @@ app.post('/api/relationships/contacts/:id/reanalyze', async (req, res) => {
       ? `\nUser-confirmed facts (treat as ground truth, do not contradict):\n${overrideKeys.map(k => `- ${k}: ${JSON.stringify(overrides[k].value)}`).join('\n')}\n`
       : '';
 
-    const prompt = `Analyze this contact and return an updated JSON profile.
+    const prompt = `You are analyzing a contact from the perspective of the account owner.
+Describe who THIS CONTACT IS to the account owner — their role, not the reverse.
+
+Examples of correct perspective:
+- Account owner's dentist → relationship_type: "service_provider", my_role: "patient"
+- Account owner's investor → relationship_type: "professional_contact", my_role: "founder"
+- Account owner's employee → relationship_type: "colleague", my_role: "manager"
 
 Contact: ${displayName}${phone ? ` (+${phone})` : ''}
 Existing company: ${contact.company || 'unknown'}
@@ -794,9 +800,10 @@ Return ONLY valid JSON:
 {
   "company": null or "company name",
   "job_title": null or "their role",
+  "my_role": null or "account owner's role relative to this contact (e.g. patient, client, mentee)",
   "relationship_type": "family|friend|colleague|client|vendor|service_provider|professional_contact|unknown",
   "relationship_strength": "strong|moderate|weak|noise",
-  "summary": "2-3 sentence description of who this person is and your relationship",
+  "summary": "2-3 sentence description of who this person is TO the account owner",
   "tags": ["tag1", "tag2"],
   "is_noise": false
 }`;
@@ -812,9 +819,18 @@ Return ONLY valid JSON:
     const clean = raw.replace(/^```(?:json)?\n?/m,'').replace(/\n?```$/m,'').trim();
     const result = JSON.parse(clean);
 
+    // Persist my_role if returned
+    if (result.my_role !== undefined) {
+      await db.query(
+        `UPDATE relationships.contacts SET my_role = $1, updated_at = NOW() WHERE id = $2`,
+        [result.my_role || null, id]
+      )
+    }
+
     res.json({
       company:               result.company               ?? null,
       job_title:             result.job_title             ?? null,
+      my_role:               result.my_role               ?? null,
       relationship_type:     result.relationship_type     || 'unknown',
       relationship_strength: result.relationship_strength || 'weak',
       summary:               result.summary               || '',

@@ -59,30 +59,32 @@ async function upsertContact(profile, chatId) {
           wa_jids               = ARRAY(SELECT DISTINCT unnest(wa_jids || ARRAY[$4]::text[])),
           company               = CASE WHEN manual_overrides ? 'company'               THEN company               ELSE COALESCE($5, company) END,
           job_title             = CASE WHEN manual_overrides ? 'job_title'             THEN job_title             ELSE COALESCE($6, job_title) END,
-          summary               = CASE WHEN manual_overrides ? 'summary'               THEN summary               ELSE $7  END,
-          relationship_type     = CASE WHEN manual_overrides ? 'relationship_type'     THEN relationship_type     ELSE $8  END,
-          relationship_strength = CASE WHEN manual_overrides ? 'relationship_strength' THEN relationship_strength ELSE $9  END,
-          tags                  = CASE WHEN manual_overrides ? 'tags'                  THEN tags                  ELSE $10 END,
-          is_noise              = CASE WHEN manual_overrides ? 'is_noise'              THEN is_noise              ELSE $11 END,
-          last_interaction_at   = $12,
-          first_interaction_at  = LEAST(first_interaction_at, $13),
+          my_role               = CASE WHEN manual_overrides ? 'my_role'               THEN my_role               ELSE COALESCE($7, my_role) END,
+          summary               = CASE WHEN manual_overrides ? 'summary'               THEN summary               ELSE $8  END,
+          relationship_type     = CASE WHEN manual_overrides ? 'relationship_type'     THEN relationship_type     ELSE $9  END,
+          relationship_strength = CASE WHEN manual_overrides ? 'relationship_strength' THEN relationship_strength ELSE $10 END,
+          tags                  = CASE WHEN manual_overrides ? 'tags'                  THEN tags                  ELSE $11 END,
+          is_noise              = CASE WHEN manual_overrides ? 'is_noise'              THEN is_noise              ELSE $12 END,
+          last_interaction_at   = $13,
+          first_interaction_at  = LEAST(first_interaction_at, $14),
           updated_at            = NOW()
-        WHERE id = $14
+        WHERE id = $15
       `, [
-        profile.display_name,
-        normalizeName(profile.display_name),
-        phone,
-        waJid,
-        profile.company,
-        profile.job_title,
-        profile.summary,
-        profile.relationship_type,
-        profile.relationship_strength,
-        profile.tags,
-        profile.is_noise,
-        profile.last_msg_at || null,
-        profile.first_msg_at || null,
-        id,
+        profile.display_name,          // $1
+        normalizeName(profile.display_name), // $2
+        phone,                         // $3
+        waJid,                         // $4
+        profile.company,               // $5
+        profile.job_title,             // $6
+        profile.my_role,               // $7
+        profile.summary,               // $8
+        profile.relationship_type,     // $9
+        profile.relationship_strength, // $10
+        profile.tags,                  // $11
+        profile.is_noise,              // $12
+        profile.last_msg_at || null,   // $13
+        profile.first_msg_at || null,  // $14
+        id,                            // $15
       ])
       return id
     }
@@ -91,10 +93,10 @@ async function upsertContact(profile, chatId) {
     const { rows: inserted } = await db.query(`
       INSERT INTO relationships.contacts (
         display_name, normalized_name, phone_numbers, wa_jids,
-        company, job_title, summary,
+        company, job_title, my_role, summary,
         relationship_type, relationship_strength, tags, is_noise,
         last_interaction_at, first_interaction_at
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
       RETURNING id
     `, [
       profile.display_name,
@@ -103,6 +105,7 @@ async function upsertContact(profile, chatId) {
       [waJid],
       profile.company,
       profile.job_title,
+      profile.my_role,
       profile.summary,
       profile.relationship_type,
       profile.relationship_strength,
