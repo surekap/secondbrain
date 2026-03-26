@@ -14,6 +14,7 @@
 
 const Anthropic = require('@anthropic-ai/sdk')
 const db        = require('@secondbrain/db')
+const { buildCrossSourceDigest } = require('./extractor')
 
 const MODEL = 'claude-sonnet-4-6'
 
@@ -377,6 +378,277 @@ async function findReadEmailsWithNoResponse() {
   return insights
 }
 
+// ── Agent 5: Cross-Person Intelligence ────────────────────────────────────────
+// Reads the cross-source digest and detects cross-person opportunities.
+
+async function detectCrossPersonOpportunities(lastRunAt) {
+  const insights = []
+  try {
+    const digest = await buildCrossSourceDigest(
+      lastRunAt ? new Date(Math.min(new Date(lastRunAt), Date.now() - 30 * 24 * 60 * 60 * 1000)) : null
+    )
+    if (!digest || digest.length < 200) return insights
+
+    const prompt = `You are a relationship intelligence assistant for a senior executive.
+Analyze these recent communications and identify actionable relationship opportunities.
+
+Look specifically for:
+1. CHECK-IN: Someone mentioned as going through difficulty (surgery, illness, crisis, loss, stress) — the executive should check in
+2. INTRODUCTION: Person A has a need (looking for consultant, seeking intro, needs help with X) AND Person B has the matching skill/service mentioned elsewhere — executive can make introduction
+3. FOLLOW-UP: Someone mentioned the executive, their work, or something they said — worth acknowledging
+4. PROJECT_MATCH: Someone whose skills/company could help with a business challenge mentioned in the communications
+
+Communications digest (newest first):
+${digest}
+
+Return ONLY a JSON array (empty array if no strong opportunities):
+[
+  {
+    "type": "check_in|introduction|follow_up|project_match",
+    "title": "Short action title (max 60 chars)",
+    "description": "Specific, actionable description referencing what was said and why this matters",
+    "person_names": ["Name1", "Name2"],
+    "priority": "high|medium|low"
+  }
+]
+
+Rules:
+- Only return genuine, specific opportunities — not generic advice
+- INTRODUCTION opportunities must name both the person with the need AND the person who can help
+- CHECK-IN opportunities must reference the specific situation
+- Maximum 5 opportunities
+- If no strong opportunities, return []`
+
+    const response = await getClient().messages.create({
+      model: MODEL,
+      max_tokens: 1500,
+      messages: [{ role: 'user', content: prompt }],
+    })
+
+    const text = response.content?.[0]?.text || ''
+    const items = parseJSON(text)
+    if (!Array.isArray(items)) return insights
+
+    for (const item of items.slice(0, 5)) {
+      // Resolve person names to contact_ids
+      const contactIds = []
+      for (const name of (item.person_names || [])) {
+        if (!name) continue
+        try {
+          const { rows } = await db.query(`
+            SELECT id FROM relationships.contacts
+            WHERE normalized_name ILIKE $1
+               OR display_name ILIKE $2
+            LIMIT 1
+          `, [name.toLowerCase().trim(), name.trim()])
+          if (rows.length > 0) contactIds.push(rows[0].id)
+        } catch { /* ignore */ }
+      }
+
+      // Deduplicate: skip if a similar insight already exists unactioned
+      const titleHash = `cross:${item.title?.slice(0, 40)?.toLowerCase().replace(/\s+/g, '_')}`
+      const { rows: exists } = await db.query(`
+        SELECT id FROM relationships.insights
+        WHERE source_ref = $1
+          AND is_actioned = false AND is_dismissed = false
+        LIMIT 1
+      `, [titleHash])
+      if (exists.length > 0) continue
+
+      insights.push({
+        contact_id:   contactIds[0] || null,
+        contact_ids:  contactIds,
+        insight_type: 'cross_source_opportunity',
+        title:        item.title || 'Relationship opportunity',
+        description:  item.description || '',
+        priority:     item.priority || 'medium',
+        source_ref:   titleHash,
+      })
+    }
+  } catch (err) {
+    console.error('[opportunities] detectCrossPersonOpportunities error:', err.message)
+  }
+  return insights
+}
+
+// ── Agent 6: Project Match ─────────────────────────────────────────────────────
+// Matches open projects to contacts who could help.
+
+async function detectProjectMatches(lastRunAt) {
+  const insights = []
+  try {
+    // Fetch open projects
+    const { rows: projects } = await db.query(`
+      SELECT id, name, description, status, tags
+      FROM projects.projects
+      WHERE status NOT IN ('completed', 'cancelled', 'noise')
+      ORDER BY updated_at DESC
+      LIMIT 10
+    `)
+    if (projects.length === 0) return insights
+
+    // Fetch strong/moderate contacts with research summaries or job details
+    const { rows: contacts } = await db.query(`
+      SELECT id, display_name, job_title, company, research_summary, summary, tags
+      FROM relationships.contacts
+      WHERE is_noise = false
+        AND relationship_strength IN ('strong', 'moderate')
+      ORDER BY last_interaction_at DESC NULLS LAST
+      LIMIT 50
+    `)
+    if (contacts.length === 0) return insights
+
+    const projectList = projects.map(p =>
+      `- [ID:${p.id}] ${p.name}: ${(p.description || '').slice(0, 150)}`
+    ).join('\n')
+
+    const contactList = contacts.map(c => {
+      const bio = c.research_summary || c.summary || ''
+      return `- [ID:${c.id}] ${c.display_name} (${c.job_title || 'unknown role'} @ ${c.company || 'unknown company'}): ${bio.slice(0, 150)}`
+    }).join('\n')
+
+    const prompt = `You are a relationship intelligence assistant.
+Given these open projects and contacts, identify which contacts could concretely help with which projects.
+
+Open projects:
+${projectList}
+
+Contacts:
+${contactList}
+
+Return ONLY a JSON array of the best 3 matches (empty array if none are strong matches):
+[
+  {
+    "project_id": 123,
+    "contact_id": 456,
+    "project_name": "...",
+    "contact_name": "...",
+    "reason": "Why this contact can help and how (2-3 sentences)",
+    "suggested_opener": "A specific, natural opening message to send this contact about the project (1-2 sentences)",
+    "priority": "high|medium|low"
+  }
+]
+
+Only include genuinely strong matches where the contact has relevant expertise or connections.`
+
+    const response = await getClient().messages.create({
+      model: MODEL,
+      max_tokens: 1200,
+      messages: [{ role: 'user', content: prompt }],
+    })
+
+    const text = response.content?.[0]?.text || ''
+    const items = parseJSON(text)
+    if (!Array.isArray(items)) return insights
+
+    for (const item of items.slice(0, 3)) {
+      const sourceRef = `project:${item.project_id}:${item.contact_id}`
+      const { rows: exists } = await db.query(`
+        SELECT id FROM relationships.insights
+        WHERE source_ref = $1
+          AND is_actioned = false AND is_dismissed = false
+        LIMIT 1
+      `, [sourceRef])
+      if (exists.length > 0) continue
+
+      insights.push({
+        contact_id:   item.contact_id || null,
+        contact_ids:  item.contact_id ? [item.contact_id] : [],
+        insight_type: 'project_match',
+        title:        `${item.contact_name} can help with: ${item.project_name}`,
+        description:  `${item.reason}\n\nSuggested opener: "${item.suggested_opener}"`,
+        priority:     item.priority || 'medium',
+        source_ref:   sourceRef,
+      })
+    }
+  } catch (err) {
+    console.error('[opportunities] detectProjectMatches error:', err.message)
+  }
+  return insights
+}
+
+// ── Agent 7: Research-Driven Opportunities ───────────────────────────────────
+// Scans new research results for contextual opportunities.
+
+async function detectResearchOpportunities(lastRunAt) {
+  const insights = []
+  try {
+    const since = lastRunAt || new Date(Date.now() - 24 * 60 * 60 * 1000)
+    const { rows: newResearch } = await db.query(`
+      SELECT cr.contact_id, cr.summary, cr.source, cr.researched_at,
+             c.display_name, c.company
+      FROM relationships.contact_research cr
+      JOIN relationships.contacts c ON c.id = cr.contact_id
+      WHERE cr.researched_at > $1
+        AND cr.summary IS NOT NULL
+        AND cr.summary NOT LIKE '%No %found%'
+      ORDER BY cr.researched_at DESC
+      LIMIT 30
+    `, [since])
+
+    if (newResearch.length === 0) return insights
+
+    // Group by contact
+    const byContact = {}
+    for (const r of newResearch) {
+      if (!byContact[r.contact_id]) {
+        byContact[r.contact_id] = { display_name: r.display_name, company: r.company, summaries: [] }
+      }
+      byContact[r.contact_id].summaries.push(`[${r.source}] ${r.summary}`)
+    }
+
+    for (const [contactId, data] of Object.entries(byContact)) {
+      const combined = data.summaries.join('\n\n').slice(0, 2000)
+      const prompt = `Based on this recent research about ${data.display_name} (${data.company || 'unknown company'}), identify any specific relationship opportunities.
+
+Research:
+${combined}
+
+Look for: company news (new product/funding/expansion), role changes, achievements, events, or anything that would be a natural reason to reach out.
+
+Return ONLY a JSON object (or null if no strong opportunity):
+{
+  "title": "Short opportunity title (max 60 chars)",
+  "description": "What happened and why it's a good reason to reach out (2-3 sentences)",
+  "priority": "high|medium|low"
+}`
+
+      try {
+        const response = await getClient().messages.create({
+          model: MODEL,
+          max_tokens: 300,
+          messages: [{ role: 'user', content: prompt }],
+        })
+        const text = response.content?.[0]?.text || ''
+        if (text.trim() === 'null' || !text.trim()) continue
+        const item = parseJSON(text)
+        if (!item?.title) continue
+
+        const sourceRef = `research:${contactId}:${Math.floor(Date.now() / 86400000)}`
+        const { rows: exists } = await db.query(`
+          SELECT id FROM relationships.insights
+          WHERE source_ref = $1 AND is_actioned = false AND is_dismissed = false LIMIT 1
+        `, [sourceRef])
+        if (exists.length > 0) continue
+
+        insights.push({
+          contact_id:   parseInt(contactId, 10),
+          contact_ids:  [parseInt(contactId, 10)],
+          insight_type: 'opportunity',
+          title:        item.title,
+          description:  item.description || '',
+          priority:     item.priority || 'medium',
+          source_ref:   sourceRef,
+        })
+        await sleep(300)
+      } catch { /* non-fatal per contact */ }
+    }
+  } catch (err) {
+    console.error('[opportunities] detectResearchOpportunities error:', err.message)
+  }
+  return insights
+}
+
 // ── Swarm orchestrator ────────────────────────────────────────────────────────
 // Runs all 4 agents in parallel. Returns flat array of all insights found.
 
@@ -415,7 +687,28 @@ async function runOpportunitySwarm(lastRunAt) {
   }
 
   console.log(`   Swarm complete — ${allInsights.length} total opportunities found`)
+
+  // Agent 5: Cross-person opportunities
+  const crossPersonInsights = await detectCrossPersonOpportunities(lastRunAt)
+  allInsights.push(...crossPersonInsights)
+  console.log(`   [Agent 5] ${crossPersonInsights.length} cross-person opportunities`)
+
+  // Agent 6: Project matches
+  const projectInsights = await detectProjectMatches(lastRunAt)
+  allInsights.push(...projectInsights)
+  console.log(`   [Agent 6] ${projectInsights.length} project matches`)
+
+  // Agent 7: Research-driven opportunities
+  const researchInsights = await detectResearchOpportunities(lastRunAt)
+  allInsights.push(...researchInsights)
+  console.log(`   [Agent 7] ${researchInsights.length} research-driven opportunities`)
+
   return allInsights
 }
 
-module.exports = { runOpportunitySwarm }
+module.exports = {
+  runOpportunitySwarm,
+  detectCrossPersonOpportunities,
+  detectProjectMatches,
+  detectResearchOpportunities,
+}
