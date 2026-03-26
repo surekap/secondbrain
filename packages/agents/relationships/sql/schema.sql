@@ -167,6 +167,44 @@ CREATE INDEX IF NOT EXISTS email_senders_noise_idx        ON relationships.email
 -- Structure: { "field_name": { "value": ..., "set_at": "ISO timestamp" }, ... }
 ALTER TABLE relationships.contacts ADD COLUMN IF NOT EXISTS manual_overrides JSONB DEFAULT '{}';
 
+-- ── my_role + research_summary on contacts ──────────────────────────────────
+ALTER TABLE relationships.contacts ADD COLUMN IF NOT EXISTS my_role TEXT;
+-- e.g. "patient", "client", "mentee", "employer"
+-- Describes the account owner's role in relation to this contact
+
+ALTER TABLE relationships.contacts ADD COLUMN IF NOT EXISTS research_summary TEXT;
+-- Synthesised dossier paragraph from external research
+
+-- ── Contact research ────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS relationships.contact_research (
+  id              BIGSERIAL PRIMARY KEY,
+  contact_id      BIGINT REFERENCES relationships.contacts(id) ON DELETE CASCADE,
+  source          TEXT NOT NULL CHECK (source IN ('tavily','openai','peopledatalabs','serpapi')),
+  query           TEXT,
+  result_json     JSONB,
+  summary         TEXT,
+  researched_name TEXT,
+  researched_at   TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE (contact_id, source)
+);
+
+CREATE INDEX IF NOT EXISTS contact_research_contact_idx ON relationships.contact_research (contact_id);
+CREATE INDEX IF NOT EXISTS contact_research_name_idx    ON relationships.contact_research (researched_name);
+CREATE INDEX IF NOT EXISTS contact_research_at_idx      ON relationships.contact_research (researched_at DESC);
+
+-- ── Extended insight_type ────────────────────────────────────────────────────
+ALTER TABLE relationships.insights DROP CONSTRAINT IF EXISTS insights_insight_type_check;
+ALTER TABLE relationships.insights ADD CONSTRAINT insights_insight_type_check
+  CHECK (insight_type IN (
+    'opportunity', 'cold_email', 'unread_group', 'awaiting_reply',
+    'action_needed', 'topic',
+    'cross_source_opportunity',
+    'project_match'
+  ));
+
+-- ── contact_ids on insights (for multi-person opportunities) ─────────────────
+ALTER TABLE relationships.insights ADD COLUMN IF NOT EXISTS contact_ids BIGINT[] DEFAULT '{}';
+CREATE INDEX IF NOT EXISTS insights_contact_ids_idx ON relationships.insights USING GIN (contact_ids);
 -- ── Group intelligence columns ─────────────────────────────────────────────────
 ALTER TABLE relationships.groups ADD COLUMN IF NOT EXISTS group_type TEXT
   CHECK (group_type IN ('board_peers','management','employees','community','unknown'))
