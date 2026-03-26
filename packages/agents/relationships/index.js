@@ -215,10 +215,12 @@ async function upsertInsight(contactId, insightData) {
       if (exists.length > 0) return exists[0].id
     }
 
+    const contactIds = Array.isArray(insightData.contact_ids) ? insightData.contact_ids : []
+
     const { rows } = await db.query(`
       INSERT INTO relationships.insights (
-        contact_id, insight_type, title, description, priority, source_ref
-      ) VALUES ($1, $2, $3, $4, $5, $6)
+        contact_id, insight_type, title, description, priority, source_ref, contact_ids
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7)
       RETURNING id
     `, [
       contactId,
@@ -227,6 +229,7 @@ async function upsertInsight(contactId, insightData) {
       insightData.description,
       insightData.priority || 'medium',
       insightData.source_ref || null,
+      contactIds,
     ])
     return rows[0]?.id || null
   } catch (err) {
