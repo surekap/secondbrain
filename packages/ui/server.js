@@ -35,12 +35,31 @@ try {
 
 async function runSystemSchema() {
   if (!db) return;
-  const sql = fs.readFileSync(
-    path.resolve(__dirname, '../agents/shared/sql/system-schema.sql'),
-    'utf8'
-  );
-  await db.query(sql);
-  console.log('[server] system schema ensured');
+
+  // Order matters: agent schemas first, then system (which creates per-agent config
+  // tables conditionally), then search (pgvector — may not be installed).
+  const schemas = [
+    { file: '../agents/email/sql/schema.sql',          required: true  },
+    { file: '../agents/limitless/sql/schema.sql',      required: true  },
+    { file: '../agents/projects/sql/schema.sql',       required: true  },
+    { file: '../agents/relationships/sql/schema.sql',  required: true  },
+    { file: '../agents/ai/sql/schema.sql',             required: true  },
+    { file: '../agents/research/sql/schema.sql',       required: true  },
+    { file: '../agents/shared/sql/system-schema.sql',  required: true  },
+    { file: './sql/search_schema.sql',                 required: false }, // needs pgvector
+  ];
+
+  for (const { file, required } of schemas) {
+    const sql = fs.readFileSync(path.resolve(__dirname, file), 'utf8');
+    try {
+      await db.query(sql);
+    } catch (err) {
+      if (required) throw err;
+      console.warn(`[server] optional schema skipped (${path.basename(file)}): ${err.message}`);
+    }
+  }
+
+  console.log('[server] all schemas initialized');
 }
 
 async function migrateEnvToDb() {

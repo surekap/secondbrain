@@ -61,21 +61,15 @@ On first startup the server seeds sensible defaults (cron schedules, batch sizes
 
 ## Database Schemas
 
-Each agent auto-initialises its own schema on startup. Manual init:
+All schemas are initialized automatically on `npm run ui` startup — no manual `psql` commands needed. The server runs each schema file in dependency order (agent schemas → system config schema → search/pgvector schema).
 
-```bash
-psql $DATABASE_URL -f packages/agents/email/sql/schema.sql
-psql $DATABASE_URL -f packages/agents/limitless/sql/schema.sql
-psql $DATABASE_URL -f packages/agents/projects/sql/schema.sql
-psql $DATABASE_URL -f packages/agents/relationships/sql/schema.sql
-psql $DATABASE_URL -f packages/ui/sql/search_schema.sql  # pgvector — run separately
-```
+The `search.*` schema (pgvector) is optional — startup logs a warning and continues if the `vector` extension is not installed.
 
-Key schemas: `email.*`, `limitless.*`, `projects.*`, `relationships.*`, `search.*`, `public.messages` (WhatsApp).
+Key schemas: `email.*`, `limitless.*`, `projects.*`, `relationships.*`, `ai.*`, `system.*`, `search.*`, `public.messages` (WhatsApp).
 
 ## Gotchas
 
-- **pgvector must be enabled separately** — `search_schema.sql` requires the `vector` extension. Run it after the agent schemas.
+- **pgvector is optional** — if the `vector` extension isn't installed, semantic search is unavailable but everything else works. Server logs a warning on startup.
 - **Agent process management lives in `server.js`** — agents are spawned as child processes; PIDs tracked in `.agent-pids/`, logs in `.agent-logs/`.
 - **Manual overrides are sticky** — any field edited in the UI is written to `manual_overrides JSONB` on `projects.projects` / `relationships.contacts`. Agents never overwrite these. To unlock, send `_clearOverrides: ['field_name']` in a PATCH request.
 - **WhatsApp bridge is external** — `public.messages` is populated by a separate WhatsApp bridge not in this repo. Agents read from it but don't write to it.
