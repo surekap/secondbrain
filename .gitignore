@@ -40,6 +40,16 @@ temp/
 # Git worktrees
 .worktrees/
 
+# Runtime / agent artifacts
+.agent-pids/
+.agent-logs/
+.model-cache/
+
 # WhatsApp connector session data
 packages/agents/whatsapp/.wwebjs_auth/
 packages/agents/whatsapp/.wwebjs_cache/
+.wwebjs_cache/
+.wwebjs_auth/
+
+# Test artifacts
+packages/ui/test-results/
