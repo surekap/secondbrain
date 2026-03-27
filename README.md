@@ -1,171 +1,31 @@
 # secondbrain
 
-A personal intelligence system that automatically synthesizes your email, voice recordings, and WhatsApp conversations into actionable insights about your projects and relationships.
+A personal intelligence system that synthesizes your email, voice recordings, WhatsApp, and AI conversation history into actionable insight about your projects, relationships, and priorities.
 
 ![Overview](docs/infographics/overview.png)
 
-<video src="docs/infographics/secondbrain__Your_Intel_Layer.mp4" controls style="max-width:100%;border-radius:8px"></video>
-
-![Security](docs/infographics/security.png)
-
-📖 **[User Manual](docs/manual/README.md)** — setup guides, agent configuration, and workflow playbooks.
+📖 **[User Manual](docs/manual/README.md)** — setup guides, agent configuration, and workflow playbooks for everyday users.
 
 ---
 
-## Architecture
+## Getting Started
 
-```
-┌──────────────────────────────────────────────────────┐
-│                  Data Sources                        │
-│   Gmail · Limitless.ai lifelogs · WhatsApp           │
-└──────────┬───────────────────────────────────────────┘
-           │
-           ▼
-┌──────────────────────────────────────────────────────┐
-│                  Ingestion Agents                    │
-│   Email Agent · Limitless Agent                      │
-└──────────┬───────────────────────────────────────────┘
-           │  writes to Postgres
-           ▼
-┌──────────────────────────────────────────────────────┐
-│                  PostgreSQL                          │
-│   email.*  ·  limitless.*  ·  public.messages        │
-└──────────┬───────────────────────────────────────────┘
-           │
-           ▼
-┌──────────────────────────────────────────────────────┐
-│               Analysis Agents (Claude-powered)       │
-│   Projects Agent · Relationships Agent               │
-└──────────┬───────────────────────────────────────────┘
-           │  writes to projects.*  relationships.*
-           ▼
-┌──────────────────────────────────────────────────────┐
-│                  Control Panel UI                    │
-│   Next.js (port 4000) + Express API (port 4001)      │
-└──────────────────────────────────────────────────────┘
+secondbrain is designed so you can get the whole application running with one command:
+
+```bash
+npm run ui
 ```
 
-All agents share a single Postgres database via `packages/db`. Analysis agents use the Anthropic Claude API to extract structured intelligence from raw communications.
+That starts:
 
----
-
-## Packages
-
-```
-packages/
-├── db/                     Shared Postgres connection pool
-├── agents/
-│   ├── email/              Gmail IMAP sync → email.*
-│   ├── limitless/          Limitless.ai lifelog fetch + Claude processing
-│   ├── projects/           Project discovery & tracking (Claude)
-│   └── relationships/      Contact profiling & relationship graph (Claude)
-└── ui/
-    ├── app/                Next.js 14 frontend (port 4000)
-    ├── public/             Legacy static HTML pages
-    └── server.js           Express API server (port 4001)
-```
-
----
-
-## Agents
-
-### Email Agent
-
-Syncs one or more Gmail inboxes into Postgres using IMAP.
-
-- Polls every 15 minutes
-- Upserts messages with full metadata (subject, body, headers, attachments, labels)
-- De-duplicates via `gmail_uid`
-
-**Schema:** `email.accounts`, `email.emails`
-
----
-
-### Limitless Agent
-
-Fetches lifelogs from the Limitless.ai API and processes them with Claude.
-
-- Fetches new lifelogs every 5 minutes
-- Processes unprocessed lifelogs every 30 seconds
-- Claude uses MCP-style tools to take actions: create Notion databases, add Todoist tasks, research stocks
-- Archives chat history and reminders
-
-**Schema:** `limitless.lifelogs`, `limitless.lifelog_processing`, `limitless.handlers`, `limitless.handler_logs`
-
----
-
-### Projects Agent
-
-Discovers and tracks projects from all communication sources using Claude.
-
-**How it works:**
-1. Gathers email thread subjects, lifelog titles, and WhatsApp chat names
-2. Claude identifies distinct projects, initiatives, and matters
-3. Upserts projects into the DB (case-insensitive name matching)
-4. Classifies emails, lifelogs, and WhatsApp messages to projects
-5. Re-analyzes projects that received new communications
-6. Generates insights: blockers, risks, next actions, opportunities
-
-Runs every 12 hours (incremental after first run — only processes new communications).
-
-**Schema:** `projects.projects`, `projects.project_communications`, `projects.project_insights`, `projects.analysis_runs`
-
----
-
-### Relationships Agent
-
-Builds and maintains contact profiles from WhatsApp, email, and Limitless lifelogs.
-
-**How it works:**
-1. Extracts direct chat contacts and group chats from WhatsApp
-2. Analyses each contact with Claude: identifies company, job title, relationship type/strength, tags
-3. Deep-analyses group chats: classifies group type, your role, key topics, and communication advice
-4. Processes email senders and links them to contact profiles
-5. Extracts named participants from Limitless transcripts
-6. Generates insights: awaiting reply, unread groups, opportunities, action needed
-
-Runs every 12 hours (incremental).
-
-**Schema:** `relationships.contacts`, `relationships.communications`, `relationships.groups`, `relationships.insights`, `relationships.analysis_runs`
-
----
-
-### Manual Overrides
-
-Any field you edit in the UI is recorded in a `manual_overrides JSONB` column on both `projects.projects` and `relationships.contacts`. Agents will never overwrite manually-set fields, and Claude is told about them as ground truth when generating new analysis.
-
-To hand a field back to agents, send `_clearOverrides: ['field_name']` in a PATCH request.
-
----
-
-## UI
-
-The control panel is a **Next.js 14** app (port 4000) that proxies `/api/*` to an **Express** API server (port 4001).
-
-### Pages
-
-| URL | Description |
-|-----|-------------|
-| `/` | Agent dashboard — start/stop agents, view logs, edit config |
-| `/relationships` | Contact list with search, filtering, manual editing, re-analysis |
-| `/groups` | WhatsApp group intelligence — type, your role, topics, advice |
-| `/projects` | Project tracker — status, health, insights, communications |
-| `/search` | Full-text search across all communications |
-
-### Log viewer
-
-Logs are polled per-agent when the log panel is open. The periodic 5-second status poll surgically patches only the mutable DOM (status pill, button, stats) — it never touches the log viewer, so log output is never wiped.
-
----
-
-## Setup
+- the Next.js UI on `http://localhost:4000`
+- the Express API / agent-control server on `http://localhost:4001`
 
 ### Prerequisites
 
 - Node.js 18+
 - PostgreSQL 14+
-- Anthropic API key
-- (Optional) Limitless.ai API key, Notion token, Todoist token
+- a database you can reach via `DATABASE_URL`
 
 ### Install
 
@@ -177,110 +37,320 @@ npm install
 
 ### Configure
 
-Create `.env.local` in the repo root:
+Create `.env.local` in the repo root.
 
-```bash
-# Database
+Minimum required:
+
+```env
 DATABASE_URL=postgresql://user:pass@localhost:5432/secondbrain
+```
 
-# AI
-ANTHROPIC_API_KEY=sk-ant-...
+Optional values can be added now or later through the UI:
 
-# Limitless (optional)
-LIMITLESS_API_KEY=...
-LIMITLESS_TIMEZONE=Asia/Kolkata
-FETCH_DAYS=1
-
-# Gmail (repeat _2, _3 etc. for multiple accounts)
+```env
+# Gmail (optional)
 GMAIL_EMAIL_1=you@gmail.com
 GMAIL_APP_PASSWORD_1=xxxx xxxx xxxx xxxx
 
-# Integrations (optional, used by Limitless agent tools)
-NOTION_TOKEN=...
-TODOIST_API_TOKEN=...
+# Limitless (optional)
+LIMITLESS_API_KEY=...
 
-# UI
+# AI / search (optional)
+ANTHROPIC_API_KEY=...
+OPENAI_API_KEY=...
+GEMINI_API_KEY=...
+
+# UI/API port override (optional)
 UI_PORT=4001
 ```
 
-### Initialize the database
-
-Each agent initialises its own schema automatically when it starts. You can also run the schemas directly:
+### Start the app
 
 ```bash
-psql $DATABASE_URL -f packages/agents/email/sql/schema.sql
-psql $DATABASE_URL -f packages/agents/limitless/sql/schema.sql
-psql $DATABASE_URL -f packages/agents/projects/sql/schema.sql
-psql $DATABASE_URL -f packages/agents/relationships/sql/schema.sql
+npm run ui
+```
+
+Then open:
+
+```text
+http://localhost:4000
+```
+
+### First startup behavior
+
+On startup, the server automatically and idempotently:
+
+- initializes all agent schemas
+- initializes shared system tables
+- attempts to initialize the optional search / pgvector schema
+- seeds sensible default config values into the database when missing
+
+You do **not** need to run manual `psql` schema commands for normal setup.
+
+If the PostgreSQL `vector` extension is not installed, semantic search is skipped and the rest of the app still works.
+
+### Initial setup in the UI
+
+Once the app is open, go to `/agents` and do this:
+
+1. Add at least one `LLM Provider`.
+2. Configure `Email` if you want Gmail sync.
+3. Configure `Limitless` if you use Limitless.ai.
+4. Add `Embeddings` if you want semantic search.
+5. Start the agents you want to run.
+
+Recommended starting order:
+
+```text
+ 1. Email / Limitless / WhatsApp
+ 2. Relationships + Projects
+ 3. Research (optional)
+```
+
+The UI lets you start and stop background agents from one place, so after `npm run ui` you usually do not need to manage separate terminal windows for day-to-day usage.
+
+### Quick-start path
+
+If you just want a useful system quickly:
+
+```text
+ 1. Set DATABASE_URL
+ 2. Run npm run ui
+ 3. Open /agents
+ 4. Add one LLM provider
+ 5. Configure Gmail
+ 6. Start Email, Relationships, and Projects
+ 7. Check Dashboard, Relationships, and Projects
 ```
 
 ---
 
-## Running
+## What secondbrain does
 
-### Development (UI + API server together)
+secondbrain turns fragmented communication into working intelligence.
+
+It helps you answer questions like:
+
+- Who matters right now?
+- Which projects are drifting?
+- What follow-up did I forget?
+- Which groups are signaling opportunity or risk?
+- What do I need to know before this meeting?
+
+Instead of manually stitching together inboxes, chats, transcripts, and notes, secondbrain gives you one operating layer across all of them.
+
+<video src="docs/infographics/secondbrain__Your_Intel_Layer.mp4" controls style="max-width:100%;border-radius:8px"></video>
+
+![Security](docs/infographics/security.png)
+
+---
+
+## Product Overview
+
+### Main pages
+
+| URL | What it does |
+|-----|---------------|
+| `/` | Dashboard for open insights, recent activity, and daily triage |
+| `/relationships` | Contact intelligence, communication history, research, and opportunities |
+| `/groups` | WhatsApp group intelligence, key topics, roles, and opportunities |
+| `/projects` | Project tracking, recent communications, blockers, risks, and next actions |
+| `/agents` | Agent control, configuration, logs, LLM providers, and embeddings |
+| `/search` | Semantic search across indexed content |
+
+### Core ideas
+
+- Background agents ingest and analyze your data over time.
+- Manual edits are sticky: if you correct a contact or project in the UI, later agent runs respect those overrides.
+- Search is optional and depends on embeddings plus PostgreSQL `vector`.
+
+---
+
+## Agents
+
+### Email Agent
+
+Syncs Gmail inboxes into Postgres using IMAP.
+
+- polls every 15 minutes
+- supports multiple Gmail accounts
+- powers relationship and project discovery
+
+### Limitless Agent
+
+Fetches and processes Limitless.ai lifelogs.
+
+- fetches every 5 minutes
+- processes batches every 30 seconds
+- feeds meeting and spoken-context signals into the system
+
+### WhatsApp Connector
+
+Lives in this repo and is no longer external.
+
+- bridges WhatsApp Web into Postgres
+- stores messages, chat metadata, and media references
+- powers the Groups page and strengthens Relationships / Projects
+- performs a historical sync after connection
+
+You can also run it directly with:
+
+```bash
+npm run whatsapp
+```
+
+### Relationships Agent
+
+Builds contact profiles and relationship insights from your communications.
+
+- links messages and people
+- generates relationship summaries and follow-up insights
+- analyzes WhatsApp groups
+
+### Projects Agent
+
+Discovers and tracks projects across email, WhatsApp, and lifelogs.
+
+- groups communications into project threads
+- generates blockers, risks, next actions, and opportunities
+- updates projects incrementally over time
+
+### Research Agent
+
+Enriches contact profiles using outside research providers.
+
+- optional
+- useful for important external stakeholders
+- can be triggered per contact from the Relationships page
+
+### OpenAI and Gemini Importers
+
+Import ChatGPT and Gemini conversation exports into the `ai` schema.
+
+- useful for long-term memory and future workflows
+- configured from the Agents page
+
+---
+
+## Architecture
+
+```text
+ Gmail         Limitless         WhatsApp         AI Exports
+   |               |                 |                 |
+   v               v                 v                 v
+ +----------------------------------------------------------+
+ |                    Ingestion Agents                      |
+ |   Email   Limitless   WhatsApp   OpenAI/Gemini Importers |
+ +----------------------------------------------------------+
+                         |
+                         v
+ +----------------------------------------------------------+
+ |                         Postgres                         |
+ | email.* limitless.* relationships.* projects.* ai.*     |
+ | system.* search.* public.messages                        |
+ +----------------------------------------------------------+
+                         |
+                         v
+ +----------------------------------------------------------+
+ |                   Analysis / Enrichment                  |
+ |      Relationships Agent   Projects Agent   Research     |
+ +----------------------------------------------------------+
+                         |
+                         v
+ +----------------------------------------------------------+
+ |                           UI                             |
+ | Dashboard | Relationships | Groups | Projects | Search  |
+ | Agents                                                   |
+ +----------------------------------------------------------+
+```
+
+All packages share a single Postgres database via `packages/db`.
+
+The UI server manages:
+
+- schema initialization
+- config seeding
+- agent start / stop / logs
+- system configuration APIs
+- semantic search indexing
+
+---
+
+## Repository Layout
+
+```text
+packages/
+├── db/                     Shared Postgres connection pool
+├── agents/
+│   ├── email/              Gmail IMAP sync -> email.*
+│   ├── limitless/          Limitless fetch + processing
+│   ├── projects/           Project discovery and insights
+│   ├── relationships/      Contact and group intelligence
+│   ├── research/           External contact enrichment
+│   ├── ai/                 OpenAI / Gemini importers
+│   └── whatsapp/           WhatsApp Web connector
+└── ui/
+    ├── app/                Next.js frontend (port 4000)
+    ├── services/           Search / embeddings background services
+    ├── sql/                Search schema
+    └── server.js           Express API + agent process manager
+```
+
+---
+
+## Useful Commands
+
+### Main app
+
+```bash
+npm run ui
+```
+
+Starts the UI plus API / agent-control server.
+
+### Development mode
 
 ```bash
 npm run ui:dev
 ```
 
-This starts:
-- `node server.js` — Express API on port 4001
-- `next dev -p 4000` — Next.js on port 4000
+Runs the same stack with Next.js dev mode.
 
-### Start individual agents
+### Individual agents
 
 ```bash
-npm run email           # Email sync agent
-npm run limitless       # Limitless processing agent
-npm run relationships   # Relationships analysis agent
-npm run projects        # Projects analysis agent
+npm run email
+npm run limitless
+npm run relationships
+npm run projects
+npm run research
+npm run whatsapp
+npm run ai:openai
+npm run ai:gemini
 ```
 
-### Or manage agents from the UI
-
-Open `http://localhost:4000`, start/stop agents from the dashboard.
+In normal usage, you can usually start and stop agents from `/agents` instead of using these commands directly.
 
 ---
 
-## npm Scripts
+## Notes
 
-| Script | Description |
-|--------|-------------|
-| `npm run ui:dev` | Start UI (Next.js + Express API) |
-| `npm run ui` | Production UI |
-| `npm run api` | Express API server only |
-| `npm run email` | Email agent |
-| `npm run limitless` | Limitless agent |
-| `npm run relationships` | Relationships agent |
-| `npm run projects` | Projects agent |
+### Manual overrides
 
----
+When you edit a project or contact in the UI, secondbrain stores that as a manual override and future agent runs try not to overwrite those fields.
 
-## Data Flow: Manual Overrides
+### Search
 
-When you edit a field in the UI (e.g. change a contact's relationship type to `friend`):
+Semantic search depends on:
 
-1. The PATCH endpoint updates the field **and** writes `{ "relationship_type": { "value": "friend", "set_at": "..." } }` into `manual_overrides`
-2. On the next agent run, the SQL `UPDATE` uses `CASE WHEN manual_overrides ? 'relationship_type' THEN relationship_type ELSE $new_value END` — the agent's value is discarded
-3. Claude receives the override as prompt context: *"User-confirmed facts (treat as ground truth): relationship_type: 'friend'"*
-4. The reanalyze endpoint returns `locked_fields: ['relationship_type']` so the UI can show which suggestions would be ignored
+- a Gemini API key for embeddings
+- PostgreSQL `vector`
 
-To unlock a field and let agents manage it again, send `_clearOverrides: ['relationship_type']` in a PATCH request.
+If either is missing, search may be unavailable while the rest of the system still works.
 
----
+### WhatsApp
 
-## WhatsApp Integration
-
-The WhatsApp messages live in `public.messages` (populated by an external WhatsApp bridge — not included in this repo). The agents expect rows with:
-
-```sql
-chat_id   TEXT    -- e.g. "919876543210@c.us" or "120363...@g.us"
-event     TEXT    -- 'message' | 'message_create' | 'message_historical' | 'group_update'
-msg_type  TEXT    -- 'chat' | 'image' | 'video' | 'document' | 'ptt' | ...
-data      JSONB   -- full WhatsApp message payload
-ts        TIMESTAMPTZ
-```
+The WhatsApp connector is included in this repo. It is not an external dependency anymore.
 
 ---
 
