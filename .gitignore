@@ -39,3 +39,7 @@ temp/
 
 # Git worktrees
 .worktrees/
+
+# WhatsApp connector session data
+packages/agents/whatsapp/.wwebjs_auth/
+packages/agents/whatsapp/.wwebjs_cache/

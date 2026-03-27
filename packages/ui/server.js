@@ -45,6 +45,7 @@ async function runSystemSchema() {
     { file: '../agents/relationships/sql/schema.sql',  required: true  },
     { file: '../agents/ai/sql/schema.sql',             required: true  },
     { file: '../agents/research/sql/schema.sql',       required: true  },
+    { file: '../agents/whatsapp/src/db/schema.sql',    required: true  },
     { file: '../agents/shared/sql/system-schema.sql',  required: true  },
     { file: './sql/search_schema.sql',                 required: false }, // needs pgvector
   ];

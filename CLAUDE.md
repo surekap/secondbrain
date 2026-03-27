@@ -15,6 +15,8 @@ npm run projects        # Projects analysis agent
 npm run ai:claude       # AI agent (Claude)
 npm run ai:openai       # AI agent (OpenAI)
 npm run ai:gemini       # AI agent (Gemini)
+npm run whatsapp        # WhatsApp bridge (requires CLIENT_ID env var)
+npm run whatsapp:setup  # Download Chromium for WhatsApp bridge (run once)
 
 npm run init-db         # Initialize all agent schemas
 ```
@@ -29,7 +31,8 @@ packages/
 │   ├── limitless/          Limitless.ai API → Claude processing
 │   ├── projects/           Claude project discovery across all sources
 │   ├── relationships/      Claude contact profiling + relationship graph
-│   └── ai/                 Standalone AI agent (Claude / OpenAI / Gemini)
+│   ├── ai/                 Standalone AI agent (Claude / OpenAI / Gemini)
+│   └── whatsapp/           WhatsApp Web bridge → public.messages (whatsapp-web.js + puppeteer)
 └── ui/
     ├── app/                Next.js 14 frontend (port 4000)
     │   ├── agents/         Agent dashboard (start/stop/logs)
@@ -72,7 +75,7 @@ Key schemas: `email.*`, `limitless.*`, `projects.*`, `relationships.*`, `ai.*`, 
 - **pgvector is optional** — if the `vector` extension isn't installed, semantic search is unavailable but everything else works. Server logs a warning on startup.
 - **Agent process management lives in `server.js`** — agents are spawned as child processes; PIDs tracked in `.agent-pids/`, logs in `.agent-logs/`.
 - **Manual overrides are sticky** — any field edited in the UI is written to `manual_overrides JSONB` on `projects.projects` / `relationships.contacts`. Agents never overwrite these. To unlock, send `_clearOverrides: ['field_name']` in a PATCH request.
-- **WhatsApp bridge is external** — `public.messages` is populated by a separate WhatsApp bridge not in this repo. Agents read from it but don't write to it.
+- **WhatsApp bridge** — `packages/agents/whatsapp/` uses whatsapp-web.js + puppeteer to mirror messages into `public.messages`. Requires `CLIENT_ID` env var and a one-time `npm run whatsapp:setup` to download Chromium. Session auth stored in `.wwebjs_auth/` (gitignored). Start via `npm run whatsapp`; QR code appears in terminal on first run.
 - **Semantic search needs a Gemini API key** — embedder reads `system.GEMINI_API_KEY` from the DB (configurable via Agents → Embeddings panel). Missing key throws at runtime.
 - **npm workspaces, not yarn** — despite `yarn.lock` being present, the monorepo uses npm workspaces. Use `npm install` / `npm run <script>`.
 - **Analysis agents are incremental** — Projects and Relationships agents run every 12 hours and only process new communications after the first run.
