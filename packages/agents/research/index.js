@@ -4,21 +4,13 @@
 require('dotenv').config({ path: require('path').resolve(__dirname, '../../../.env.local') })
 
 const cron      = require('node-cron')
-const Anthropic = require('@anthropic-ai/sdk')
+const llm       = require('../shared/llm')
 const db        = require('@secondbrain/db')
 
 const tavily        = require('./providers/tavily')
 const openaiProv    = require('./providers/openai')
 const pdl           = require('./providers/peopledatalabs')
 const serpapiProv   = require('./providers/serpapi')
-
-const MODEL = 'claude-sonnet-4-6'
-
-let anthropic = null
-function getAnthropic() {
-  if (!anthropic) anthropic = new Anthropic.default({ apiKey: process.env.ANTHROPIC_API_KEY })
-  return anthropic
-}
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)) }
 
@@ -77,12 +69,11 @@ ${combined}
 Write ONLY the dossier paragraph, no preamble.`
 
   try {
-    const response = await getAnthropic().messages.create({
-      model: MODEL,
+    const response = await llm.create('research', {
       max_tokens: 400,
       messages: [{ role: 'user', content: prompt }],
     })
-    return response.content?.[0]?.text?.trim() || null
+    return response.text?.trim() || null
   } catch (err) {
     console.error('[research] synthesis error:', err.message)
     return null

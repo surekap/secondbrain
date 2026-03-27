@@ -1,6 +1,6 @@
 'use strict'
 
-const aiClient = require('../../shared/ai-client')
+const llm = require('../../shared/llm')
 const db = require('@secondbrain/db')
 const { extractText } = require('../../shared/docParser')
 
@@ -150,7 +150,7 @@ relationship_strength=noise means this contact is not meaningful (same as is_noi
       userContent = prompt
     }
 
-    const response = await aiClient.create({
+    const response = await llm.create('relationships', {
       max_tokens: 600,
       messages: [{ role: 'user', content: userContent }],
     })
@@ -269,7 +269,7 @@ Definitions:
 
 - is_noise: true only for spam/broadcast/automated groups with no real human conversation`
 
-    const response = await aiClient.create({
+    const response = await llm.create('relationships', {
       max_tokens: 2048,
       messages: [{ role: 'user', content: prompt }],
     })
@@ -321,7 +321,7 @@ Return ONLY a JSON array:
 
 Only include real named people. Skip generic terms like "someone", "they", etc.`
 
-    const response = await aiClient.create({
+    const response = await llm.create('relationships', {
       max_tokens: 1000,
       messages: [{ role: 'user', content: prompt }],
     })
@@ -369,7 +369,7 @@ Return ONLY a JSON array of insights (max 3):
 
 Only return insights that are genuinely actionable. Empty array if nothing notable.`
 
-    const response = await aiClient.create({
+    const response = await llm.create('relationships', {
       max_tokens: 600,
       messages: [{ role: 'user', content: prompt }],
     })

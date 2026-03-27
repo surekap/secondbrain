@@ -12,17 +12,9 @@
  * The caller (index.js) decides how to persist them.
  */
 
-const Anthropic = require('@anthropic-ai/sdk')
+const llm = require('../../shared/llm')
 const db        = require('@secondbrain/db')
 const { buildCrossSourceDigest } = require('./extractor')
-
-const MODEL = 'claude-sonnet-4-6'
-
-let client = null
-function getClient() {
-  if (!client) client = new Anthropic.default({ apiKey: process.env.ANTHROPIC_API_KEY })
-  return client
-}
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)) }
 
@@ -98,13 +90,12 @@ Rules:
 - high = time-sensitive or explicitly committed; medium = should follow up; low = nice-to-have
 - Return {"action_items": []} if no clear action items exist`
 
-        const response = await getClient().messages.create({
-          model: MODEL,
+        const response = await llm.create('relationships', {
           max_tokens: 800,
           messages: [{ role: 'user', content: prompt }],
         })
 
-        const text   = response.content[0]?.text || ''
+        const text   = response.text || ''
         const result = parseJSON(text)
         const items  = Array.isArray(result.action_items) ? result.action_items : []
 
@@ -222,13 +213,12 @@ needs_response=true only if the message clearly expects a reply.
 Return low urgency / needs_response=false for casual statements, FYI messages, or one-sided updates.`
 
       try {
-        const response = await getClient().messages.create({
-          model: MODEL,
+        const response = await llm.create('relationships', {
           max_tokens: 800,
           messages: [{ role: 'user', content: prompt }],
         })
 
-        const text    = response.content[0]?.text || ''
+        const text    = response.text || ''
         const results = parseJSON(text)
         if (!Array.isArray(results)) continue
 
@@ -419,13 +409,12 @@ Rules:
 - Maximum 5 opportunities
 - If no strong opportunities, return []`
 
-    const response = await getClient().messages.create({
-      model: MODEL,
+    const response = await llm.create('relationships', {
       max_tokens: 1500,
       messages: [{ role: 'user', content: prompt }],
     })
 
-    const text = response.content?.[0]?.text || ''
+    const text = response.text || ''
     const items = parseJSON(text)
     if (!Array.isArray(items)) return insights
 
@@ -532,13 +521,12 @@ Return ONLY a JSON array of the best 3 matches (empty array if none are strong m
 
 Only include genuinely strong matches where the contact has relevant expertise or connections.`
 
-    const response = await getClient().messages.create({
-      model: MODEL,
+    const response = await llm.create('relationships', {
       max_tokens: 1200,
       messages: [{ role: 'user', content: prompt }],
     })
 
-    const text = response.content?.[0]?.text || ''
+    const text = response.text || ''
     const items = parseJSON(text)
     if (!Array.isArray(items)) return insights
 
@@ -615,12 +603,11 @@ Return ONLY a JSON object (or null if no strong opportunity):
 }`
 
       try {
-        const response = await getClient().messages.create({
-          model: MODEL,
+        const response = await llm.create('relationships', {
           max_tokens: 300,
           messages: [{ role: 'user', content: prompt }],
         })
-        const text = response.content?.[0]?.text || ''
+        const text = response.text || ''
         if (text.trim() === 'null' || !text.trim()) continue
         const item = parseJSON(text)
         if (!item?.title) continue

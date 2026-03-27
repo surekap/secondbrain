@@ -1,6 +1,6 @@
 'use strict'
 
-const aiClient = require('../../shared/ai-client')
+const llm = require('../../shared/llm')
 const db        = require('@secondbrain/db')
 
 function parseJSON(text) {
@@ -60,7 +60,7 @@ Rules:
 - If there are no communications, set health=unknown, status=unknown, ai_summary to null, insights to []`
 
   try {
-    const response = await aiClient.create({
+    const response = await llm.create('projects', {
       max_tokens: 2000,
       messages: [{ role: 'user', content: prompt }],
     })

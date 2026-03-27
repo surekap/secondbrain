@@ -1,6 +1,6 @@
 'use strict'
 
-const aiClient = require('../../shared/ai-client')
+const llm = require('../../shared/llm')
 const db       = require('@secondbrain/db')
 
 function parseJSON(text) {
@@ -48,7 +48,7 @@ Be conservative — only assign if clearly related. relevance > 0.7 = strong mat
 Return ONLY the JSON array, no explanation.`
 
   try {
-    const response = await aiClient.create({
+    const response = await llm.create('projects', {
       messages: [{ role: 'user', content: prompt }],
       max_tokens: 2048,
     })

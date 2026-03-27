@@ -1,6 +1,6 @@
 'use strict'
 
-const aiClient = require('../../shared/ai-client')
+const llm = require('../../shared/llm')
 const db        = require('@secondbrain/db')
 
 function parseJSON(text) {
@@ -171,7 +171,7 @@ Guidelines:
 - Projects where the most recent email activity is more than 1 year ago and there are no recent meeting transcripts or WhatsApp messages on the topic should be marked "stalled" or "completed", NOT "active"`
 
   try {
-    const response = await aiClient.create({
+    const response = await llm.create('projects', {
       max_tokens: 4096,
       messages: [{ role: 'user', content: prompt }],
     })

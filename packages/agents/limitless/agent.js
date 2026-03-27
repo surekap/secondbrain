@@ -2,7 +2,7 @@ require("dotenv").config({ path: require("path").resolve(__dirname, "../../../.e
 const { Pool } = require("pg");
 const fs = require("fs");
 const path = require("path");
-const aiClient = require("../shared/ai-client");
+const llm = require('../shared/llm');
 
 class LifelogAgent {
   constructor() {
@@ -158,7 +158,7 @@ class LifelogAgent {
       turnCount++;
       console.log(`🔄 Turn ${turnCount}: Calling AI...`);
 
-      const response = await aiClient.create({
+      const response = await llm.create('limitless', {
         system: systemPrompt,
         messages,
         tools: toolDefinitions.length > 0 ? toolDefinitions : undefined,
