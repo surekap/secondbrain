@@ -2,7 +2,14 @@ import './globals.css'
 import Navigation from '../components/Navigation'
 import SearchOverlay from '../components/SearchOverlay'
 
-export const metadata = { title: 'secondbrain' }
+export const metadata = {
+  title: 'secondbrain',
+  icons: {
+    icon: '/logo.svg',
+    shortcut: '/logo.svg',
+    apple: '/logo.svg',
+  },
+}
 
 export default function RootLayout({ children }) {
   return (

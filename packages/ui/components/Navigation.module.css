@@ -20,6 +20,14 @@
   color: var(--text);
   text-decoration: none;
   line-height: 1;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.wordmarkIcon {
+  display: block;
+  flex-shrink: 0;
+  opacity: 0.85;
 }
 .nav { display: flex; gap: 0.25rem; }
 .link {

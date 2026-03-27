@@ -1,3 +1,8 @@
+-- Create whatsapp schema and set as default for postgres role
+CREATE SCHEMA IF NOT EXISTS public;
+ALTER ROLE postgres SET search_path TO public;
+SET search_path TO public;
+
 -- WhatsApp auth sessions (RemoteAuth persistence)
 CREATE TABLE IF NOT EXISTS sessions (
   client_id    TEXT PRIMARY KEY,

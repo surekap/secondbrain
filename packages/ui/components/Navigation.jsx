@@ -17,7 +17,10 @@ export default function Navigation() {
   return (
     <header className={styles.header}>
       <div className={styles.left}>
-        <Link href="/" className={styles.wordmark}>secondbrain</Link>
+        <Link href="/" className={styles.wordmark}>
+          <img src="/logo.svg" alt="" width={22} height={22} className={styles.wordmarkIcon} />
+          secondbrain
+        </Link>
       </div>
       <nav className={styles.nav}>
         {NAV_LINKS.map(l => (
