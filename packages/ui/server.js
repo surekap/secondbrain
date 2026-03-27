@@ -1550,22 +1550,25 @@ app.put('/api/system/agents/:id/llm', async (req, res) => {
   const agentId = req.params.id;
   const list = req.body;
   if (!Array.isArray(list)) return res.status(400).json({ error: 'body must be array' });
+  const client = await db.connect();
   try {
-    await db.query('BEGIN');
-    await db.query('DELETE FROM system.agent_llm_priority WHERE agent_id = $1', [agentId]);
+    await client.query('BEGIN');
+    await client.query('DELETE FROM system.agent_llm_priority WHERE agent_id = $1', [agentId]);
     for (const { provider_id, priority } of list) {
-      await db.query(
+      await client.query(
         'INSERT INTO system.agent_llm_priority (agent_id, provider_id, priority) VALUES ($1, $2, $3)',
         [agentId, provider_id, priority]
       );
     }
-    await db.query('COMMIT');
+    await client.query('COMMIT');
     const { invalidatePriorityCache } = require('../agents/shared/llm');
     invalidatePriorityCache(agentId);
     res.json({ ok: true });
   } catch (err) {
-    await db.query('ROLLBACK');
+    await client.query('ROLLBACK');
     res.status(500).json({ error: err.message });
+  } finally {
+    client.release();
   }
 });
 
