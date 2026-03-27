@@ -1,8 +1,12 @@
 'use strict'
 
 const serpapi = require('serpapi')
+const { getConfig } = require('../../shared/config')
 
 async function researchContact(contact) {
+  const apiKey = await getConfig('system.SERPAPI_API_KEY')
+  if (!apiKey) throw new Error('SERPAPI_API_KEY not configured')
+
   const name    = contact.display_name
   const company = contact.company || ''
 
@@ -11,7 +15,7 @@ async function researchContact(contact) {
     : `"${name}"`
 
   const raw = await serpapi.getJson({
-    api_key: process.env.SERPAPI_API_KEY,
+    api_key: apiKey,
     engine:  'google',
     q,
     num: 10,

@@ -1,14 +1,13 @@
 'use strict'
 
 const OpenAI = require('openai')
-
-let client = null
-function getClient() {
-  if (!client) client = new OpenAI.default({ apiKey: process.env.OPENAI_API_KEY })
-  return client
-}
+const { getConfig } = require('../../shared/config')
 
 async function researchContact(contact) {
+  const apiKey = await getConfig('system.OPENAI_API_KEY')
+  if (!apiKey) throw new Error('OPENAI_API_KEY not configured')
+  const c = new OpenAI.default({ apiKey })
+
   const name    = contact.display_name
   const context = [contact.job_title, contact.company].filter(Boolean).join(' at ')
   const query   = context ? `${name} (${context})` : name
@@ -22,7 +21,6 @@ Please include (only if known with confidence):
 - Social/professional presence (LinkedIn, publications, talks)
 Be factual. If you are uncertain about something, say so. Do not invent information. Keep response under 300 words.`
 
-  const c = getClient()
   const response = await c.chat.completions.create({
     model: 'gpt-4o',
     messages: [{ role: 'user', content: prompt }],

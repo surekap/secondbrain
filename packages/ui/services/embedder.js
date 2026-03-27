@@ -1,22 +1,15 @@
 'use strict';
 
 const { GoogleGenerativeAI } = require('@google/generative-ai');
+const { getConfig } = require('../agents/shared/config');
 
 const MODEL = process.env.EMBEDDING_MODEL || 'gemini-embedding-2-preview';
 const DIMS  = 3072;
 
-let _client = null;
-
-function getClient() {
-  if (_client) return _client;
-  const key = process.env.GEMINI_API_KEY;
-  if (!key) throw new Error('GEMINI_API_KEY is not set');
-  _client = new GoogleGenerativeAI(key);
-  return _client;
-}
-
-function getModel() {
-  return getClient().getGenerativeModel({ model: MODEL });
+async function getClient() {
+  const key = await getConfig('system.GEMINI_API_KEY') || process.env.GEMINI_API_KEY;
+  if (!key) throw new Error('GEMINI_API_KEY not configured');
+  return new GoogleGenerativeAI(key);
 }
 
 /**
@@ -24,7 +17,9 @@ function getModel() {
  * taskType: 'RETRIEVAL_DOCUMENT' (indexing) | 'RETRIEVAL_QUERY' (searching)
  */
 async function embed(text, taskType = 'RETRIEVAL_DOCUMENT') {
-  const result = await getModel().embedContent({
+  const client = await getClient();
+  const model = client.getGenerativeModel({ model: MODEL });
+  const result = await model.embedContent({
     content:  { parts: [{ text: text.slice(0, 8000) }], role: 'user' },
     taskType,
   });
@@ -36,11 +31,13 @@ async function embed(text, taskType = 'RETRIEVAL_DOCUMENT') {
  * Much faster than calling embed() in a loop — one round trip per 100 texts.
  */
 async function embedBatch(texts, taskType = 'RETRIEVAL_DOCUMENT') {
+  const client = await getClient();
+  const model = client.getGenerativeModel({ model: MODEL });
   const CHUNK   = 100;
   const results = [];
   for (let i = 0; i < texts.length; i += CHUNK) {
     const slice = texts.slice(i, i + CHUNK);
-    const { embeddings } = await getModel().batchEmbedContents({
+    const { embeddings } = await model.batchEmbedContents({
       requests: slice.map(text => ({
         content:  { parts: [{ text: text.slice(0, 8000) }], role: 'user' },
         taskType,

@@ -1,19 +1,18 @@
 'use strict'
 
 const PDLJS = require('peopledatalabs')
-
-let client = null
-function getClient() {
-  if (!client) client = new PDLJS.default({ apiKey: process.env.PEOPLEDATALABS_API_KEY })
-  return client
-}
+const { getConfig } = require('../../shared/config')
 
 async function researchContact(contact) {
+  const apiKey = await getConfig('system.PEOPLEDATALABS_API_KEY')
+  if (!apiKey) {
+    return { query: contact.display_name, result_json: { status: 'not_configured' }, summary: `PEOPLEDATALABS_API_KEY not configured.` }
+  }
+  const c = new PDLJS.default({ apiKey })
+
   const name    = contact.display_name
   const company = contact.company || ''
   const emails  = Array.isArray(contact.emails) ? contact.emails : []
-
-  const c = getClient()
   let raw = null
   let query = ''
 

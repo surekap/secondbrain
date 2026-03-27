@@ -1,14 +1,13 @@
 'use strict'
 
 const { tavily } = require('@tavily/core')
-
-let client = null
-function getClient() {
-  if (!client) client = tavily({ apiKey: process.env.TAVILY_API_KEY })
-  return client
-}
+const { getConfig } = require('../../shared/config')
 
 async function researchContact(contact) {
+  const apiKey = await getConfig('system.TAVILY_API_KEY')
+  if (!apiKey) throw new Error('TAVILY_API_KEY not configured')
+  const c = tavily({ apiKey })
+
   const name    = contact.display_name
   const company = contact.company || ''
   const title   = contact.job_title || ''
@@ -17,8 +16,6 @@ async function researchContact(contact) {
     ? `${name} ${title} ${company}`.trim()
     : `${name} ${title}`.trim()
   const newsQuery = `${name} news 2025`
-
-  const c = getClient()
 
   const [generalResult, newsResult] = await Promise.allSettled([
     c.search(generalQuery, { maxResults: 5, searchDepth: 'basic' }),
