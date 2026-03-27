@@ -49,45 +49,47 @@ async function migrateEnvToDb() {
 
   let migrated = 0;
 
-  const simpleKeys = [
+  async function seed(key, value) {
+    if (await getConfig(key) == null) {
+      await setConfig(key, value);
+      migrated++;
+    }
+  }
+
+  // ── API keys: only seed if present in environment ──────────────────────────
+  const apiKeys = [
     'LIMITLESS_API_KEY', 'TAVILY_API_KEY', 'PEOPLEDATALABS_API_KEY',
     'SERPAPI_API_KEY', 'NOTION_TOKEN', 'TODOIST_API_KEY', 'PERPLEXITY_API_KEY',
     'GEMINI_API_KEY', 'ANTHROPIC_API_KEY', 'OPENAI_API_KEY',
   ];
-  for (const envKey of simpleKeys) {
-    if (!process.env[envKey]) continue;
-    const existing = await getConfig(`system.${envKey}`);
-    if (existing == null) {
-      await setConfig(`system.${envKey}`, process.env[envKey]);
-      migrated++;
-    }
+  for (const envKey of apiKeys) {
+    if (process.env[envKey]) await seed(`system.${envKey}`, process.env[envKey]);
   }
 
-  // Gmail accounts: build array from GMAIL_EMAIL_N / GMAIL_APP_PASSWORD_N pairs
-  const existingGmail = await getConfig('email.gmail_accounts');
-  if (existingGmail == null) {
-    const accounts = [];
-    for (let i = 1; ; i++) {
-      const email = process.env[`GMAIL_EMAIL_${i}`];
-      const pass  = process.env[`GMAIL_APP_PASSWORD_${i}`];
-      if (!email) break;
-      accounts.push({ email, app_password: pass || '' });
-    }
-    if (accounts.length > 0) {
-      await setConfig('email.gmail_accounts', accounts);
-      migrated++;
-    }
+  // ── Gmail accounts: build from numbered env pairs ──────────────────────────
+  const accounts = [];
+  for (let i = 1; ; i++) {
+    const email = process.env[`GMAIL_EMAIL_${i}`];
+    const pass  = process.env[`GMAIL_APP_PASSWORD_${i}`];
+    if (!email) break;
+    accounts.push({ email, app_password: pass || '' });
   }
+  if (accounts.length > 0) await seed('email.gmail_accounts', accounts);
 
-  // Limitless fetch config
-  const ltExisting = await getConfig('limitless.fetch_days');
-  if (ltExisting == null && process.env.FETCH_DAYS) {
-    await setConfig('limitless.fetch_days', Number(process.env.FETCH_DAYS));
-    migrated++;
-  }
+  // ── Non-secret defaults: always seed on fresh install ──────────────────────
+  await seed('system.EMBEDDING_MODEL', 'gemini-embedding-2-preview');
+
+  await seed('email.BATCH_SIZE',  '50');
+  await seed('email.MAILBOX',     'INBOX');
+
+  const ltFetchDays = process.env.FETCH_DAYS ? Number(process.env.FETCH_DAYS) : 1;
+  await seed('limitless.FETCH_DAYS',              ltFetchDays);
+  await seed('limitless.FETCH_INTERVAL_CRON',     '*/5 * * * *');
+  await seed('limitless.PROCESS_INTERVAL_CRON',   '*/1 * * * *');
+  await seed('limitless.PROCESSING_BATCH_SIZE',   '15');
 
   if (migrated > 0) {
-    console.log(`[server] migrated ${migrated} config keys from .env.local to DB`);
+    console.log(`[server] seeded ${migrated} config keys to DB`);
   }
 }
 
