@@ -5,7 +5,9 @@ async function apiFetch(method, path, body) {
   const opts = { method, headers: { 'Content-Type': 'application/json' } }
   if (body) opts.body = JSON.stringify(body)
   const r = await fetch(path, opts)
-  return r.json()
+  const data = await r.json()
+  if (!r.ok) throw new Error(data?.error || `HTTP ${r.status}`)
+  return data
 }
 
 function relativeTime(iso) {
@@ -412,6 +414,110 @@ function AiImporterConfigForm({ agentId, config, onSave }) {
   )
 }
 
+function EmbeddingsConfig({ config, onSave }) {
+  const [geminiKey, setGeminiKey]   = useState(config.GEMINI_API_KEY || '')
+  const [model, setModel]           = useState(config.EMBEDDING_MODEL || '')
+  const [saving, setSaving]         = useState(false)
+  const [feedback, setFeedback]     = useState('')
+
+  useEffect(() => {
+    setGeminiKey(config.GEMINI_API_KEY || '')
+    setModel(config.EMBEDDING_MODEL || '')
+  }, [config])
+
+  async function handleSubmit(e) {
+    e.preventDefault()
+    setSaving(true)
+    try {
+      await onSave({ GEMINI_API_KEY: geminiKey, EMBEDDING_MODEL: model || null })
+      setFeedback('Saved')
+      setTimeout(() => setFeedback(''), 3500)
+    } catch { setFeedback('Save failed') }
+    setSaving(false)
+  }
+
+  return (
+    <div style={{ marginBottom: '1.5rem', border: '1px solid var(--border)', borderRadius: '8px', overflow: 'hidden' }}>
+      <div style={{ padding: '0.6rem 1rem', background: 'var(--surface)', borderBottom: '1px solid var(--border)' }}>
+        <strong style={{ fontSize: '0.875rem' }}>Embeddings</strong>
+        <span style={{ marginLeft: '0.5rem', fontSize: '0.75rem', color: 'var(--muted, #888)' }}>semantic search · used by indexer</span>
+      </div>
+      <form onSubmit={handleSubmit} style={{ padding: '0.75rem 1rem', display: 'flex', gap: '0.75rem', flexWrap: 'wrap', alignItems: 'flex-end' }}>
+        <div style={{ flex: 2, minWidth: '200px' }}>
+          <div style={{ fontSize: '0.75rem', color: 'var(--muted,#888)', marginBottom: '0.25rem' }}>Gemini API Key</div>
+          <input type="password" value={geminiKey} onChange={e => setGeminiKey(e.target.value)}
+            placeholder="AIza…" autoComplete="new-password" style={{ width: '100%' }} />
+        </div>
+        <div style={{ flex: 1, minWidth: '180px' }}>
+          <div style={{ fontSize: '0.75rem', color: 'var(--muted,#888)', marginBottom: '0.25rem' }}>Embedding model</div>
+          <input type="text" value={model} onChange={e => setModel(e.target.value)}
+            placeholder="gemini-embedding-2-preview" style={{ width: '100%' }} />
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+          {feedback && <span style={{ fontSize: '0.8rem', color: '#22c55e' }}>{feedback}</span>}
+          <button type="submit" className="btn btn-save" disabled={saving} style={{ fontSize: '0.8rem', padding: '0.35rem 0.8rem' }}>
+            {saving ? 'Saving…' : 'Save'}
+          </button>
+        </div>
+      </form>
+    </div>
+  )
+}
+
+function ResearchConfigForm({ config, onSave }) {
+  const [tavily, setTavily]     = useState(config.TAVILY_API_KEY || '')
+  const [pdl, setPdl]           = useState(config.PEOPLEDATALABS_API_KEY || '')
+  const [serp, setSerp]         = useState(config.SERPAPI_API_KEY || '')
+  const [perplexity, setPerp]   = useState(config.PERPLEXITY_API_KEY || '')
+  const [saving, setSaving]     = useState(false)
+  const [feedback, setFeedback] = useState('')
+
+  useEffect(() => {
+    setTavily(config.TAVILY_API_KEY || '')
+    setPdl(config.PEOPLEDATALABS_API_KEY || '')
+    setSerp(config.SERPAPI_API_KEY || '')
+    setPerp(config.PERPLEXITY_API_KEY || '')
+  }, [config])
+
+  async function handleSubmit(e) {
+    e.preventDefault()
+    setSaving(true)
+    try {
+      await onSave({
+        TAVILY_API_KEY: tavily,
+        PEOPLEDATALABS_API_KEY: pdl,
+        SERPAPI_API_KEY: serp,
+        PERPLEXITY_API_KEY: perplexity,
+      })
+      setFeedback('Saved')
+      setTimeout(() => setFeedback(''), 3500)
+    } catch { setFeedback('Save failed') }
+    setSaving(false)
+  }
+
+  return (
+    <form className="config-form" onSubmit={handleSubmit}>
+      <div className="form-section-title">Research API Keys</div>
+      {[
+        ['Tavily API Key', tavily, setTavily, 'tvly-…'],
+        ['PeopleDataLabs API Key', pdl, setPdl, 'API key for contact enrichment'],
+        ['SerpAPI Key', serp, setSerp, 'SerpAPI key for web search'],
+        ['Perplexity API Key', perplexity, setPerp, 'pplx-…'],
+      ].map(([label, val, setter, placeholder]) => (
+        <div className="form-row" key={label}>
+          <label>{label}</label>
+          <input type="password" value={val} onChange={e => setter(e.target.value)}
+            placeholder={placeholder} autoComplete="new-password" />
+        </div>
+      ))}
+      <div className="form-actions">
+        <div><span className={`save-feedback${feedback ? ' visible' : ''}`}>{feedback}</span></div>
+        <button type="submit" className="btn btn-save" disabled={saving}>{saving ? 'Saving…' : 'Save'}</button>
+      </div>
+    </form>
+  )
+}
+
 function AgentLlmTab({ agentId, llmList, allProviders, onSave, usageRow }) {
   const [list, setList] = useState(llmList || [])
   useEffect(() => setList(llmList || []), [llmList])
@@ -503,6 +609,7 @@ export default function AgentsPage() {
   const [agentConfig, setAgentConfig] = useState({}) // { agentId: { key: val } }
   const [agentTab, setAgentTab] = useState({})       // { agentId: 'logs'|'config'|'llm' }
   const [usageMtd, setUsageMtd] = useState([])
+  const [systemConfig, setSystemConfig] = useState({}) // system.config keys
 
   function showToast(msg) {
     setToast({ message: msg, visible: true })
@@ -525,6 +632,10 @@ export default function AgentsPage() {
   }
 
   async function loadAgentConfig(id) {
+    if (id === 'research') {
+      await loadSystemConfig()
+      return
+    }
     try {
       const data = await apiFetch('GET', '/api/config')
       if (data && data[id]) {
@@ -541,6 +652,21 @@ export default function AgentsPage() {
     } catch {}
   }
 
+  async function loadSystemConfig() {
+    try {
+      const data = await apiFetch('GET', '/api/system/config')
+      if (data && !data.error) setSystemConfig(data)
+    } catch {}
+  }
+
+  async function saveSystemConfig(updates) {
+    try {
+      await apiFetch('PUT', '/api/system/config', updates)
+      await loadSystemConfig()
+      showToast('Saved')
+    } catch (err) { showToast(err.message || 'Save failed') }
+  }
+
   async function refresh() {
     try {
       const data = await apiFetch('GET', '/api/agents')
@@ -552,6 +678,7 @@ export default function AgentsPage() {
     refresh()
     loadProviders()
     loadUsageMtd()
+    loadSystemConfig()
     const interval = setInterval(refresh, 5000)
     return () => clearInterval(interval)
   }, [])
@@ -559,30 +686,46 @@ export default function AgentsPage() {
 
   async function handleStart(id) {
     try {
-      const r = await apiFetch('POST', `/api/agents/${id}/start`)
-      if (r.error) showToast(`Error: ${r.error}`)
-      else showToast(`${agents[id]?.name} started`)
-    } catch { showToast('Request failed') }
+      await apiFetch('POST', `/api/agents/${id}/start`)
+      showToast(`${agents[id]?.name} started`)
+    } catch (err) { showToast(err.message || 'Request failed') }
     refresh()
   }
 
   async function handleStop(id) {
     try {
-      const r = await apiFetch('POST', `/api/agents/${id}/stop`)
-      if (r.error) showToast(`Error: ${r.error}`)
-      else showToast(`${agents[id]?.name} stopping…`)
-    } catch { showToast('Request failed') }
+      await apiFetch('POST', `/api/agents/${id}/stop`)
+      showToast(`${agents[id]?.name} stopping…`)
+    } catch (err) { showToast(err.message || 'Request failed') }
     refresh()
   }
 
+  const [importing, setImporting] = useState({}) // { agentId: true|false }
+  const importInputRef = useRef({})
+
+  async function handleImport(id, file) {
+    if (!file) return
+    setImporting(prev => ({ ...prev, [id]: true }))
+    try {
+      const text = await file.text()
+      const data = JSON.parse(text)
+      const result = await apiFetch('POST', `/api/agents/${id}/import`, data)
+      showToast(`Imported ${result.convsImported} conversations, ${result.msgsImported} messages`)
+    } catch (err) {
+      showToast(err.message || 'Import failed')
+    }
+    setImporting(prev => ({ ...prev, [id]: false }))
+  }
+
   async function addProvider() {
+    if (!providerForm.name.trim()) { showToast('Name is required'); return }
     try {
       await apiFetch('POST', '/api/system/providers', providerForm)
       setShowAddProvider(false)
       setProviderForm({ name: '', provider_type: 'anthropic', api_key: '', model: '' })
       await loadProviders()
       showToast('Provider added')
-    } catch { showToast('Failed to add provider') }
+    } catch (err) { showToast(err.message || 'Failed to add provider') }
   }
 
   async function resetProviderCredits(id) {
@@ -616,9 +759,7 @@ export default function AgentsPage() {
   function setTab(agentId, tab) {
     setAgentTab(prev => ({ ...prev, [agentId]: tab }))
     if (tab === 'llm' && !agentLlm[agentId]) loadAgentLlm(agentId)
-    if (tab === 'config' && !agentConfig[agentId]) {
-      loadAgentConfig(agentId)
-    }
+    if (tab === 'config') loadAgentConfig(agentId)
   }
 
   const agentIds = Object.keys(agents)
@@ -702,6 +843,9 @@ export default function AgentsPage() {
           </table>
         </div>
 
+        {/* ── Embeddings Config ── */}
+        <EmbeddingsConfig config={systemConfig} onSave={saveSystemConfig} />
+
         {/* ── Agent List ── */}
         {agentIds.length === 0 ? (
           <p style={{ color: 'var(--text-3, #888)', fontSize: '.85rem' }}>Loading…</p>
@@ -729,10 +873,28 @@ export default function AgentsPage() {
                     {s === 'running' && agent.startTime && (
                       <span style={{ fontSize: '.75rem', color: 'var(--text-3, #888)' }}>started {relativeTime(agent.startTime)}</span>
                     )}
-                    <StatusPill status={s} />
-                    {s === 'running'
-                      ? <button className="btn btn-stop" onClick={() => handleStop(id)}>&#9632; Stop</button>
-                      : <button className="btn btn-primary" onClick={() => handleStart(id)}>&#9654; Start</button>}
+                    {(id === 'openai' || id === 'gemini') ? (
+                      <>
+                        <input
+                          type="file" accept=".json"
+                          style={{ display: 'none' }}
+                          ref={el => { importInputRef.current[id] = el }}
+                          onChange={e => { handleImport(id, e.target.files[0]); e.target.value = '' }}
+                        />
+                        <button className="btn btn-primary"
+                          disabled={importing[id]}
+                          onClick={() => importInputRef.current[id]?.click()}>
+                          {importing[id] ? 'Importing…' : '↑ Import JSON'}
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        <StatusPill status={s} />
+                        {s === 'running'
+                          ? <button className="btn btn-stop" onClick={() => handleStop(id)}>&#9632; Stop</button>
+                          : <button className="btn btn-primary" onClick={() => handleStart(id)}>&#9654; Start</button>}
+                      </>
+                    )}
                   </div>
                 </div>
 
@@ -771,10 +933,10 @@ export default function AgentsPage() {
                       {id === 'limitless' && agentConfig[id] && (
                         <LimitlessConfigForm config={agentConfig[id]} onSave={() => loadAgentConfig(id)} />
                       )}
-                      {(id === 'openai' || id === 'gemini') && (
-                        <AiImporterConfigForm agentId={id} config={agentConfig[id] || {}} onSave={() => loadAgentConfig(id)} />
+                      {id === 'research' && (
+                        <ResearchConfigForm config={systemConfig} onSave={saveSystemConfig} />
                       )}
-                      {!['email', 'limitless', 'openai', 'gemini'].includes(id) && (
+                      {!['email', 'limitless', 'research', 'openai', 'gemini'].includes(id) && (
                         <div style={{ color: 'var(--text-3, #888)', fontSize: '.825rem' }}>No configurable options for this agent.</div>
                       )}
                     </div>

@@ -3,8 +3,12 @@
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const { getConfig } = require('../../agents/shared/config');
 
-const MODEL = process.env.EMBEDDING_MODEL || 'gemini-embedding-2-preview';
+const DEFAULT_MODEL = 'gemini-embedding-2-preview';
 const DIMS  = 3072;
+
+async function getModel() {
+  return await getConfig('system.EMBEDDING_MODEL') || process.env.EMBEDDING_MODEL || DEFAULT_MODEL;
+}
 
 async function getClient() {
   const key = await getConfig('system.GEMINI_API_KEY') || process.env.GEMINI_API_KEY;
@@ -18,7 +22,7 @@ async function getClient() {
  */
 async function embed(text, taskType = 'RETRIEVAL_DOCUMENT') {
   const client = await getClient();
-  const model = client.getGenerativeModel({ model: MODEL });
+  const model = client.getGenerativeModel({ model: await getModel() });
   const result = await model.embedContent({
     content:  { parts: [{ text: text.slice(0, 8000) }], role: 'user' },
     taskType,
@@ -32,7 +36,7 @@ async function embed(text, taskType = 'RETRIEVAL_DOCUMENT') {
  */
 async function embedBatch(texts, taskType = 'RETRIEVAL_DOCUMENT') {
   const client = await getClient();
-  const model = client.getGenerativeModel({ model: MODEL });
+  const model = client.getGenerativeModel({ model: await getModel() });
   const CHUNK   = 100;
   const results = [];
   for (let i = 0; i < texts.length; i += CHUNK) {
@@ -55,4 +59,4 @@ function toSql(vec) {
   return '[' + vec.join(',') + ']';
 }
 
-module.exports = { embed, embedBatch, toSql, DIMS, MODEL };
+module.exports = { embed, embedBatch, toSql, DIMS, DEFAULT_MODEL };

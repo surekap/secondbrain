@@ -601,6 +601,21 @@ app.post('/api/agents/:id/stop', (req, res) => {
   res.json(result);
 });
 
+// POST /api/agents/:id/import  — one-shot file import for openai/gemini
+app.post('/api/agents/:id/import', express.json({ limit: '200mb' }), async (req, res) => {
+  const { id } = req.params;
+  if (!['openai', 'gemini'].includes(id)) {
+    return res.status(400).json({ error: 'import only supported for openai and gemini agents' });
+  }
+  try {
+    const service = require(`../agents/ai/services/${id}`);
+    const result = await service.importConversationsFromData(req.body);
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET /api/config
 app.get('/api/config', (req, res) => {
   const env = readEnv();
@@ -627,6 +642,37 @@ app.get('/api/config', (req, res) => {
     GEMINI_EXPORT_PATH:           env.GEMINI_EXPORT_PATH           || '',
     AI_WATCH_INTERVAL_MINUTES:    env.AI_WATCH_INTERVAL_MINUTES    || '',
   });
+});
+
+// GET /api/system/config  — read keys from system.config (for research, embeddings)
+app.get('/api/system/config', async (req, res) => {
+  if (!db) return res.status(503).json({ error: 'No database' });
+  try {
+    const { rows } = await db.query(`SELECT key, value FROM system.config ORDER BY key`);
+    const config = {};
+    for (const r of rows) config[r.key] = r.value;
+    res.json(config);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// PUT /api/system/config  — write keys to system.config
+app.put('/api/system/config', async (req, res) => {
+  if (!db) return res.status(503).json({ error: 'No database' });
+  const updates = req.body;
+  if (!updates || typeof updates !== 'object' || Array.isArray(updates)) {
+    return res.status(400).json({ error: 'body must be object' });
+  }
+  try {
+    const { setConfig } = require('../agents/shared/config');
+    for (const [key, value] of Object.entries(updates)) {
+      await setConfig(`system.${key}`, value);
+    }
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // POST /api/config  { agent, updates }
