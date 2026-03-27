@@ -1,7 +1,7 @@
 'use strict';
 
 const { GoogleGenerativeAI } = require('@google/generative-ai');
-const { getConfig } = require('../agents/shared/config');
+const { getConfig } = require('../../agents/shared/config');
 
 const MODEL = process.env.EMBEDDING_MODEL || 'gemini-embedding-2-preview';
 const DIMS  = 3072;
