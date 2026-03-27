@@ -1,35 +1,35 @@
 {
-    "name": "secondbrain",
-    "version": "1.0.0",
-    "private": true,
-    "workspaces": [
-        "packages/db",
-        "packages/agents/*",
-        "packages/ui"
-    ],
-    "scripts": {
-        "ui": "concurrently \"node packages/ui/server.js\" \"npm start --workspace=packages/ui\"",
-        "ui:dev": "concurrently \"node packages/ui/server.js\" \"npm run dev --workspace=packages/ui\"",
-        "limitless": "npm start --workspace=packages/agents/limitless",
-        "limitless:fetch": "npm run fetch --workspace=packages/agents/limitless",
-        "limitless:archive": "npm run archive --workspace=packages/agents/limitless",
-        "email": "npm start --workspace=packages/agents/email",
-        "email:fetch": "npm run fetch --workspace=packages/agents/email",
-        "relationships": "npm start --workspace=packages/agents/relationships",
-        "projects": "npm start --workspace=packages/agents/projects",
-        "ai:claude": "npm start --workspace=packages/agents/ai",
-        "ai:openai": "npm run openai --workspace=packages/agents/ai",
-        "ai:gemini": "npm run gemini --workspace=packages/agents/ai",
-        "research": "npm start --workspace=packages/agents/research",
-        "whatsapp": "npm start --workspace=packages/agents/whatsapp",
-        "whatsapp:setup": "npm run setup --workspace=packages/agents/whatsapp",
-        "init-db": "npm run init-db --workspace=packages/agents/limitless && npm run init-db --workspace=packages/agents/email && npm run init-db --workspace=packages/agents/ai && npm run init-db --workspace=packages/agents/research"
-    },
-    "devDependencies": {
-        "concurrently": "^9.2.1"
-    },
-    "dependencies": {
-        "pdf-parse": "^2.4.5",
-        "xlsx": "^0.18.5"
-    }
+  "name": "secondbrain",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": [
+    "packages/db",
+    "packages/agents/*",
+    "packages/ui"
+  ],
+  "scripts": {
+    "ui": "concurrently \"node packages/ui/server.js\" \"npm start --workspace=packages/ui\"",
+    "ui:dev": "concurrently \"node packages/ui/server.js\" \"npm run dev --workspace=packages/ui\"",
+    "limitless": "npm start --workspace=packages/agents/limitless",
+    "limitless:fetch": "npm run fetch --workspace=packages/agents/limitless",
+    "limitless:archive": "npm run archive --workspace=packages/agents/limitless",
+    "email": "npm start --workspace=packages/agents/email",
+    "email:fetch": "npm run fetch --workspace=packages/agents/email",
+    "relationships": "npm start --workspace=packages/agents/relationships",
+    "projects": "npm start --workspace=packages/agents/projects",
+    "ai:claude": "npm start --workspace=packages/agents/ai",
+    "ai:openai": "npm run openai --workspace=packages/agents/ai",
+    "ai:gemini": "npm run gemini --workspace=packages/agents/ai",
+    "research": "npm start --workspace=packages/agents/research",
+    "whatsapp": "npm start --workspace=packages/agents/whatsapp",
+    "whatsapp:setup": "npm run setup --workspace=packages/agents/whatsapp",
+    "init-db": "npm run init-db --workspace=packages/agents/limitless && npm run init-db --workspace=packages/agents/email && npm run init-db --workspace=packages/agents/ai && npm run init-db --workspace=packages/agents/research"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1"
+  },
+  "dependencies": {
+    "pdf-parse": "^2.4.5",
+    "xlsx": "^0.18.5"
+  }
 }
