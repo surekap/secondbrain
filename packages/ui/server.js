@@ -1436,6 +1436,211 @@ app.get('/api/search/stats', async (req, res) => {
   }
 });
 
+// ── /api/system — LLM Providers ──────────────────────────────────────────────
+
+app.get('/api/system/providers', async (req, res) => {
+  if (!db) return res.status(503).json({ error: 'No database' });
+  try {
+    const { rows } = await db.query(`
+      SELECT p.*,
+        COALESCE(SUM(u.cost_usd) FILTER (WHERE u.created_at >= date_trunc('month', NOW())), 0) AS cost_mtd,
+        MAX(u.created_at) AS last_used_at,
+        (SELECT u2.error FROM system.llm_usage u2
+         WHERE u2.provider_id = p.id AND u2.error IS NOT NULL
+         ORDER BY u2.created_at DESC LIMIT 1) AS last_usage_error
+      FROM system.llm_providers p
+      LEFT JOIN system.llm_usage u ON u.provider_id = p.id
+      GROUP BY p.id
+      ORDER BY p.created_at
+    `);
+    res.json(rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/system/providers', async (req, res) => {
+  if (!db) return res.status(503).json({ error: 'No database' });
+  const { name, provider_type, api_key, model } = req.body;
+  if (!name || !provider_type) return res.status(400).json({ error: 'name and provider_type required' });
+  try {
+    const { rows } = await db.query(
+      `INSERT INTO system.llm_providers (name, provider_type, api_key, model)
+       VALUES ($1, $2, $3, $4) RETURNING *`,
+      [name, provider_type, api_key || null, model || null]
+    );
+    res.json(rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.patch('/api/system/providers/:id', async (req, res) => {
+  if (!db) return res.status(503).json({ error: 'No database' });
+  const { name, api_key, model, is_enabled } = req.body;
+  try {
+    const { rows } = await db.query(
+      `UPDATE system.llm_providers
+       SET name = COALESCE($2, name),
+           api_key = COALESCE($3, api_key),
+           model = COALESCE($4, model),
+           is_enabled = COALESCE($5, is_enabled)
+       WHERE id = $1 RETURNING *`,
+      [req.params.id, name || null, api_key || null, model || null, is_enabled != null ? is_enabled : null]
+    );
+    if (rows.length === 0) return res.status(404).json({ error: 'not found' });
+    const { invalidatePriorityCache } = require('../agents/shared/llm');
+    invalidatePriorityCache();
+    res.json(rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/system/providers/:id', async (req, res) => {
+  if (!db) return res.status(503).json({ error: 'No database' });
+  try {
+    await db.query('DELETE FROM system.llm_providers WHERE id = $1', [req.params.id]);
+    const { invalidatePriorityCache } = require('../agents/shared/llm');
+    invalidatePriorityCache();
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/system/providers/:id/reset-credits', async (req, res) => {
+  if (!db) return res.status(503).json({ error: 'No database' });
+  try {
+    await db.query(
+      `UPDATE system.llm_providers
+       SET has_credits = true, last_error = NULL, last_error_at = NULL
+       WHERE id = $1`,
+      [req.params.id]
+    );
+    const { invalidatePriorityCache } = require('../agents/shared/llm');
+    invalidatePriorityCache();
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── /api/system — Agent LLM Priority ─────────────────────────────────────────
+
+app.get('/api/system/agents/:id/llm', async (req, res) => {
+  if (!db) return res.status(503).json({ error: 'No database' });
+  try {
+    const { rows } = await db.query(`
+      SELECT alp.priority, p.id, p.name, p.provider_type, p.model,
+             p.is_enabled, p.has_credits, p.last_error
+      FROM system.agent_llm_priority alp
+      JOIN system.llm_providers p ON p.id = alp.provider_id
+      WHERE alp.agent_id = $1
+      ORDER BY alp.priority
+    `, [req.params.id]);
+    res.json(rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put('/api/system/agents/:id/llm', async (req, res) => {
+  if (!db) return res.status(503).json({ error: 'No database' });
+  const agentId = req.params.id;
+  const list = req.body;
+  if (!Array.isArray(list)) return res.status(400).json({ error: 'body must be array' });
+  try {
+    await db.query('BEGIN');
+    await db.query('DELETE FROM system.agent_llm_priority WHERE agent_id = $1', [agentId]);
+    for (const { provider_id, priority } of list) {
+      await db.query(
+        'INSERT INTO system.agent_llm_priority (agent_id, provider_id, priority) VALUES ($1, $2, $3)',
+        [agentId, provider_id, priority]
+      );
+    }
+    await db.query('COMMIT');
+    const { invalidatePriorityCache } = require('../agents/shared/llm');
+    invalidatePriorityCache(agentId);
+    res.json({ ok: true });
+  } catch (err) {
+    await db.query('ROLLBACK');
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── /api/system — Agent Config ────────────────────────────────────────────────
+
+app.get('/api/system/agents/:id/config', async (req, res) => {
+  if (!db) return res.status(503).json({ error: 'No database' });
+  const agentId = req.params.id;
+  const schema = ['email', 'limitless', 'projects', 'relationships'].includes(agentId) ? agentId : 'system';
+  try {
+    const { rows } = await db.query(`SELECT key, value FROM ${schema}.config ORDER BY key`);
+    const config = {};
+    for (const r of rows) config[r.key] = r.value;
+    res.json(config);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put('/api/system/agents/:id/config', async (req, res) => {
+  if (!db) return res.status(503).json({ error: 'No database' });
+  const agentId = req.params.id;
+  const schema = ['email', 'limitless', 'projects', 'relationships'].includes(agentId) ? agentId : 'system';
+  const updates = req.body;
+  if (!updates || typeof updates !== 'object' || Array.isArray(updates)) {
+    return res.status(400).json({ error: 'body must be object' });
+  }
+  try {
+    const { setConfig } = require('../agents/shared/config');
+    for (const [key, value] of Object.entries(updates)) {
+      await setConfig(`${schema}.${key}`, value);
+    }
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── /api/system — Usage Stats ─────────────────────────────────────────────────
+
+app.get('/api/system/usage', async (req, res) => {
+  if (!db) return res.status(503).json({ error: 'No database' });
+  const { group_by = 'provider', since } = req.query;
+  const params = since ? [since] : [];
+  const sinceClause = since ? 'AND u.created_at >= $1' : '';
+
+  try {
+    let sql;
+    if (group_by === 'agent') {
+      sql = `SELECT agent_id, COUNT(*) AS calls,
+               SUM(tokens_in) AS tokens_in, SUM(tokens_out) AS tokens_out,
+               SUM(cost_usd) AS cost_usd
+             FROM system.llm_usage u WHERE 1=1 ${sinceClause}
+             GROUP BY agent_id ORDER BY cost_usd DESC NULLS LAST`;
+    } else if (group_by === 'day') {
+      sql = `SELECT date_trunc('day', created_at) AS day, COUNT(*) AS calls,
+               SUM(tokens_in) AS tokens_in, SUM(tokens_out) AS tokens_out,
+               SUM(cost_usd) AS cost_usd
+             FROM system.llm_usage u WHERE 1=1 ${sinceClause}
+             GROUP BY 1 ORDER BY 1 DESC`;
+    } else {
+      sql = `SELECT p.id, p.name, p.provider_type, COUNT(u.id) AS calls,
+               SUM(u.tokens_in) AS tokens_in, SUM(u.tokens_out) AS tokens_out,
+               SUM(u.cost_usd) AS cost_usd
+             FROM system.llm_providers p
+             LEFT JOIN system.llm_usage u ON u.provider_id = p.id ${since ? 'AND u.created_at >= $1' : ''}
+             GROUP BY p.id ORDER BY cost_usd DESC NULLS LAST`;
+    }
+    const { rows } = await db.query(sql, params);
+    res.json(rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Start ─────────────────────────────────────────────────────────────────────
 
 // Detect agents that survived a server restart
