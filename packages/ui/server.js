@@ -895,7 +895,8 @@ app.get('/api/relationships/contacts', async (req, res) => {
     const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : '';
     const { rows } = await db.query(`
       SELECT id, display_name, company, job_title, relationship_type,
-             relationship_strength, summary, tags, last_interaction_at, first_interaction_at
+             relationship_strength, summary, tags, last_interaction_at, first_interaction_at,
+             avatar_data
       FROM relationships.contacts
       ${where}
       ORDER BY last_interaction_at DESC NULLS LAST

@@ -74,7 +74,7 @@ function priorityIcon(p) {
 }
 
 function isJpegB64(s) {
-  return typeof s === 'string' && s.startsWith('/9j/') && s.length > 200
+  return typeof s === 'string' && (s.startsWith('/9j/') || s.startsWith('iVBOR')) && s.length > 200
 }
 
 function CommContent({ comm }) {
@@ -636,7 +636,17 @@ export default function RelationshipsPage() {
                 return (
                   <div key={c.id} className={`contact-row${c.id === selectedContactId ? ' active' : ''}`}
                     onClick={() => selectContact(c.id)}>
-                    <div className="contact-avatar" style={{ background: color }}>{initial}</div>
+                    <div className="contact-avatar" style={{ background: color }}>
+                      {c.avatar_data && isJpegB64(c.avatar_data) ? (
+                        <img
+                          src={`data:image/jpeg;base64,${c.avatar_data}`}
+                          alt={c.display_name}
+                          style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: '50%' }}
+                        />
+                      ) : (
+                        initial
+                      )}
+                    </div>
                     <div className="contact-row-meta">
                       <div className="contact-row-name">{c.display_name}</div>
                       <div className="contact-row-sub">{sub}</div>
