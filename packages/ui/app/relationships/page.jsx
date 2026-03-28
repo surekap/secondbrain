@@ -432,7 +432,7 @@ export default function RelationshipsPage() {
 
   return (
     <>
-      <style>{`
+      <style suppressHydrationWarning>{`
         .panel-left { background:var(--surface);display:flex;flex-direction:column;overflow:hidden;height:100%; }
         .panel-left-header { padding:.875rem 1rem .75rem;border-bottom:1px solid var(--border);flex-shrink:0; }
         .panel-left-title { font-family:'Fraunces',serif;font-weight:400;font-size:.9rem;color:var(--text);margin-bottom:.625rem; }
@@ -580,12 +580,15 @@ export default function RelationshipsPage() {
         .my-role-label span { color:var(--text-2);font-weight:500; }
         .research-area { flex:1;overflow-y:auto;padding:1.25rem 1.5rem; }
         .research-area::-webkit-scrollbar { width:4px; }
-        .research-dossier { font-size:.8125rem;color:var(--text-2);line-height:1.7;padding:1rem;background:var(--surface);border:1px solid var(--border);border-radius:8px;margin-bottom:1.25rem; }
-        .research-dossier-label { font-size:.68rem;font-weight:600;letter-spacing:.07em;text-transform:uppercase;color:var(--text-3);margin-bottom:.5rem; }
-        .research-provider { margin-bottom:.875rem; }
-        .research-provider-header { font-size:.75rem;font-weight:600;color:var(--text-2);margin-bottom:.35rem;display:flex;align-items:center;gap:.4rem; }
-        .research-provider-summary { font-size:.775rem;color:var(--text-3);line-height:1.55;white-space:pre-wrap;word-break:break-word; }
-        .research-meta { font-size:.68rem;color:var(--text-3);margin-top:.25rem; }
+        .research-dossier { font-size:.875rem;color:var(--text-1);line-height:1.75;padding:1rem 1.125rem;background:var(--surface);border:1px solid var(--border);border-radius:8px;margin-bottom:1.5rem; }
+        .research-dossier p { margin:0 0 .75rem; }
+        .research-dossier p:last-child { margin-bottom:0; }
+        .research-dossier-label { font-size:.7rem;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--text-3);margin-bottom:.625rem; }
+        .research-provider { padding:1rem 1.125rem;background:var(--surface);border:1px solid var(--border);border-radius:8px;margin-bottom:.75rem; }
+        .research-provider-header { font-size:.8125rem;font-weight:600;color:var(--text-1);margin-bottom:.5rem;display:flex;align-items:center;gap:.4rem; }
+        .research-provider-summary { font-size:.8375rem;color:var(--text-2);line-height:1.65;white-space:pre-wrap;word-break:break-word; }
+        .research-meta { font-size:.7rem;color:var(--text-3);margin-top:.625rem;display:flex;flex-direction:column;gap:.2rem; }
+        .research-meta-query { word-break:break-all; }
         .research-empty { text-align:center;padding:2.5rem 1rem;color:var(--text-3); }
         .research-empty-icon { font-size:2rem;margin-bottom:.5rem;opacity:.4; }
         .opps-area { flex:1;overflow-y:auto;padding:.75rem 1rem; }
@@ -800,7 +803,9 @@ export default function RelationshipsPage() {
                       {contactResearch.research_summary && (
                         <div className="research-dossier">
                           <div className="research-dossier-label">Dossier</div>
-                          {contactResearch.research_summary}
+                          {contactResearch.research_summary.split(/\n\n+/).map((para, i) => (
+                            <p key={i}>{para.replace(/\n/g, ' ')}</p>
+                          ))}
                         </div>
                       )}
                       {(contactResearch.providers || []).map(p => (
@@ -811,7 +816,8 @@ export default function RelationshipsPage() {
                           </div>
                           <div className="research-provider-summary">{p.summary}</div>
                           <div className="research-meta">
-                            Queried: {p.query} · {p.researched_at ? fmtDate(p.researched_at) : ''}
+                            <span className="research-meta-query">Query: {p.query}</span>
+                            {p.researched_at && <span>{fmtDate(p.researched_at)}</span>}
                           </div>
                         </div>
                       ))}

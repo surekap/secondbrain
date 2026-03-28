@@ -122,33 +122,22 @@ function AgentStats({ id, stats }) {
 function AppleContactsControls({ agent, onSync, onUpload, syncing, importing }) {
   const fileRef = useRef(null)
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-      <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-        {agent.nativeAvailable && (
-          <button className="btn btn-primary" disabled={syncing} onClick={onSync}>
-            {syncing ? 'Syncing…' : '⟳ Sync Now'}
-          </button>
-        )}
-        <>
-          <input
-            type="file" accept=".vcf"
-            style={{ display: 'none' }}
-            ref={fileRef}
-            onChange={e => { onUpload(e.target.files[0]); e.target.value = '' }}
-          />
-          <button className="btn btn-secondary" disabled={importing} onClick={() => fileRef.current?.click()}>
-            {importing ? 'Uploading…' : '↑ Upload VCF'}
-          </button>
-        </>
-      </div>
+    <>
       {agent.nativeAvailable && (
-        <div style={{ fontSize: '0.72rem', color: 'var(--text-3, #888)', lineHeight: 1.5 }}>
-          First sync will prompt for Contacts permission — approve it and macOS will list <strong>secondbrain</strong> under{' '}
-          System Settings → Privacy &amp; Security → Contacts.
-          If access was previously denied, re-enable it there, then click Sync Now.
-        </div>
+        <button className="btn btn-primary" disabled={syncing} onClick={onSync}>
+          {syncing ? 'Syncing…' : '⟳ Sync Now'}
+        </button>
       )}
-    </div>
+      <input
+        type="file" accept=".vcf"
+        style={{ display: 'none' }}
+        ref={fileRef}
+        onChange={e => { onUpload(e.target.files[0]); e.target.value = '' }}
+      />
+      <button className="btn btn-secondary" disabled={importing} onClick={() => fileRef.current?.click()}>
+        {importing ? 'Uploading…' : '↑ Upload VCF'}
+      </button>
+    </>
   )
 }
 
@@ -171,15 +160,18 @@ function LogViewer({ agentId, expanded }) {
     } catch { /* ignore */ }
   }, [agentId, cursor])
 
+  const pollLogsRef = useRef(pollLogs)
+  useEffect(() => { pollLogsRef.current = pollLogs }, [pollLogs])
+
   useEffect(() => {
     if (expanded) {
-      pollLogs()
-      pollerRef.current = setInterval(pollLogs, 2000)
+      pollLogsRef.current()
+      pollerRef.current = setInterval(() => pollLogsRef.current(), 2000)
     } else {
       clearInterval(pollerRef.current)
     }
     return () => clearInterval(pollerRef.current)
-  }, [expanded]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [expanded])
 
   useEffect(() => {
     if (containerRef.current) {
@@ -1067,6 +1059,14 @@ export default function AgentsPage() {
                 </div>
 
                 <AgentStats id={id} stats={agent.stats} />
+
+                {id === 'apple-contacts' && agent.nativeAvailable && (
+                  <div style={{ fontSize: '0.72rem', color: 'var(--text-3, #888)', lineHeight: 1.5, padding: '0.25rem 0' }}>
+                    First sync prompts for Contacts permission — approve it and macOS will list <strong>secondbrain</strong> under
+                    System Settings → Privacy &amp; Security → Contacts.
+                    If access was previously denied, re-enable it there, then click Sync Now.
+                  </div>
+                )}
 
                 {/* Tab buttons */}
                 <div style={{ display: 'flex', gap: '0.25rem', padding: '0.5rem 0 0 0', borderTop: '1px solid var(--border)', marginTop: '0.5rem' }}>

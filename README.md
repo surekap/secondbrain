@@ -1,10 +1,52 @@
-# secondbrain
+# SecondBrain
 
 A personal intelligence system that synthesizes your email, voice recordings, WhatsApp, and AI conversation history into actionable insight about your projects, relationships, and priorities.
 
-![Overview](docs/infographics/overview.png)
+<br>
 
-📖 **[User Manual](docs/manual/README.md)** — setup guides, agent configuration, and workflow playbooks for everyday users.
+> ### 📖 [User Manual →](docs/manual/README.md)
+> Setup guides, agent configuration, and workflow playbooks for everyday users.
+
+---
+
+## Overview
+
+[![Watch overview](https://img.youtube.com/vi/MyICwpD8Gew/maxresdefault.jpg)](https://youtu.be/MyICwpD8Gew)
+
+---
+
+## Demo
+
+[![Watch demo](https://img.youtube.com/vi/MuMkDAK9Sp0/maxresdefault.jpg)](https://youtu.be/MuMkDAK9Sp0)
+
+---
+
+## Screenshots
+
+**Relationships — Contact Intelligence**
+Every contact profiled from your communications, tagged by relationship type, and ranked by recency.
+
+![Relationships list](docs/screenshots/01-relationships-list.png)
+
+**Relationships — Communication Timeline**
+Full history across Email, WhatsApp, and Limitless in one scrollable view per person.
+
+![Communications detail](docs/screenshots/02-relationships-detail-comms.png)
+
+**Projects — Active Tracker**
+AI-discovered projects with blockers, risks, next actions, and opportunities surfaced automatically.
+
+![Projects](docs/screenshots/05-projects.png)
+
+**Search — Semantic Search**
+Natural language search across all indexed emails, messages, and lifelogs.
+
+![Search results](docs/screenshots/06-search-results.png)
+
+**Agents — Control Panel**
+Start, stop, and configure all background agents from one place. View live logs, set schedules, and manage API keys.
+
+![Agents dashboard](docs/screenshots/07-agents-dashboard.png)
 
 ---
 
@@ -138,8 +180,6 @@ It helps you answer questions like:
 - What do I need to know before this meeting?
 
 Instead of manually stitching together inboxes, chats, transcripts, and notes, secondbrain gives you one operating layer across all of them.
-
-<video src="docs/infographics/secondbrain__Your_Intel_Layer.mp4" controls style="max-width:100%;border-radius:8px"></video>
 
 ![Security](docs/infographics/security.png)
 
