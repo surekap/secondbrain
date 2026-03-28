@@ -120,6 +120,9 @@ async function enrichExisting(db, existing, contact) {
     ? contact.job_title
     : existing.job_title;
 
+  // avatar_data — only update if incoming has a value (don't clear existing photo)
+  const newAvatarData = contact.avatar_data !== null ? contact.avatar_data : existing.avatar_data;
+
   await db.query(
     `UPDATE relationships.contacts SET
        apple_contact_id = $1,
@@ -132,7 +135,7 @@ async function enrichExisting(db, existing, contact) {
      WHERE id = $7`,
     [
       contact.apple_contact_id,
-      contact.avatar_data,
+      newAvatarData,
       mergedEmails,
       mergedPhones,
       newCompany,

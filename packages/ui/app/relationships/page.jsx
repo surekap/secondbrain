@@ -676,7 +676,13 @@ export default function RelationshipsPage() {
               <div className="profile-header">
                 <div className="profile-name-row">
                   <div className="profile-avatar" style={{ background: avatarColor(selectedContact.display_name) }}>
-                    {avatarInitial(selectedContact.display_name)}
+                    {selectedContact.avatar_data && isJpegB64(selectedContact.avatar_data) ? (
+                      <img
+                        src={`data:image/jpeg;base64,${selectedContact.avatar_data}`}
+                        alt={selectedContact.display_name}
+                        style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: '50%' }}
+                      />
+                    ) : avatarInitial(selectedContact.display_name)}
                   </div>
                   <div className="profile-name-meta">
                     <div className="profile-name">{selectedContact.display_name}</div>
