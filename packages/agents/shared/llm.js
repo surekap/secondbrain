@@ -7,17 +7,17 @@ const db = require('@secondbrain/db')
 
 const RATES = {
   anthropic: {
-    'claude-sonnet-4-6': { in: 0.003,   out: 0.015   },
-    'claude-opus-4-6':   { in: 0.015,   out: 0.075   },
-    'claude-haiku-4-5':  { in: 0.00025, out: 0.00125 },
+    'claude-sonnet-4-6': { in: 0.003,   out: 0.015  },
+    'claude-opus-4-6':   { in: 0.005,   out: 0.025  },
+    'claude-haiku-4-5':  { in: 0.001,   out: 0.005  },
   },
   openai: {
-    'gpt-4o':        { in: 0.0025,  out: 0.010  },
-    'gpt-4o-mini':   { in: 0.00015, out: 0.0006 },
-    'gpt-5.4-mini':  { in: 0.00015, out: 0.0006 },
+    'gpt-4o':       { in: 0.0025,   out: 0.010  },
+    'gpt-4o-mini':  { in: 0.00015,  out: 0.0006 },
+    'gpt-5.4-mini': { in: 0.00075,  out: 0.0045 },
   },
   gemini: {
-    'gemini-2.0-flash': { in: 0.00035, out: 0.00105 },
+    'gemini-2.0-flash': { in: 0.0001, out: 0.0004 },
   },
 }
 
