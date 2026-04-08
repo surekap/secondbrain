@@ -1,0 +1,13 @@
+{
+  "name": "@secondbrain/sampler",
+  "version": "1.0.0",
+  "private": true,
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "@secondbrain/db": "*",
+    "plist": "^3.1.0"
+  }
+}

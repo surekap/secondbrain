@@ -1,0 +1,13 @@
+{
+  "name": "@secondbrain/telemetry",
+  "version": "1.0.0",
+  "private": true,
+  "main": "index.js",
+  "scripts": {
+    "test": "node --test test/sdk.test.js"
+  },
+  "dependencies": {
+    "@secondbrain/db": "*",
+    "@secondbrain/telemetry-buffer": "*"
+  }
+}
