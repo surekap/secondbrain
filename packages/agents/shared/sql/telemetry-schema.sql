@@ -78,6 +78,7 @@ CREATE TABLE IF NOT EXISTS telemetry.work_progress (
 
 -- ── System samples ────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS telemetry.system_samples (
+  sample_id                 BIGSERIAL PRIMARY KEY,
   sampled_at                TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   cpu_power_mw              INT,
   gpu_power_mw              INT,
@@ -166,7 +167,7 @@ DO $$ BEGIN
     'telemetry.system_samples', 'sampled_at',
     if_not_exists => TRUE, migrate_data => TRUE
   );
-EXCEPTION WHEN others THEN
+EXCEPTION WHEN undefined_function THEN
   NULL; -- TimescaleDB not installed, skip silently
 END $$;
 
@@ -175,6 +176,6 @@ DO $$ BEGIN
     'telemetry.llm_requests', 'started_at',
     if_not_exists => TRUE, migrate_data => TRUE
   );
-EXCEPTION WHEN others THEN
+EXCEPTION WHEN undefined_function THEN
   NULL;
 END $$;
