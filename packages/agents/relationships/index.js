@@ -13,6 +13,10 @@ const opportunities = require('./services/opportunities')
 const batching      = require('../shared/batching')
 const caching       = require('../shared/caching')
 
+let telemetry = null
+try { telemetry = require('@secondbrain/telemetry') } catch (_) {}
+let _runId = null
+
 console.log('🧠 Relationships Agent v1.0')
 console.log('📊 Builds contact profiles from WhatsApp, Email & Limitless\n')
 
@@ -283,6 +287,10 @@ async function runAnalysis() {
     return
   }
 
+  if (telemetry) {
+    _runId = await telemetry.startRun({ agentId: 'relationships', workflowName: 'relationship_analysis' })
+  }
+
   let runId = null
   let contactsProcessed = 0
   let insightsGenerated = 0
@@ -424,6 +432,9 @@ async function runAnalysis() {
             WHERE id = $2
           `, [batchInfo.successCount, runId])
           console.log(`   Batch ${batchInfo.batchNum}/${batchInfo.totalBatches} complete (${batchInfo.successCount} success, ${batchInfo.errorCount} errors)`)
+          if (telemetry && _runId) {
+            telemetry.progress(_runId, 'people_matched', { completed: processedInBatch })
+          }
         }
       }
     )
@@ -803,6 +814,10 @@ main().catch(err => {
 
 process.on('SIGINT', async () => {
   console.log('\n🛑 Graceful shutdown...')
+  if (telemetry && _runId) {
+    await telemetry.endRun(_runId, { status: 'completed' })
+    await telemetry.flush()
+  }
   try {
     await db.end()
     console.log('✅ Database closed')
