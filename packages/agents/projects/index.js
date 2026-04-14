@@ -348,8 +348,8 @@ main().catch(err => {
 process.on('SIGINT', async () => {
   console.log('\n🛑 Graceful shutdown...')
   if (telemetry && _runId) {
-    await telemetry.endRun(_runId, { status: 'completed' })
     await telemetry.flush()
+    await telemetry.endRun(_runId, { status: 'completed' })
   }
   try {
     await db.end()

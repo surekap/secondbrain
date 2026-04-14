@@ -18,6 +18,8 @@ let _transcriptsProcessed = 0
 async function fetchLifelogs() {
     if (telemetry && !_runId) {
         _runId = await telemetry.startRun({ agentId: 'limitless', workflowName: 'lifelog_processing' })
+        _recordingsImported = 0
+        _transcriptsProcessed = 0
     }
     try {
         console.log('📥 Fetching new lifelogs...');
@@ -41,8 +43,8 @@ cron.schedule('*/5 * * * *', fetchLifelogs);
 
 cron.schedule('*/30 * * * * *', async () => {
     try {
-        await agent.processBatch(5);
-        _transcriptsProcessed += 5
+        const processed = await agent.processBatch(5);
+        _transcriptsProcessed += (processed || 0)
         if (telemetry && _runId) {
             telemetry.progress(_runId, 'transcripts_processed', { completed: _transcriptsProcessed })
         }
@@ -66,8 +68,8 @@ async function ensureSchema() {
 console.log('🏁 Starting initial fetch and process...\n');
 ensureSchema().then(() => fetchLifelogs()).then(() => {
     setTimeout(async () => {
-        await agent.processBatch(10);
-        _transcriptsProcessed += 10
+        const processed = await agent.processBatch(10);
+        _transcriptsProcessed += (processed || 0)
         if (telemetry && _runId) {
             telemetry.progress(_runId, 'transcripts_processed', { completed: _transcriptsProcessed })
         }
@@ -77,8 +79,8 @@ ensureSchema().then(() => fetchLifelogs()).then(() => {
 process.on('SIGINT', async () => {
     console.log('\n🛑 Graceful shutdown initiated...');
     if (telemetry && _runId) {
-        await telemetry.endRun(_runId, { status: 'completed' })
         await telemetry.flush()
+        await telemetry.endRun(_runId, { status: 'completed' })
     }
     try {
         if (agent.db && agent.db.end) {
