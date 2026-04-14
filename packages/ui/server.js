@@ -50,6 +50,7 @@ async function runSystemSchema() {
     { file: '../agents/apple-contacts/sql/schema.sql', required: true  },
     { file: '../agents/whatsapp/src/db/schema.sql',    required: true  },
     { file: '../agents/shared/sql/system-schema.sql',  required: true  },
+    { file: '../agents/shared/sql/telemetry-schema.sql', required: true },
     { file: './sql/search_schema.sql',                 required: false }, // needs pgvector
   ];
 

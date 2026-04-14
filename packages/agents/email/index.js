@@ -7,6 +7,10 @@ const path = require('path');
 const db   = require('@secondbrain/db');
 const { createLogger } = require('./logger');
 
+let telemetry = null
+try { telemetry = require('@secondbrain/telemetry') } catch (_) {}
+let _runId = null
+
 const log = createLogger('email');
 
 log.info('Email Agent starting');
@@ -21,12 +25,26 @@ async function ensureSchema() {
   }
 }
 
+let _emailsDiscovered = 0
+let _emailsDownloaded = 0
+
 async function fetchEmails() {
+  if (telemetry && !_runId) {
+    _runId = await telemetry.startRun({ agentId: 'email', workflowName: 'email_sync' })
+  }
   try {
     log.info('Fetching emails...');
     const { run } = require('./cron/fetchEmails');
-    await run();
+    const summary = await run();
     log.info('Email fetch completed');
+    if (summary) {
+      _emailsDiscovered += (summary.processed || 0) + (summary.skipped || 0)
+      _emailsDownloaded += summary.processed || 0
+    }
+    if (telemetry && _runId) {
+      telemetry.progress(_runId, 'emails_discovered', { completed: _emailsDiscovered })
+      telemetry.progress(_runId, 'emails_downloaded', { completed: _emailsDownloaded })
+    }
   } catch (err) {
     log.error(`Email fetch failed: ${err.message}`);
   }
@@ -39,8 +57,12 @@ cron.schedule('*/15 * * * *', fetchEmails);
 log.info('Starting initial fetch...');
 ensureSchema().then(() => fetchEmails());
 
-process.on('SIGINT', () => {
+process.on('SIGINT', async () => {
   log.info('Shutting down...');
+  if (telemetry && _runId) {
+    await telemetry.endRun(_runId, { status: 'completed' })
+    await telemetry.flush()
+  }
   const pool = require('@secondbrain/db');
   pool.end().then(() => process.exit(0));
 });

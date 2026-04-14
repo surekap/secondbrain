@@ -1032,6 +1032,24 @@ export default function AgentsPage() {
       <div className="main">
         <h1 className="page-heading">Configure <em>your agents</em></h1>
         <p className="page-desc">Start, stop, and configure each background agent from one place.</p>
+        <a
+          href="http://localhost:4002"
+          target="_blank"
+          rel="noopener noreferrer"
+          style={{
+            display: 'inline-block',
+            marginBottom: '1rem',
+            fontSize: '0.8125rem',
+            color: 'var(--text)',
+            opacity: 0.6,
+            textDecoration: 'none',
+            border: '1px solid var(--border)',
+            padding: '4px 12px',
+            borderRadius: '4px',
+          }}
+        >
+          Open Observe →
+        </a>
 
         {/* ── Global LLM Providers Panel ── */}
         <div style={{ marginBottom: '1.5rem', border: '1px solid var(--border)', borderRadius: '8px', overflow: 'hidden' }}>

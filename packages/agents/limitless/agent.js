@@ -326,7 +326,7 @@ class LifelogAgent {
 
       if (lifelogs.length === 0) {
         console.log("No unprocessed lifelogs found");
-        return;
+        return 0;
       }
 
       console.log(`Found ${lifelogs.length} unprocessed lifelogs`);
@@ -337,8 +337,10 @@ class LifelogAgent {
       }
 
       console.log(`✅ Batch completed: processed ${lifelogs.length} lifelogs`);
+      return lifelogs.length;
     } catch (error) {
       console.error("❌ Batch processing error:", error);
+      return 0;
     }
   }
 }

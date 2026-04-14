@@ -4,6 +4,14 @@
 const db = require('@secondbrain/db')
 const { ollamaRequest } = require('./ollama')
 
+let telemetry = null
+function getTelemetry() {
+  if (!telemetry) {
+    try { telemetry = require('@secondbrain/telemetry') } catch (_) {}
+  }
+  return telemetry
+}
+
 // ── Cost rate table (per 1k tokens, USD) ─────────────────────────────────────
 
 const RATES = {
@@ -404,7 +412,7 @@ const CALL_FNS = {
  * @param {object} opts      { messages, system?, tools?, max_tokens? }
  * @returns {{ text, tool_calls, stop_reason, provider }}
  */
-async function create(agentId, { system, messages, tools, max_tokens }) {
+async function create(agentId, { system, messages, tools, max_tokens, _taskType, _workflowName, _runId } = {}) {
   const providers = await getPriorityList(agentId)
 
   if (providers.length === 0) {
@@ -426,12 +434,53 @@ async function create(agentId, { system, messages, tools, max_tokens }) {
     if (!fn) continue
 
     console.log(`[llm:${agentId}] trying ${prov.name} (${prov.provider_type})`)
+    const t   = getTelemetry()
+    const req = t ? t.startRequest({
+      agentId,
+      runId:        _runId        || null,
+      taskType:     _taskType     || null,
+      model:        prov.model,
+      providerType: prov.provider_type,
+      prompt:       messages,
+      workflowName: _workflowName || null,
+    }) : null
+
     try {
       const result = await fn(prov, { system, messages, tools, max_tokens })
-      const cost = calcCost(prov.provider_type, prov.model, result.tokensIn, result.tokensOut)
+      const cost   = calcCost(prov.provider_type, prov.model, result.tokensIn, result.tokensOut)
       await logUsage({ providerId: prov.id, agentId, tokensIn: result.tokensIn, tokensOut: result.tokensOut, costUsd: cost })
+      if (req) req.finish({
+        tokensIn:   result.tokensIn,
+        tokensOut:  result.tokensOut,
+        success:    true,
+        output:     result.text,
+        retryCount: 0,
+      })
+      // Automatic structural quality check for JSON-expecting task types
+      const t2 = getTelemetry()
+      if (t2 && req && result.text) {
+        const expectJson = (_taskType || '').toLowerCase().includes('extract') ||
+                           (_taskType || '').toLowerCase().includes('classify') ||
+                           (_taskType || '').toLowerCase().includes('json')
+        if (expectJson) {
+          let qModule = null
+          try { qModule = require('@secondbrain/telemetry/quality') } catch (_) {}
+          if (qModule) {
+            const { score, issues } = qModule.scoreStructural(result.text, { expectJson: true })
+            t2.recordQuality({
+              requestId: req.requestId,
+              evaluationType: 'structural',
+              scoreNumeric: score,
+              scoreLabel: score === 1 ? 'valid' : (issues[0] || 'invalid'),
+              evaluator: 'auto',
+              notes: issues.length ? issues.join('; ') : null,
+            })
+          }
+        }
+      }
       return { text: result.text, tool_calls: result.tool_calls, stop_reason: result.stop_reason, provider: prov.name }
     } catch (err) {
+      if (req) req.finish({ success: false, errorType: err.constructor?.name || 'Error' })
       console.warn(`[llm:${agentId}] ${prov.name} failed: ${err.message}`)
       if (isCreditError(err)) {
         await markCreditsFailed(prov.id, err.message)

@@ -10,6 +10,10 @@ const discoverer = require('./services/discoverer')
 const classifier = require('./services/classifier')
 const analyzer   = require('./services/analyzer')
 
+let telemetry = null
+try { telemetry = require('@secondbrain/telemetry') } catch (_) {}
+let _runId = null
+
 console.log('🗂  Projects Agent v1.0')
 console.log('📊 Discovers and tracks projects from WhatsApp, Email & Limitless\n')
 
@@ -145,6 +149,10 @@ async function runAnalysis() {
     return
   }
 
+  if (telemetry) {
+    _runId = await telemetry.startRun({ agentId: 'projects', workflowName: 'project_discovery' })
+  }
+
   let runId           = null
   let projectsFound   = 0
   let commsClassified = 0
@@ -199,6 +207,9 @@ async function runAnalysis() {
     await db.query(`
       UPDATE projects.analysis_runs SET projects_found = $1 WHERE id = $2
     `, [projectsFound, runId])
+    if (telemetry && _runId) {
+      telemetry.progress(_runId, 'tasks_extracted', { completed: projectsFound })
+    }
 
     // ── 4. Classify NEW communications only ───────────────────────────────
     const projectsForClassification = projectsWithIds.map(p => ({
@@ -223,6 +234,9 @@ async function runAnalysis() {
     const waCount = await classifier.classifyWhatsAppChats(projectsForClassification, lastRunAt)
     console.log(`   Classified ${waCount} WhatsApp communications`)
     commsClassified += waCount
+    if (telemetry && _runId) {
+      telemetry.progress(_runId, 'projects_created', { completed: commsClassified })
+    }
 
     // ── 5. Update comm_count and last_activity_at on each project ─────────
     console.log('\n📊 Updating project communication counts...')
@@ -333,6 +347,10 @@ main().catch(err => {
 
 process.on('SIGINT', async () => {
   console.log('\n🛑 Graceful shutdown...')
+  if (telemetry && _runId) {
+    await telemetry.flush()
+    await telemetry.endRun(_runId, { status: 'completed' })
+  }
   try {
     await db.end()
     console.log('✅ Database closed')
