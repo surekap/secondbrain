@@ -1,5 +1,14 @@
 'use strict'
 
+function esc(s) {
+  if (s == null) return '—'
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+}
+
 // ── Navigation ──────────────────────────────────────────────────────────────
 const views = ['overview','agents','models','traces','quality']
 let currentView = 'overview'
@@ -16,8 +25,17 @@ document.querySelectorAll('nav button').forEach(btn => {
 })
 
 async function api(path) {
-  const r = await fetch(path)
-  return r.json()
+  try {
+    const r = await fetch(path)
+    if (!r.ok) {
+      console.warn('[observe] API error:', path, r.status)
+      return {}
+    }
+    return r.json()
+  } catch (err) {
+    console.warn('[observe] fetch failed:', path, err.message)
+    return {}
+  }
 }
 
 // ── Rendering helpers ────────────────────────────────────────────────────────
@@ -68,12 +86,12 @@ async function renderOverview() {
       <div class="card">
         <h3>Memory</h3>
         <span class="metric">${s.mem_used_mb ? Math.round(s.mem_used_mb/1024)+'GB' : '—'}</span>
-        <div class="subtext">Swap: ${s.swap_used_mb ? Math.round(s.swap_used_mb/1024)+'GB' : '0'} &nbsp; Thermal: ${s.thermal_state||'—'}</div>
+        <div class="subtext">Swap: ${s.swap_used_mb ? Math.round(s.swap_used_mb/1024)+'GB' : '0'} &nbsp; Thermal: ${esc(s.thermal_state)}</div>
       </div>
       <div class="card">
         <h3>Loaded Models</h3>
         <span class="metric">${sys.models.length}</span>
-        <div class="subtext">${sys.models.map(m=>m.model_name).join(', ')||'none'}</div>
+        <div class="subtext">${sys.models.map(m=>esc(m.model_name)).join(', ')||'none'}</div>
       </div>
     </div>
     <div class="grid-2" style="margin-bottom:16px">
@@ -82,14 +100,14 @@ async function renderOverview() {
         <table>
           <tr><th>Agent</th><th>Status</th><th>Since</th></tr>
           ${(agents.runs||[]).filter(r=>!r.ended_at).map(r=>`
-            <tr><td>${r.agent_name}</td><td>${pill('running')}</td><td>${ago(r.started_at)}</td></tr>
+            <tr><td>${esc(r.agent_name)}</td><td>${pill('running')}</td><td>${ago(r.started_at)}</td></tr>
           `).join('')||'<tr><td colspan="3" style="color:var(--dim)">No active agents</td></tr>'}
         </table>
       </div>
       <div class="card">
         <h3>Recent Alerts</h3>
         ${recent.length === 0 ? '<div style="color:var(--green)">No active alerts</div>' :
-          recent.map(a=>`<div style="margin-bottom:8px">${pill(a.severity)} ${a.message} <span class="subtext">${ago(a.fired_at)}</span></div>`).join('')}
+          recent.map(a=>`<div style="margin-bottom:8px">${pill(a.severity)} ${esc(a.message)} <span class="subtext">${ago(a.fired_at)}</span></div>`).join('')}
       </div>
     </div>
   `
@@ -113,11 +131,11 @@ async function renderAgents() {
         const pctDone = latest?.units_total ? Math.round(latest.units_completed/latest.units_total*100) : null
         const status = r.ended_at ? r.status : 'running'
         return `<tr>
-          <td>${r.agent_name}</td>
+          <td>${esc(r.agent_name)}</td>
           <td>${pill(status)}</td>
-          <td>${latest?.stage_name||'—'}</td>
+          <td>${esc(latest?.stage_name)}</td>
           <td>
-            ${latest ? `${latest.units_completed}${latest.units_total ? '/'+latest.units_total : ''}` : '—'}
+            ${latest ? `${esc(latest.units_completed)}${latest.units_total ? '/'+esc(latest.units_total) : ''}` : '—'}
             ${pctDone != null ? bar(pctDone) : ''}
             ${latest?.eta_seconds ? `<div class="subtext">ETA ~${Math.round(latest.eta_seconds/60)}m</div>` : ''}
           </td>
@@ -139,7 +157,7 @@ async function renderModels() {
       <table>
         <tr><th>Model</th><th>Requests</th><th>Tokens In</th><th>Tokens Out</th><th>Avg Latency</th><th>Errors</th><th>Last Used</th></tr>
         ${(stats||[]).map(s=>`<tr>
-          <td>${s.model||'—'}</td>
+          <td>${esc(s.model)}</td>
           <td>${s.total_requests}</td>
           <td>${(s.total_prompt_tokens||0).toLocaleString()}</td>
           <td>${(s.total_completion_tokens||0).toLocaleString()}</td>
@@ -154,7 +172,7 @@ async function renderModels() {
       <table>
         <tr><th>Model</th><th>Loaded</th><th>Last Used</th><th>Unloaded</th></tr>
         ${(sessions||[]).slice(0,20).map(s=>`<tr>
-          <td>${s.model_name}</td>
+          <td>${esc(s.model_name)}</td>
           <td>${ago(s.loaded_at)}</td>
           <td>${ago(s.last_used_at)}</td>
           <td>${s.unloaded_at ? ago(s.unloaded_at) : '<span class="pill running">loaded</span>'}</td>
@@ -188,13 +206,13 @@ async function renderTraces() {
     <table>
       <tr><th>Agent</th><th>Model</th><th>Task</th><th>Status</th><th>Tokens</th><th>Latency</th><th>Preview</th><th>When</th></tr>
       ${(requests||[]).map(r=>`<tr>
-        <td>${r.agent_name}</td>
-        <td>${r.model||'—'}</td>
-        <td>${r.task_type||'—'}</td>
-        <td>${pill(r.success ? 'running' : 'failed')}</td>
+        <td>${esc(r.agent_name)}</td>
+        <td>${esc(r.model)}</td>
+        <td>${esc(r.task_type)}</td>
+        <td>${r.success ? '<span class="pill running">ok</span>' : '<span class="pill failed">failed</span>'}</td>
         <td>${(r.prompt_tokens||0)+(r.completion_tokens||0)}</td>
         <td>${r.duration_ms ? r.duration_ms+'ms' : '—'}</td>
-        <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${r.output_preview||r.prompt_preview||'—'}</td>
+        <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(r.output_preview||r.prompt_preview)}</td>
         <td>${ago(r.started_at)}</td>
       </tr>`).join('')||'<tr><td colspan="8" style="color:var(--dim)">No traces yet</td></tr>'}
     </table>
@@ -209,9 +227,9 @@ async function renderQuality() {
     <table>
       <tr><th>Model</th><th>Agent</th><th>Task</th><th>Total</th><th>Errors</th><th>Avg Retries</th><th>Structural</th><th>Human</th></tr>
       ${(comparison||[]).map(r=>`<tr>
-        <td>${r.model||'—'}</td>
-        <td>${r.agent_name}</td>
-        <td>${r.task_type||'—'}</td>
+        <td>${esc(r.model)}</td>
+        <td>${esc(r.agent_name)}</td>
+        <td>${esc(r.task_type)}</td>
         <td>${r.total}</td>
         <td>${r.errors||0}</td>
         <td>${r.avg_retries ? parseFloat(r.avg_retries).toFixed(2) : '0'}</td>
@@ -230,17 +248,20 @@ async function renderQuality() {
     <table>
       <tr><th>Agent</th><th>Model</th><th>Preview</th><th>Rate</th></tr>
       ${(requests||[]).map(r=>`<tr>
-        <td>${r.agent_name}</td>
-        <td>${r.model||'—'}</td>
-        <td style="max-width:250px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${r.output_preview||'—'}</td>
+        <td>${esc(r.agent_name)}</td>
+        <td>${esc(r.model)}</td>
+        <td style="max-width:250px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(r.output_preview)}</td>
         <td>
-          <button class="rate-btn good-btn" onclick="rate('${r.request_id}','good')">Good</button>
-          <button class="rate-btn ok-btn"   onclick="rate('${r.request_id}','acceptable')">OK</button>
-          <button class="rate-btn poor-btn" onclick="rate('${r.request_id}','poor')">Poor</button>
+          <button class="rate-btn good-btn" data-id="${esc(r.request_id)}" data-label="good">Good</button>
+          <button class="rate-btn ok-btn"   data-id="${esc(r.request_id)}" data-label="acceptable">OK</button>
+          <button class="rate-btn poor-btn" data-id="${esc(r.request_id)}" data-label="poor">Poor</button>
         </td>
       </tr>`).join('')||'<tr><td colspan="4" style="color:var(--dim)">No traces</td></tr>'}
     </table>
   `
+  ratePanel.querySelectorAll('.rate-btn').forEach(btn => {
+    btn.addEventListener('click', () => rate(btn.dataset.id, btn.dataset.label))
+  })
 }
 
 async function rate(requestId, label) {

@@ -1,8 +1,9 @@
 // packages/observe/alerts.js
 'use strict'
 
-let db      = null
-let timer   = null
+let db            = null
+let timer         = null
+let baselineTimer = null
 // Baseline: rolling averages used for dynamic thresholds
 const baseline = { gpu_power_mw: null, gpu_residency: null }
 
@@ -158,11 +159,12 @@ function start(dbInstance) {
   db    = dbInstance
   timer = setInterval(() => evaluateRules().catch(err => console.warn('[alerts]', err.message)), 30_000)
   // Refresh baseline every 5 minutes
-  setInterval(() => refreshBaseline().catch(() => {}), 5 * 60_000)
+  baselineTimer = setInterval(() => refreshBaseline().catch(() => {}), 5 * 60_000)
 }
 
 function stop() {
-  if (timer) { clearInterval(timer); timer = null }
+  if (timer)         { clearInterval(timer);         timer         = null }
+  if (baselineTimer) { clearInterval(baselineTimer); baselineTimer = null }
 }
 
 module.exports = { start, stop }
