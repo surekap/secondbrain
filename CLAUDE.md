@@ -17,6 +17,10 @@ npm run ai:openai       # AI agent (OpenAI)
 npm run ai:gemini       # AI agent (Gemini)
 npm run whatsapp        # WhatsApp bridge (CLIENT_ID set via Agents UI)
 
+npm run collector       # Telemetry collector (replays spilled events, computes ETAs)
+npm run sampler         # System metrics sampler (requires sudo)
+npm run observe         # Observability dashboard (port 4002)
+
 npm run init-db         # Initialize all agent schemas
 ```
 
