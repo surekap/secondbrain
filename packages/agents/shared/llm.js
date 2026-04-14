@@ -456,6 +456,28 @@ async function create(agentId, { system, messages, tools, max_tokens, _taskType,
         output:     result.text,
         retryCount: 0,
       })
+      // Automatic structural quality check for JSON-expecting task types
+      const t2 = getTelemetry()
+      if (t2 && req && result.text) {
+        const expectJson = (_taskType || '').toLowerCase().includes('extract') ||
+                           (_taskType || '').toLowerCase().includes('classify') ||
+                           (_taskType || '').toLowerCase().includes('json')
+        if (expectJson) {
+          let qModule = null
+          try { qModule = require('@secondbrain/telemetry/quality') } catch (_) {}
+          if (qModule) {
+            const { score, issues } = qModule.scoreStructural(result.text, { expectJson: true })
+            t2.recordQuality({
+              requestId: req.requestId,
+              evaluationType: 'structural',
+              scoreNumeric: score,
+              scoreLabel: score === 1 ? 'valid' : (issues[0] || 'invalid'),
+              evaluator: 'auto',
+              notes: issues.length ? issues.join('; ') : null,
+            })
+          }
+        }
+      }
       return { text: result.text, tool_calls: result.tool_calls, stop_reason: result.stop_reason, provider: prov.name }
     } catch (err) {
       if (req) req.finish({ success: false, errorType: err.constructor?.name || 'Error' })

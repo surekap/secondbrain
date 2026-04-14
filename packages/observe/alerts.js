@@ -117,6 +117,20 @@ const RULES = [
       return null
     },
   },
+  {
+    name: 'sampler_not_running',
+    severity: 'warning',
+    async check(db) {
+      const { rows } = await db.query(`
+        SELECT COUNT(*) AS cnt FROM telemetry.system_samples
+        WHERE sampled_at > NOW() - INTERVAL '2 minutes'
+      `)
+      if (parseInt(rows[0]?.cnt || '0', 10) === 0) {
+        return 'No system samples in last 2 minutes — is the sampler running?'
+      }
+      return null
+    },
+  },
 ]
 
 async function refreshBaseline() {
@@ -124,8 +138,9 @@ async function refreshBaseline() {
     const { rows } = await db.query(`
       SELECT AVG(gpu_power_mw) AS gpu_power, AVG(gpu_active_residency_pct) AS gpu_res
       FROM telemetry.system_samples
-      WHERE sampled_at > NOW() - INTERVAL '1 hour'
+      WHERE sampled_at > NOW() - INTERVAL '24 hours'
         AND sampled_at < NOW() - INTERVAL '5 minutes'
+        AND gpu_power_mw > 0
     `)
     if (rows[0]?.gpu_power) baseline.gpu_power_mw = parseFloat(rows[0].gpu_power)
     if (rows[0]?.gpu_res)   baseline.gpu_residency = parseFloat(rows[0].gpu_res)
@@ -156,7 +171,8 @@ async function evaluateRules() {
 }
 
 function start(dbInstance) {
-  db    = dbInstance
+  db = dbInstance
+  refreshBaseline().catch(() => {})   // call immediately at startup
   timer = setInterval(() => evaluateRules().catch(err => console.warn('[alerts]', err.message)), 30_000)
   // Refresh baseline every 5 minutes
   baselineTimer = setInterval(() => refreshBaseline().catch(() => {}), 5 * 60_000)
