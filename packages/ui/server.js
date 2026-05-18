@@ -1685,18 +1685,14 @@ app.post('/api/search/reindex', async (req, res) => {
   }
 });
 
-// GET /api/search/stats — how many items are indexed per source + indexer status
+// GET /api/search/stats — indexed counts, pending queue, and indexer status
 app.get('/api/search/stats', async (req, res) => {
   if (!db) return res.status(503).json({ error: 'No database' });
   try {
-    const { rows } = await db.query(`
-      SELECT source, COUNT(*) AS total,
-             MAX(indexed_at) AS last_indexed
-      FROM search.embeddings
-      GROUP BY source
-      ORDER BY source
-    `);
-    res.json({ sources: rows, indexer: indexer.getStatus() });
+    const { getConfig } = require('../agents/shared/config')
+    const embeddingModel = await getConfig('system.EMBEDDING_MODEL') || 'gemini-embedding-2-preview'
+    const pending = await indexer.getPendingCounts(embeddingModel)
+    res.json({ sources: pending, indexer: indexer.getStatus(), batchPerRun: indexer.BATCH_PER_RUN });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }

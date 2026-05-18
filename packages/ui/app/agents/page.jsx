@@ -476,6 +476,8 @@ function EmbeddingsConfig({ config, onSave }) {
   const [modelError, setModelError] = useState('')
   const [saving, setSaving]         = useState(false)
   const [feedback, setFeedback]     = useState('')
+  const [stats, setStats]           = useState(null)
+  const [reindexing, setReindexing] = useState(false)
 
   useEffect(() => {
     setProviderType(config.EMBEDDING_PROVIDER || 'gemini')
@@ -504,12 +506,22 @@ function EmbeddingsConfig({ config, onSave }) {
         setModelError(error.message || 'Failed to load models')
       }
     }, providerType === 'ollama' ? 250 : 0)
-
-    return () => {
-      cancelled = true
-      clearTimeout(tid)
-    }
+    return () => { cancelled = true; clearTimeout(tid) }
   }, [providerType, ollamaBaseUrl])
+
+  // Poll indexer stats
+  useEffect(() => {
+    let cancelled = false
+    async function load() {
+      try {
+        const data = await apiFetch('GET', '/api/search/stats')
+        if (!cancelled) setStats(data)
+      } catch (_) {}
+    }
+    load()
+    const tid = setInterval(load, 5000)
+    return () => { cancelled = true; clearInterval(tid) }
+  }, [])
 
   async function handleSubmit(e) {
     e.preventDefault()
@@ -527,13 +539,72 @@ function EmbeddingsConfig({ config, onSave }) {
     setSaving(false)
   }
 
+  async function handleReindex() {
+    setReindexing(true)
+    try { await apiFetch('POST', '/api/search/reindex') } catch (_) {}
+    setTimeout(() => setReindexing(false), 2000)
+  }
+
+  const totalPending = stats?.sources?.reduce((s, r) => s + parseInt(r.pending || 0, 10), 0) ?? null
+  const totalItems   = stats?.sources?.reduce((s, r) => s + parseInt(r.total   || 0, 10), 0) ?? null
+  const totalIndexed = stats?.sources?.reduce((s, r) => s + parseInt(r.indexed || 0, 10), 0) ?? null
+  const overallPct   = totalItems > 0 ? Math.round((totalIndexed / totalItems) * 100) : null
+  const isRunning    = stats?.indexer?.running
+
   return (
     <div style={{ marginBottom: '1.5rem', border: '1px solid var(--border)', borderRadius: '8px', overflow: 'hidden' }}>
-      <div style={{ padding: '0.6rem 1rem', background: 'var(--surface)', borderBottom: '1px solid var(--border)' }}>
-        <strong style={{ fontSize: '0.875rem' }}>Embeddings</strong>
-        <span style={{ marginLeft: '0.5rem', fontSize: '0.75rem', color: 'var(--muted, #888)' }}>semantic search · used by indexer · switch models, then reindex</span>
+      <div style={{ padding: '0.6rem 1rem', background: 'var(--surface)', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <div>
+          <strong style={{ fontSize: '0.875rem' }}>Embeddings</strong>
+          <span style={{ marginLeft: '0.5rem', fontSize: '0.75rem', color: 'var(--muted, #888)' }}>semantic search · {stats?.indexer?.intervalMs ? `runs every ${stats.indexer.intervalMs / 60000} min` : 'indexer'} · batch {stats?.batchPerRun ?? 200}/source</span>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+          {isRunning && <span style={{ fontSize: '0.75rem', color: '#f59e0b' }}>● indexing…</span>}
+          {!isRunning && totalPending > 0 && <span style={{ fontSize: '0.75rem', color: 'var(--muted,#888)' }}>{totalPending.toLocaleString()} pending</span>}
+          {!isRunning && totalPending === 0 && totalItems > 0 && <span style={{ fontSize: '0.75rem', color: '#22c55e' }}>✓ fully indexed</span>}
+          <button onClick={handleReindex} disabled={reindexing || isRunning}
+            style={{ fontSize: '0.75rem', padding: '0.2rem 0.6rem', borderRadius: '4px', border: '1px solid var(--border)', background: 'transparent', color: 'var(--text)', cursor: 'pointer', opacity: (reindexing || isRunning) ? 0.5 : 1 }}>
+            {reindexing ? 'Queued' : 'Run now'}
+          </button>
+        </div>
       </div>
-      <form onSubmit={handleSubmit} style={{ padding: '0.75rem 1rem', display: 'flex', gap: '0.75rem', flexWrap: 'wrap', alignItems: 'flex-end' }}>
+
+      {/* Overall progress bar */}
+      {totalItems > 0 && (
+        <div style={{ padding: '0.5rem 1rem 0', background: 'var(--bg)' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.72rem', color: 'var(--muted,#888)', marginBottom: '0.2rem' }}>
+            <span>Overall — {totalIndexed?.toLocaleString()} / {totalItems?.toLocaleString()}</span>
+            <span>{overallPct}%</span>
+          </div>
+          <div style={{ height: '6px', borderRadius: '3px', background: 'var(--surface)', overflow: 'hidden' }}>
+            <div style={{ height: '100%', width: `${overallPct}%`, background: overallPct === 100 ? '#22c55e' : '#3b82f6', transition: 'width 0.4s' }} />
+          </div>
+        </div>
+      )}
+
+      {/* Per-source breakdown */}
+      {stats?.sources?.length > 0 && (
+        <div style={{ padding: '0.5rem 1rem', display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: '0.5rem' }}>
+          {stats.sources.map(row => {
+            const pct = row.total > 0 ? Math.round((row.indexed / row.total) * 100) : 0
+            const pending = parseInt(row.pending || 0, 10)
+            return (
+              <div key={row.source} style={{ fontSize: '0.72rem' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--muted,#888)', marginBottom: '0.15rem' }}>
+                  <span style={{ textTransform: 'capitalize' }}>{row.source.replace('_', ' ')}</span>
+                  <span>{pending > 0 ? `${pending.toLocaleString()} left` : `${parseInt(row.indexed,10).toLocaleString()} ✓`}</span>
+                </div>
+                <div style={{ height: '4px', borderRadius: '2px', background: 'var(--surface)', overflow: 'hidden' }}>
+                  <div style={{ height: '100%', width: `${pct}%`, background: pct === 100 ? '#22c55e' : '#3b82f6', transition: 'width 0.4s' }} />
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      )}
+
+      {/* Config form */}
+      <form onSubmit={handleSubmit} style={{ padding: '0.75rem 1rem', borderTop: '1px solid var(--border)', display: 'flex', gap: '0.75rem', flexWrap: 'wrap', alignItems: 'flex-end' }}>
         <div style={{ flex: 1, minWidth: '180px' }}>
           <div style={{ fontSize: '0.75rem', color: 'var(--muted,#888)', marginBottom: '0.25rem' }}>Provider</div>
           <select value={providerType} onChange={e => { setProviderType(e.target.value); setModel('') }} style={{ width: '100%' }}>
@@ -561,11 +632,7 @@ function EmbeddingsConfig({ config, onSave }) {
               <option key={option.value} value={option.value}>{option.label}</option>
             ))}
           </select>
-          {modelError && (
-            <div style={{ marginTop: '0.35rem', fontSize: '0.72rem', color: '#f59e0b' }}>
-              {modelError}
-            </div>
-          )}
+          {modelError && <div style={{ marginTop: '0.35rem', fontSize: '0.72rem', color: '#f59e0b' }}>{modelError}</div>}
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
           {feedback && <span style={{ fontSize: '0.8rem', color: '#22c55e' }}>{feedback}</span>}
@@ -1223,7 +1290,7 @@ export default function AgentsPage() {
 
                 {/* Tab buttons */}
                 <div style={{ display: 'flex', gap: '0.25rem', padding: '0.5rem 0 0 0', borderTop: '1px solid var(--border)', marginTop: '0.5rem' }}>
-                  {['logs', 'config', 'llm'].map(t => (
+                  {(['logs', 'config', ...((['limitless','relationships','projects','research'].includes(id)) ? ['llm'] : [])]).map(t => (
                     <button key={t}
                       onClick={() => setTab(id, t)}
                       style={{

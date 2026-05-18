@@ -287,7 +287,7 @@ Import ChatGPT and Gemini conversation exports into the `ai` schema.
  +----------------------------------------------------------+
  |                         Postgres                         |
  | email.* limitless.* relationships.* projects.* ai.*     |
- | system.* search.* public.messages                        |
+ | system.* search.* public.messages  telemetry.*           |
  +----------------------------------------------------------+
                          |
                          v
@@ -300,7 +300,15 @@ Import ChatGPT and Gemini conversation exports into the `ai` schema.
  +----------------------------------------------------------+
  |                           UI                             |
  | Dashboard | Relationships | Groups | Projects | Search  |
- | Agents                                                   |
+ | Agents (port 4000)                                       |
+ +----------------------------------------------------------+
+                         |
+                         v
+ +----------------------------------------------------------+
+ |                    Observability                         |
+ | Telemetry SDK → Buffer → Collector → telemetry.*        |
+ | Sampler (powermetrics, process stats, ollama ps)         |
+ | Observe Dashboard (port 4002)                            |
  +----------------------------------------------------------+
 ```
 
@@ -312,7 +320,7 @@ The UI server manages:
 - config seeding
 - agent start / stop / logs
 - system configuration APIs
-- semantic search indexing
+- semantic search indexing (batched, 200 items/source/run)
 
 ---
 
@@ -329,6 +337,11 @@ packages/
 │   ├── research/           External contact enrichment
 │   ├── ai/                 OpenAI / Gemini importers
 │   └── whatsapp/           WhatsApp Web connector
+├── telemetry/              Instrumentation SDK (startRun, startRequest, progress, quality)
+├── telemetry-buffer/       In-memory + disk-spill queue (no silent drops)
+├── collector/              Drains spill files to DB; computes ETAs and work efficiency
+├── sampler/                macOS system sampler (powermetrics, process stats, ollama ps)
+├── observe/                Observability dashboard + API (port 4002)
 └── ui/
     ├── app/                Next.js frontend (port 4000)
     ├── services/           Search / embeddings background services
@@ -369,7 +382,17 @@ npm run ai:openai
 npm run ai:gemini
 ```
 
-In normal usage, you can usually start and stop agents from `/agents` instead of using these commands directly.
+In normal usage, you can start and stop agents from `/agents` instead of using these commands directly.
+
+### Observability
+
+```bash
+npm run observe          # observability dashboard on http://localhost:4002
+npm run collector        # replays spilled telemetry events; computes ETAs
+sudo npm run sampler     # system sampler — requires sudo for powermetrics (macOS)
+```
+
+The observe dashboard shows live agent runs, LLM request traces, per-model token stats, quality scores, system health (CPU/GPU/power/thermals), and embedding indexer progress. All agents write telemetry through an in-memory buffer that drains to `telemetry.*` in Postgres every 5 seconds.
 
 ---
 
@@ -379,18 +402,22 @@ In normal usage, you can usually start and stop agents from `/agents` instead of
 
 When you edit a project or contact in the UI, secondbrain stores that as a manual override and future agent runs try not to overwrite those fields.
 
-### Search
+### Search and embeddings
 
-Semantic search depends on:
+Semantic search depends on the `vector` PostgreSQL extension (pgvector) and an embedding provider. Two providers are supported:
 
-- a Gemini API key for embeddings
-- PostgreSQL `vector`
+- **Gemini** (default) — uses `gemini-embedding-2-preview` via API; no local GPU required
+- **Ollama** — any locally-running embedding model (e.g. `bge-m3`, `nomic-embed-text`); uses local GPU
 
-If either is missing, search may be unavailable while the rest of the system still works.
+Configure the provider and model from the Agents → Embeddings panel. The panel shows a per-source progress bar (email, WhatsApp, lifelogs, contacts, projects) with queue depth and estimated items remaining. The indexer runs every 10 minutes and processes up to 200 items per source per run to avoid saturating the GPU during backfill.
+
+If neither provider is configured, semantic search falls back to full-text only and the rest of the system is unaffected.
 
 ### WhatsApp
 
 The WhatsApp connector is included in this repo. It is not an external dependency anymore.
+
+Historical sync skips broadcast lists, the status feed, and WhatsApp Channels — these chat types do not support message history retrieval and are silently excluded from sync counts.
 
 ---
 

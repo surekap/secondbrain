@@ -11,6 +11,12 @@ const dispatcher = require('./lib/dispatcher');
 const { startHistoricalSync } = require('./lib/sync');
 const pool = require('./lib/db');
 
+let telemetry = null;
+try { telemetry = require('@secondbrain/telemetry'); } catch (_) {}
+if (telemetry) telemetry.init('whatsapp');
+
+let _runId = null;
+
 if (!process.env.CLIENT_ID) {
     console.error('[boot] CLIENT_ID env var is required');
     process.exit(1);
@@ -52,13 +58,56 @@ const PORT = parseInt(process.env.PORT ?? '3000', 10);
 // ── WhatsApp client ───────────────────────────────────────────────────────────
 const store = new PostgresStore(process.env.CLIENT_ID);
 
+// Get Chrome executable path with fallbacks
+let executablePath;
+try {
+    if (process.env.CHROME_PATH) {
+        // User provided path
+        executablePath = process.env.CHROME_PATH;
+        console.log('[wa] using CHROME_PATH:', executablePath);
+    } else {
+        // Try puppeteer's bundled Chrome
+        const puppeteerPath = require('puppeteer').executablePath();
+        if (fs.existsSync(puppeteerPath)) {
+            executablePath = puppeteerPath;
+            console.log('[wa] using puppeteer Chrome');
+        } else {
+            // Try system Chrome installations
+            const possiblePaths = [
+                '/opt/homebrew/bin/chromium',
+                '/usr/local/bin/chromium',
+                '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+                '/Applications/Chromium.app/Contents/MacOS/Chromium',
+            ];
+            for (const p of possiblePaths) {
+                if (fs.existsSync(p)) {
+                    executablePath = p;
+                    console.log('[wa] found system Chrome:', p);
+                    break;
+                }
+            }
+            if (!executablePath) {
+                throw new Error(
+                    'Chrome/Chromium not found. Options:\n' +
+                    '1. Install: brew install chromium\n' +
+                    '2. Or set: export CHROME_PATH=/path/to/chrome\n' +
+                    '3. Or run: npm run whatsapp:setup'
+                );
+            }
+        }
+    }
+} catch (err) {
+    console.error('[wa] failed to find Chrome:', err.message);
+    process.exit(1);
+}
+
 const client = new Client({
     authStrategy: new LocalAuth({
         clientId: process.env.CLIENT_ID,
         dataPath: path.resolve(__dirname, '..', '.wwebjs_auth'),
     }),
     puppeteer: {
-        executablePath: process.env.CHROME_PATH ?? require('puppeteer').executablePath(),
+        executablePath,
         headless: true,
         protocolTimeout: 600_000,
         args: [
@@ -72,12 +121,17 @@ const client = new Client({
 // Keep statusRouter informed of WA state changes
 client.on(Events.AUTHENTICATED,      () => { console.log('[wa] authenticated'); setWaState('AUTHENTICATED'); });
 client.on(Events.AUTH_FAILURE,       (msg) => { console.log('[wa] auth failure:', msg); setWaState('AUTH_FAILURE'); });
-client.on(Events.READY, () => {
+client.on(Events.READY, async () => {
     console.log('[wa] ready');
     setWaState('CONNECTED');
-    startHistoricalSync(client, process.env.CLIENT_ID);
+    if (telemetry) _runId = await telemetry.startRun({ agentId: 'whatsapp', workflowName: 'message_bridge' });
+    startHistoricalSync(client, process.env.CLIENT_ID, _runId);
 });
-client.on(Events.DISCONNECTED,       (reason) => { console.log('[wa] disconnected:', reason); setWaState('DISCONNECTED'); });
+client.on(Events.DISCONNECTED, async (reason) => {
+    console.log('[wa] disconnected:', reason);
+    setWaState('DISCONNECTED');
+    if (telemetry && _runId) { await telemetry.endRun(_runId, { status: 'completed' }); _runId = null; }
+});
 client.on('qr', qr => {
     // Emit raw QR data on a single line so the UI can render it as a scannable image
     process.stdout.write('[WA_QR]' + qr + '\n');
@@ -97,10 +151,17 @@ Object.keys(Events).forEach(eventKey => {
             if ((eventName === 'message' || eventName === 'message_create') && data.chatName && data.from) {
                 const chatId = data.id?.remote || data.from;
                 const isGroup = chatId?.endsWith('@g.us') || false;
-                pool.query(
-                    `INSERT INTO chat_metadata (chat_id, name, is_group, updated_at) VALUES ($1, $2, $3, NOW()) ON CONFLICT (chat_id) DO UPDATE SET name = EXCLUDED.name, updated_at = NOW()`,
-                    [chatId, data.chatName, isGroup]
-                ).catch(() => {})
+                // Fire-and-forget: use setImmediate to avoid concurrent query warning
+                setImmediate(async () => {
+                    try {
+                        await pool.query(
+                            `INSERT INTO chat_metadata (chat_id, name, is_group, updated_at) VALUES ($1, $2, $3, NOW()) ON CONFLICT (chat_id) DO UPDATE SET name = EXCLUDED.name, updated_at = NOW()`,
+                            [chatId, data.chatName, isGroup]
+                        );
+                    } catch (err) {
+                        console.debug('[app] chat_metadata insert failed:', err.message);
+                    }
+                });
             }
 
             // Download media for new messages (fire-and-forget)

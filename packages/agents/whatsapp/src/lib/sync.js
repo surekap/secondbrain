@@ -2,6 +2,9 @@
 
 const pool = require('./db');
 
+let telemetry = null;
+try { telemetry = require('@secondbrain/telemetry'); } catch (_) {}
+
 const LOOKBACK_DAYS  = 14;
 const MSG_LIMIT      = 2000;  // per chat — fetchMessages auto-loads earlier pages
 const CHAT_DELAY_MS  = 300;   // brief pause between chats to avoid rate-limiting
@@ -13,17 +16,17 @@ const CHAT_DELAY_MS  = 300;   // brief pause between chats to avoid rate-limitin
  * @param {import('whatsapp-web.js').Client} client
  * @param {string} clientId
  */
-function startHistoricalSync(client, clientId) {
+function startHistoricalSync(client, clientId, runId = null) {
     setImmediate(async () => {
         try {
-            await _runSync(client, clientId);
+            await _runSync(client, clientId, runId);
         } catch (err) {
             console.error('[sync] fatal error:', err.message);
         }
     });
 }
 
-async function _runSync(client, clientId) {
+async function _runSync(client, clientId, runId) {
     const cutoff = new Date();
     cutoff.setDate(cutoff.getDate() - LOOKBACK_DAYS);
 
@@ -44,10 +47,22 @@ async function _runSync(client, clientId) {
         return;
     }
 
-    console.log(`[sync] ${chats.length} chats found`);
+    // Filter out chat types that don't support fetchMessages:
+    // broadcast lists, the status feed, and WhatsApp Channels (newsletters)
+    const syncable = chats.filter(c => {
+        const id = c.id._serialized;
+        if (c.isBroadcast)          return false;  // broadcast lists
+        if (id === 'status@broadcast') return false; // status feed
+        if (id.endsWith('@newsletter')) return false; // WA Channels
+        return true;
+    });
+    const skippedTypes = chats.length - syncable.length;
+
+    console.log(`[sync] ${chats.length} chats found (${syncable.length} syncable, ${skippedTypes} skipped — broadcast/status/channels)`);
+    if (telemetry && runId) telemetry.progress(runId, 'chats_scanned', { completed: syncable.length, total: syncable.length });
 
     // Persist chat names for group name resolution
-    for (const chat of chats) {
+    for (const chat of syncable) {
         const name = chat.name || null;
         const chatId = chat.id._serialized;
         const isGroup = chat.isGroup || false;
@@ -64,7 +79,7 @@ async function _runSync(client, clientId) {
     let totalSaved = 0;
     let totalSkipped = 0;
 
-    for (const chat of chats) {
+    for (const chat of syncable) {
         const name = chat.name || chat.id._serialized;
         try {
             const { saved, skipped } = await _syncChat(chat, cutoff, clientId);
@@ -73,7 +88,10 @@ async function _runSync(client, clientId) {
             }
             totalSaved   += saved;
             totalSkipped += skipped;
+            if (telemetry && runId) telemetry.progress(runId, 'messages_synced', { completed: totalSaved });
         } catch (err) {
+            // Suppress known whatsapp-web.js internal errors for unsupported chat types
+            if (err.message?.includes('waitForChatLoading')) continue;
             console.error(`[sync]   ${name}: error — ${err.message}`);
         }
         // Small delay to avoid hammering WhatsApp

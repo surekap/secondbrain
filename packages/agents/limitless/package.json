@@ -16,6 +16,7 @@
         "openai": "^4.0.0",
         "@notionhq/client": "^4.0.2",
         "@secondbrain/db": "*",
+        "@secondbrain/telemetry": "*",
         "axios": "^1.13.5",
         "dotenv": "^16.5.0",
         "moment-timezone": "^0.6.0",

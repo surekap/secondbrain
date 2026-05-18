@@ -16,7 +16,12 @@
 
 const { embedBatch, toSql, getEmbeddingConfig } = require('./embedder');
 
-const INTERVAL_MS = 10 * 60 * 1000; // 10 minutes
+let telemetry = null;
+try { telemetry = require('@secondbrain/telemetry'); } catch (_) {}
+if (telemetry) telemetry.init('indexer');
+
+const INTERVAL_MS   = 10 * 60 * 1000; // 10 minutes
+const BATCH_PER_RUN = 200;            // max items per source per run
 
 let _db  = null;
 let _tid = null;
@@ -92,7 +97,8 @@ async function indexEmails(embeddingModel) {
           AND s.embedding_model = $1
       )
       ORDER BY e.date DESC
-    `, [embeddingModel]);
+      LIMIT $2
+    `, [embeddingModel, BATCH_PER_RUN]);
     return indexSource('email', rows,
       r => [r.subject, r.body].filter(Boolean).join('\n'),
       r => r.id,
@@ -117,7 +123,8 @@ async function indexLifelogs(embeddingModel) {
           AND s.embedding_model = $1
       )
       ORDER BY l.start_time DESC NULLS LAST
-    `, [embeddingModel]);
+      LIMIT $2
+    `, [embeddingModel, BATCH_PER_RUN]);
     return indexSource('lifelog', rows,
       r => [r.title, r.body].filter(Boolean).join('\n'),
       r => r.id,
@@ -152,7 +159,8 @@ async function indexWhatsApp(embeddingModel) {
             AND s.embedding_model = $1
         )
       ORDER BY ts DESC
-    `, [embeddingModel]);
+      LIMIT $2
+    `, [embeddingModel, BATCH_PER_RUN]);
     return indexSource('whatsapp', rows,
       r => r.body.trim(),
       r => `${r.chat_id}::${r.epoch}`,
@@ -177,7 +185,8 @@ async function indexContacts(embeddingModel) {
           WHERE s.source = 'contact' AND s.source_id = c.id::text
             AND s.embedding_model = $1
         )
-    `, [embeddingModel]);
+      LIMIT $2
+    `, [embeddingModel, BATCH_PER_RUN]);
     return indexSource('contact', rows,
       r => [
         r.display_name,
@@ -207,7 +216,8 @@ async function indexInsights(embeddingModel) {
         WHERE s.source = 'insight' AND s.source_id = i.id::text
           AND s.embedding_model = $1
       )
-    `, [embeddingModel]);
+      LIMIT $2
+    `, [embeddingModel, BATCH_PER_RUN]);
     return indexSource('insight', rows,
       r => [r.title, r.description].filter(Boolean).join('\n'),
       r => r.id,
@@ -232,7 +242,8 @@ async function indexProjects(embeddingModel) {
           WHERE s.source = 'project' AND s.source_id = p.id::text
             AND s.embedding_model = $1
         )
-    `, [embeddingModel]);
+      LIMIT $2
+    `, [embeddingModel, BATCH_PER_RUN]);
     return indexSource('project', rows,
       r => [r.name, r.description, r.ai_summary].filter(Boolean).join('\n'),
       r => r.id,
@@ -258,7 +269,8 @@ async function indexProjectInsights(embeddingModel) {
           WHERE s.source = 'project_insight' AND s.source_id = pi.id::text
             AND s.embedding_model = $1
         )
-    `, [embeddingModel]);
+      LIMIT $2
+    `, [embeddingModel, BATCH_PER_RUN]);
     return indexSource('project_insight', rows,
       r => r.content || '',
       r => r.id,
@@ -277,27 +289,33 @@ async function runOnce() {
   if (_status.running) return;
   _status.running = true;
 
+  const runId = telemetry ? await telemetry.startRun({ agentId: 'indexer', workflowName: 'embedding_indexer' }) : null;
   let total = 0;
+
   try {
-    const { model: embeddingModel } = await getEmbeddingConfig();
+    const { model: embeddingModel, providerType } = await getEmbeddingConfig();
     const jobs = [
-      () => indexEmails(embeddingModel),
-      () => indexLifelogs(embeddingModel),
-      () => indexWhatsApp(embeddingModel),
-      () => indexContacts(embeddingModel),
-      () => indexInsights(embeddingModel),
-      () => indexProjects(embeddingModel),
-      () => indexProjectInsights(embeddingModel),
+      ['email',           () => indexEmails(embeddingModel)],
+      ['lifelog',         () => indexLifelogs(embeddingModel)],
+      ['whatsapp',        () => indexWhatsApp(embeddingModel)],
+      ['contact',         () => indexContacts(embeddingModel)],
+      ['insight',         () => indexInsights(embeddingModel)],
+      ['project',         () => indexProjects(embeddingModel)],
+      ['project_insight', () => indexProjectInsights(embeddingModel)],
     ];
-    for (const job of jobs) {
-      total += await job();
+    for (const [source, job] of jobs) {
+      const count = await job();
+      total += count;
+      if (runId && count > 0) telemetry.progress(runId, `embedded_${source}`, { completed: count });
     }
+    if (runId && total > 0) telemetry.progress(runId, 'total_embedded', { completed: total });
   } catch (err) {
     console.warn(`[indexer] Run failed:`, err.message);
   } finally {
     _status.running = false;
     _status.lastRunAt = new Date();
     _status.lastRunCount = total;
+    if (runId) await telemetry.endRun(runId, { status: 'completed' });
   }
 
   if (total > 0) console.log(`[indexer] Indexed ${total} new items`);
@@ -328,4 +346,46 @@ function stop() {
   _status.nextRunAt = null;
 }
 
-module.exports = { start, stop, runOnce, getStatus };
+async function getPendingCounts(embeddingModel) {
+  if (!_db) return [];
+  try {
+    const { rows } = await _db.query(`
+      SELECT source, total, indexed, (total - indexed) AS pending FROM (
+        SELECT 'email'           AS source,
+          (SELECT COUNT(*) FROM email.emails)::int                                           AS total,
+          (SELECT COUNT(*) FROM search.embeddings WHERE source='email'        AND embedding_model=$1)::int AS indexed
+        UNION ALL
+        SELECT 'whatsapp',
+          (SELECT COUNT(*) FROM public.messages
+           WHERE event IN ('message','message_create','message_historical')
+             AND msg_type='chat' AND data->>'body' IS NOT NULL AND LENGTH(data->>'body')>8)::int,
+          (SELECT COUNT(*) FROM search.embeddings WHERE source='whatsapp'     AND embedding_model=$1)::int
+        UNION ALL
+        SELECT 'lifelog',
+          (SELECT COUNT(*) FROM limitless.lifelogs)::int,
+          (SELECT COUNT(*) FROM search.embeddings WHERE source='lifelog'      AND embedding_model=$1)::int
+        UNION ALL
+        SELECT 'contact',
+          (SELECT COUNT(*) FROM relationships.contacts WHERE NOT is_noise)::int,
+          (SELECT COUNT(*) FROM search.embeddings WHERE source='contact'      AND embedding_model=$1)::int
+        UNION ALL
+        SELECT 'insight',
+          (SELECT COUNT(*) FROM relationships.insights)::int,
+          (SELECT COUNT(*) FROM search.embeddings WHERE source='insight'      AND embedding_model=$1)::int
+        UNION ALL
+        SELECT 'project',
+          (SELECT COUNT(*) FROM projects.projects WHERE NOT is_archived)::int,
+          (SELECT COUNT(*) FROM search.embeddings WHERE source='project'      AND embedding_model=$1)::int
+        UNION ALL
+        SELECT 'project_insight',
+          (SELECT COUNT(*) FROM projects.project_insights WHERE NOT is_resolved)::int,
+          (SELECT COUNT(*) FROM search.embeddings WHERE source='project_insight' AND embedding_model=$1)::int
+      ) t
+    `, [embeddingModel]);
+    return rows;
+  } catch (e) {
+    return [];
+  }
+}
+
+module.exports = { start, stop, runOnce, getStatus, getPendingCounts, BATCH_PER_RUN };
