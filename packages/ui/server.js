@@ -1930,7 +1930,7 @@ async function startServer() {
 
   const PORT = process.env.UI_PORT || 4001;
   app.listen(PORT, '0.0.0.0', () => {
-    console.log(`\n  secondbrain UI → http://0.0.0.0:${PORT}\n`);
+    console.log(`\n  secondbrain UI → http://localhost:${PORT}\n`);
     if (db) indexer.start(db);
   });
 }
