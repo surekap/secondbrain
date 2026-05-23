@@ -1,0 +1,212 @@
+.container {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: clamp(2rem, 4vw, 3.5rem) clamp(1.5rem, 4vw, 3rem);
+}
+
+.heading {
+  font-family: 'Fraunces', serif;
+  font-weight: 300;
+  font-size: clamp(1.5rem, 3vw, 2rem);
+  letter-spacing: -.03em;
+  color: var(--text);
+  margin-bottom: .25rem;
+}
+
+.desc {
+  font-size: .825rem;
+  color: var(--text-3);
+  margin-bottom: 1.75rem;
+}
+
+.tabs {
+  display: flex;
+  gap: .25rem;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 1.5rem;
+}
+
+.tab {
+  padding: .5rem 1rem;
+  font-size: .8125rem;
+  font-weight: 500;
+  color: var(--text-3);
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  margin-bottom: -1px;
+  transition: color .15s;
+}
+
+.tab:hover { color: var(--text); }
+
+.tabActive {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+
+.grid2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 1rem 1.25rem;
+}
+
+.cardTitle {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+  color: var(--text-3);
+  margin-bottom: .5rem;
+}
+
+.bigMetric {
+  font-size: 1.75rem;
+  font-weight: 600;
+  line-height: 1.1;
+}
+
+.sub {
+  font-size: .75rem;
+  color: var(--text-3);
+  margin-top: .25rem;
+}
+
+.metricOk   { color: var(--green); }
+.metricWarn { color: var(--amber); }
+.metricCrit { color: var(--red); }
+.dim        { color: var(--text-3); }
+
+.pill {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: .6875rem;
+  font-weight: 500;
+  border: 1px solid var(--border);
+  background: var(--bg-2);
+  color: var(--text-2);
+}
+
+.pillRunning  { background: var(--green-bg);  color: var(--green);  border-color: var(--green-border); }
+.pillSuccess  { background: var(--green-bg);  color: var(--green);  border-color: var(--green-border); }
+.pillFailed   { background: var(--red-bg);    color: var(--red);    border-color: var(--red-border); }
+.pillCritical { background: var(--red-bg);    color: var(--red);    border-color: var(--red-border); }
+.pillWarning  { background: var(--amber-bg);  color: var(--amber);  border-color: var(--amber-border); }
+.pillInfo     { background: var(--blue-bg);   color: var(--blue);   border-color: var(--blue-border); }
+
+.bar { height: 4px; background: var(--bg-2); border-radius: 2px; overflow: hidden; margin-top: 6px; }
+.barFill { height: 100%; background: var(--accent); border-radius: 2px; }
+
+.tableWrap {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  margin-bottom: 1.25rem;
+}
+
+.table { width: 100%; border-collapse: collapse; font-size: .8125rem; }
+
+.table th {
+  text-align: left;
+  font-size: .6875rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+  color: var(--text-3);
+  padding: .5rem .75rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.table td {
+  padding: .5rem .75rem;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-2);
+  vertical-align: middle;
+}
+
+.table tr:last-child td { border-bottom: none; }
+
+.empty {
+  color: var(--text-3);
+  font-size: .8125rem;
+  padding: 1rem .75rem;
+}
+
+.section { margin-bottom: 1.5rem; }
+
+.sectionTitle {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+  color: var(--text-3);
+  margin-bottom: .75rem;
+  padding-bottom: .5rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.filterRow {
+  display: flex;
+  gap: .5rem;
+  margin-bottom: 1rem;
+  flex-wrap: wrap;
+}
+
+.filterInput {
+  padding: .375rem .625rem;
+  font-size: .8125rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  width: 140px;
+  font-family: inherit;
+}
+
+.filterInput:focus { outline: none; border-color: var(--accent); }
+
+.filterSelect {
+  padding: .375rem .625rem;
+  font-size: .8125rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  font-family: inherit;
+}
+
+.rateBtn {
+  padding: 2px 8px;
+  font-size: .6875rem;
+  font-weight: 500;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  cursor: pointer;
+  margin-right: 4px;
+  background: var(--surface);
+  color: var(--text-2);
+  font-family: inherit;
+}
+
+.rateGood { background: var(--green-bg); color: var(--green); border-color: var(--green-border); }
+.rateOk   { background: var(--amber-bg); color: var(--amber); border-color: var(--amber-border); }
+.ratePoor { background: var(--red-bg);   color: var(--red);   border-color: var(--red-border); }
+
+.alertItem {
+  display: flex;
+  align-items: baseline;
+  gap: .5rem;
+  margin-bottom: .5rem;
+  font-size: .8125rem;
+}
+
+.noAlerts { color: var(--green); font-size: .8125rem; }
