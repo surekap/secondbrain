@@ -1929,8 +1929,8 @@ async function startServer() {
   await ensurePuppeteerChrome();
 
   const PORT = process.env.UI_PORT || 4001;
-  app.listen(PORT, () => {
-    console.log(`\n  secondbrain UI → http://localhost:${PORT}\n`);
+  app.listen(PORT, '0.0.0.0', () => {
+    console.log(`\n  secondbrain UI → http://0.0.0.0:${PORT}\n`);
     if (db) indexer.start(db);
   });
 }

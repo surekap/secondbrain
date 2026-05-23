@@ -181,8 +181,8 @@ app.get('*', (req, res) => {
 // ── Start ─────────────────────────────────────────────────────────────────────
 alerts.start(db)
 
-app.listen(PORT, () => {
-  console.log(`[observe] dashboard at http://localhost:${PORT}`)
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`[observe] dashboard at http://0.0.0.0:${PORT}`)
 })
 
 process.on('SIGINT', () => { alerts.stop(); db.end(); process.exit(0) })
