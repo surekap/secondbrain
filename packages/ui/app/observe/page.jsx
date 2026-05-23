@@ -88,7 +88,7 @@ function Overview({ sys, agents, alerts }) {
             {s.mem_used_mb ? `${Math.round(s.mem_used_mb / 1024)}GB` : '—'}
           </span>
           <div className={styles.sub}>
-            Swap: {s.swap_used_mb ? `${Math.round(s.swap_used_mb / 1024)}GB` : '0'}&nbsp;
+            Swap: {s.swap_used_mb != null ? `${Math.round(s.swap_used_mb / 1024)}GB` : '—'}&nbsp;
             Thermal: {s.thermal_state || '—'}
           </div>
         </div>
@@ -124,8 +124,8 @@ function Overview({ sys, agents, alerts }) {
           <div className={styles.cardTitle}>Active Alerts</div>
           {activeAlerts.length === 0 ? (
             <div className={styles.noAlerts}>No active alerts</div>
-          ) : activeAlerts.map((a, i) => (
-            <div key={i} className={styles.alertItem}>
+          ) : activeAlerts.map((a) => (
+            <div key={`${a.fired_at}-${a.message}`} className={styles.alertItem}>
               <Pill status={a.severity} />
               {a.message}
               <span className={styles.dim}>{ago(a.fired_at)}</span>
@@ -200,8 +200,8 @@ function Models({ data }) {
             <tbody>
               {stats.length === 0 ? (
                 <tr><td colSpan={7} className={styles.empty}>No model data yet</td></tr>
-              ) : stats.map((s, i) => (
-                <tr key={i}>
+              ) : stats.map((s) => (
+                <tr key={s.model}>
                   <td>{s.model}</td>
                   <td>{s.total_requests}</td>
                   <td>{Number(s.total_prompt_tokens || 0).toLocaleString()}</td>
@@ -225,8 +225,8 @@ function Models({ data }) {
             <tbody>
               {sessions.length === 0 ? (
                 <tr><td colSpan={4} className={styles.empty}>No sessions</td></tr>
-              ) : sessions.map((s, i) => (
-                <tr key={i}>
+              ) : sessions.map((s) => (
+                <tr key={`${s.model_name}-${s.loaded_at}`}>
                   <td>{s.model_name}</td>
                   <td>{ago(s.loaded_at)}</td>
                   <td>{ago(s.last_used_at)}</td>
@@ -413,7 +413,7 @@ export default function ObservePage() {
     else if (view === 'models')  apiFetch('/observe-api/api/models').then(setModelsData)
     else if (view === 'traces')  fetchTraces(traceFilters)
     else if (view === 'quality') fetchQuality()
-  }, [view])
+  }, [view, fetchOverview, fetchTraces, fetchQuality])
 
   // SSE connects directly to the observe port — avoids Next.js proxy buffering issues
   useEffect(() => {
