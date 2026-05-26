@@ -114,7 +114,8 @@ async function researchContact(contact) {
     const providerName = activeProviders[i].name
     const result       = results[i]
     if (result.status === 'rejected') {
-      console.error(`    ✗ ${providerName}: ${result.reason?.message || 'failed'}`)
+      const errMsg = result.reason?.message || String(result.reason) || 'failed'
+      console.warn(`    ✗ ${providerName}: ${errMsg}`)
       continue
     }
     const { query, result_json, summary } = result.value

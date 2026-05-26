@@ -8,7 +8,8 @@ async function researchContact(contact) {
   if (!apiKey) {
     return { query: contact.display_name, result_json: { status: 'not_configured' }, summary: `PEOPLEDATALABS_API_KEY not configured.` }
   }
-  const c = new PDLJS.default({ apiKey })
+  const PDLClient = PDLJS.default || PDLJS
+  const c = new PDLClient({ apiKey })
 
   const name    = contact.display_name
   const company = contact.company || ''

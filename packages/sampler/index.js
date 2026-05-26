@@ -22,7 +22,6 @@ pm.onSample(sample => {
 pm.start()
 
 setInterval(async () => {
-  if (Object.keys(latestPmSample).length === 0) return
   const sample = { ...latestPmSample }
   latestPmSample = {}
   try {
@@ -32,12 +31,12 @@ setInterval(async () => {
          gpu_active_residency_pct, gpu_idle_residency_pct, thermal_state)
       VALUES (NOW(),$1,$2,$3,$4,$5,$6)
     `, [
-      sample.cpu_power_mw,
-      sample.gpu_power_mw,
-      sample.ane_power_mw,
-      sample.gpu_active_residency_pct,
-      sample.gpu_idle_residency_pct,
-      sample.thermal_state,
+      sample.cpu_power_mw              ?? null,
+      sample.gpu_power_mw              ?? null,
+      sample.ane_power_mw              ?? null,
+      sample.gpu_active_residency_pct  ?? null,
+      sample.gpu_idle_residency_pct    ?? null,
+      sample.thermal_state             ?? null,
     ])
   } catch (err) {
     console.warn('[sampler] system_samples write error:', err.message)

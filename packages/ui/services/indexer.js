@@ -32,6 +32,7 @@ const _status = {
   running:      false,
   lastRunAt:    null,
   lastRunCount: null,
+  lastRunError: null,
   nextRunAt:    null,
   startedAt:    null,
 };
@@ -41,6 +42,7 @@ function getStatus() {
     running:      _status.running,
     lastRunAt:    _status.lastRunAt?.toISOString() ?? null,
     lastRunCount: _status.lastRunCount,
+    lastRunError: _status.lastRunError,
     nextRunAt:    _status.nextRunAt?.toISOString() ?? null,
     startedAt:    _status.startedAt?.toISOString() ?? null,
     intervalMs:   INTERVAL_MS,
@@ -99,14 +101,19 @@ async function indexEmails(embeddingModel) {
       ORDER BY e.date DESC
       LIMIT $2
     `, [embeddingModel, BATCH_PER_RUN]);
-    return indexSource('email', rows,
+    return await indexSource('email', rows,
       r => [r.subject, r.body].filter(Boolean).join('\n'),
       r => r.id,
       r => ({ subject: r.subject, from_address: r.from_address, date: r.date }),
       embeddingModel,
     );
   } catch (e) {
-    if (!e.message.includes('does not exist')) console.warn('[indexer] email:', e.message);
+    const msg = e.message || String(e);
+    if (!msg.includes('does not exist')) {
+      const hint = msg.includes('spending cap') || msg.includes('429') ? ' [Gemini spending cap]' : '';
+      console.warn('[indexer] email:', msg + hint);
+      _status.lastRunError = msg + hint;
+    }
     return 0;
   }
 }
@@ -125,7 +132,7 @@ async function indexLifelogs(embeddingModel) {
       ORDER BY l.start_time DESC NULLS LAST
       LIMIT $2
     `, [embeddingModel, BATCH_PER_RUN]);
-    return indexSource('lifelog', rows,
+    return await indexSource('lifelog', rows,
       r => [r.title, r.body].filter(Boolean).join('\n'),
       r => r.id,
       r => ({ title: r.title, start_time: r.start_time }),
@@ -161,7 +168,7 @@ async function indexWhatsApp(embeddingModel) {
       ORDER BY ts DESC
       LIMIT $2
     `, [embeddingModel, BATCH_PER_RUN]);
-    return indexSource('whatsapp', rows,
+    return await indexSource('whatsapp', rows,
       r => r.body.trim(),
       r => `${r.chat_id}::${r.epoch}`,
       r => ({ chat_id: r.chat_id, from_me: r.from_me, notify_name: r.notify_name, ts: r.ts }),
@@ -187,7 +194,7 @@ async function indexContacts(embeddingModel) {
         )
       LIMIT $2
     `, [embeddingModel, BATCH_PER_RUN]);
-    return indexSource('contact', rows,
+    return await indexSource('contact', rows,
       r => [
         r.display_name,
         r.company && r.job_title ? `${r.job_title} at ${r.company}` : (r.company || r.job_title),
@@ -218,7 +225,7 @@ async function indexInsights(embeddingModel) {
       )
       LIMIT $2
     `, [embeddingModel, BATCH_PER_RUN]);
-    return indexSource('insight', rows,
+    return await indexSource('insight', rows,
       r => [r.title, r.description].filter(Boolean).join('\n'),
       r => r.id,
       r => ({ title: r.title, insight_type: r.insight_type, priority: r.priority, contact_name: r.contact_name, created_at: r.created_at }),
@@ -244,7 +251,7 @@ async function indexProjects(embeddingModel) {
         )
       LIMIT $2
     `, [embeddingModel, BATCH_PER_RUN]);
-    return indexSource('project', rows,
+    return await indexSource('project', rows,
       r => [r.name, r.description, r.ai_summary].filter(Boolean).join('\n'),
       r => r.id,
       r => ({ name: r.name, status: r.status, health: r.health, last_activity_at: r.last_activity_at }),
@@ -271,7 +278,7 @@ async function indexProjectInsights(embeddingModel) {
         )
       LIMIT $2
     `, [embeddingModel, BATCH_PER_RUN]);
-    return indexSource('project_insight', rows,
+    return await indexSource('project_insight', rows,
       r => r.content || '',
       r => r.id,
       r => ({ insight_type: r.insight_type, priority: r.priority, project_name: r.project_name, created_at: r.created_at }),
@@ -310,7 +317,11 @@ async function runOnce() {
     }
     if (runId && total > 0) telemetry.progress(runId, 'total_embedded', { completed: total });
   } catch (err) {
-    console.warn(`[indexer] Run failed:`, err.message);
+    const hint = err.message?.includes('spending cap') || err.message?.includes('429')
+      ? ' (Gemini spending cap exceeded — check billing at console.cloud.google.com)'
+      : '';
+    console.warn(`[indexer] Run failed:`, err.message + hint);
+    _status.lastRunError = err.message + hint;
   } finally {
     _status.running = false;
     _status.lastRunAt = new Date();
@@ -318,7 +329,7 @@ async function runOnce() {
     if (runId) await telemetry.endRun(runId, { status: 'completed' });
   }
 
-  if (total > 0) console.log(`[indexer] Indexed ${total} new items`);
+  if (total > 0) { console.log(`[indexer] Indexed ${total} new items`); _status.lastRunError = null; }
   else           console.log(`[indexer] Run complete — nothing new to index`);
 }
 

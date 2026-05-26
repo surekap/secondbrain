@@ -764,24 +764,30 @@ app.post('/api/agents/:id/import', express.json({ limit: '200mb' }), async (req,
   }
 });
 
-// GET /api/config
+// GET /api/config — secrets are redacted; POST /api/config accepts new values
 app.get('/api/config', (req, res) => {
   const env = readEnv();
+  const redact = v => v ? '[REDACTED]' : '';
+  const rawAccounts = readGmailAccounts(env);
+  const safeAccounts = rawAccounts.map(a => ({
+    email:        a.email,
+    app_password: redact(a.app_password),
+  }));
   res.json({
     email: {
-      gmail_accounts: readGmailAccounts(env),
+      gmail_accounts: safeAccounts,
       BATCH_SIZE:     env.BATCH_SIZE  || '50',
       MAILBOX:        env.MAILBOX     || 'INBOX',
     },
     limitless: {
-      LIMITLESS_API_KEY:        env.LIMITLESS_API_KEY        || '',
+      LIMITLESS_API_KEY:        redact(env.LIMITLESS_API_KEY),
       FETCH_INTERVAL_CRON:      env.FETCH_INTERVAL_CRON      || '*/5 * * * *',
       PROCESS_INTERVAL_CRON:    env.PROCESS_INTERVAL_CRON    || '*/1 * * * *',
       FETCH_DAYS:               env.FETCH_DAYS               || '1',
       PROCESSING_BATCH_SIZE:    env.PROCESSING_BATCH_SIZE    || '15',
       AI_PROVIDER:           env.AI_PROVIDER           || 'anthropic',
-      ANTHROPIC_API_KEY:     env.ANTHROPIC_API_KEY     || '',
-      OPENAI_API_KEY:        env.OPENAI_API_KEY        || '',
+      ANTHROPIC_API_KEY:     redact(env.ANTHROPIC_API_KEY),
+      OPENAI_API_KEY:        redact(env.OPENAI_API_KEY),
       AI_ANTHROPIC_MODEL:    env.AI_ANTHROPIC_MODEL    || '',
       AI_OPENAI_MODEL:       env.AI_OPENAI_MODEL       || '',
       AI_CLAUDE_CLI_MODEL:   env.AI_CLAUDE_CLI_MODEL   || '',
@@ -792,13 +798,18 @@ app.get('/api/config', (req, res) => {
   });
 });
 
-// GET /api/system/config  — read keys from system.config (for research, embeddings)
+// GET /api/system/config  — read keys from system.config (secrets redacted)
 app.get('/api/system/config', async (req, res) => {
   if (!db) return res.status(503).json({ error: 'No database' });
   try {
+    const SECRET_PATTERN = /key|token|password|secret/i;
     const { rows } = await db.query(`SELECT key, value FROM system.config ORDER BY key`);
     const config = {};
-    for (const r of rows) config[r.key] = r.value;
+    for (const r of rows) {
+      config[r.key] = SECRET_PATTERN.test(r.key)
+        ? (r.value ? '[REDACTED]' : '')
+        : r.value;
+    }
     res.json(config);
   } catch (err) {
     res.status(500).json({ error: err.message });

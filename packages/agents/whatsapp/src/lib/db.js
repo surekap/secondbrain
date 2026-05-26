@@ -19,6 +19,13 @@ if (sslEnv === 'false') {
 const pool = new Pool({ connectionString: connStr, ssl });
 
 // Always use the public schema regardless of the database user's search_path setting.
-pool.on('connect', client => client.query("SET search_path TO public"));
+// Defer to next event loop to avoid concurrent query deprecation warning
+pool.on('connect', (client) => {
+  setImmediate(() => {
+    client.query("SET search_path TO public").catch(err => {
+      // Silently ignore if this fails (e.g., some users may not have permissions)
+    });
+  });
+});
 
 module.exports = pool;

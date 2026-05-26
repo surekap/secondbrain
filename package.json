@@ -31,7 +31,7 @@
     "apple-contacts": "node packages/agents/apple-contacts/index.js",
     "init-db": "npm run init-db --workspace=packages/agents/limitless && npm run init-db --workspace=packages/agents/email && npm run init-db --workspace=packages/agents/ai && npm run init-db --workspace=packages/agents/research",
     "collector": "node packages/collector/index.js",
-    "sampler": "sudo node packages/sampler/index.js",
+    "sampler": "node packages/sampler/index.js",
     "observe": "node packages/observe/server.js"
   },
   "devDependencies": {

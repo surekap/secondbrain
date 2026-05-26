@@ -50,6 +50,11 @@ async function emailExists(accountId, gmailUid) {
   return rows.length > 0;
 }
 
+// Postgres rejects strings containing the null byte (0x00).
+function stripNulls(s) {
+  return typeof s === 'string' ? s.replace(/\0/g, '') : s;
+}
+
 async function saveEmail(accountId, emailData) {
   await pool.query(
     `INSERT INTO email.emails (
@@ -69,16 +74,16 @@ async function saveEmail(accountId, emailData) {
       emailData.message_id    || null,
       String(emailData.gmail_uid),
       emailData.thread_id     || null,
-      emailData.subject       || null,
-      emailData.from_address  || null,
+      stripNulls(emailData.subject)      || null,
+      stripNulls(emailData.from_address) || null,
       emailData.to_addresses  || [],
       emailData.cc_addresses  || [],
       emailData.bcc_addresses || [],
-      emailData.reply_to      || null,
+      stripNulls(emailData.reply_to)     || null,
       emailData.date          || null,
       emailData.received_at   || new Date(),
-      emailData.body_text     || null,
-      emailData.body_html     || null,
+      stripNulls(emailData.body_text)    || null,
+      stripNulls(emailData.body_html)    || null,
       emailData.raw_headers   ? JSON.stringify(emailData.raw_headers) : null,
       emailData.attachments   ? JSON.stringify(emailData.attachments) : null,
       emailData.labels        || [],

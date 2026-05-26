@@ -40,6 +40,23 @@ function calcCost(providerType, model, tokensIn, tokensOut) {
   return (tokensIn / 1000) * r.in + (tokensOut / 1000) * r.out
 }
 
+// ── Dead-provider circuit breaker (in-process, non-persistent) ───────────────
+// Skips providers that returned ECONNREFUSED for a TTL period.
+
+const _deadProviders = new Map()   // providerId → deadUntilMs
+const DEAD_TTL_MS = 5 * 60 * 1000 // 5 minutes
+
+function _isProviderDead(providerId) {
+  const until = _deadProviders.get(providerId)
+  if (!until) return false
+  if (Date.now() > until) { _deadProviders.delete(providerId); return false }
+  return true
+}
+
+function _markProviderDead(providerId) {
+  _deadProviders.set(providerId, Date.now() + DEAD_TTL_MS)
+}
+
 // ── Priority list cache ───────────────────────────────────────────────────────
 
 const CACHE_TTL_MS = 60 * 1000
@@ -430,6 +447,8 @@ async function create(agentId, { system, messages, tools, max_tokens, _taskType,
 
   const errors = []
   for (const prov of providers) {
+    if (_isProviderDead(prov.id)) continue
+
     const fn = CALL_FNS[prov.provider_type]
     if (!fn) continue
 
@@ -481,7 +500,13 @@ async function create(agentId, { system, messages, tools, max_tokens, _taskType,
       return { text: result.text, tool_calls: result.tool_calls, stop_reason: result.stop_reason, provider: prov.name }
     } catch (err) {
       if (req) req.finish({ success: false, errorType: err.constructor?.name || 'Error' })
-      console.warn(`[llm:${agentId}] ${prov.name} failed: ${err.message}`)
+      const isConnRefused = err.code === 'ECONNREFUSED' || (err.message || '').includes('ECONNREFUSED')
+      if (isConnRefused) {
+        _markProviderDead(prov.id)
+        console.warn(`[llm:${agentId}] ${prov.name} unreachable (ECONNREFUSED) — skipping for 5 min`)
+      } else {
+        console.warn(`[llm:${agentId}] ${prov.name} failed: ${err.message}`)
+      }
       if (isCreditError(err)) {
         await markCreditsFailed(prov.id, err.message)
         console.warn(`[llm:${agentId}] marked ${prov.name} credits exhausted, trying next`)
