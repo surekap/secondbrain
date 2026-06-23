@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>secondbrain observe</title>
+  <style>
+    :root {
+      --bg: #0f1117; --surface: #1a1d27; --border: #2a2d3a;
+      --text: #e2e8f0; --dim: #64748b; --accent: #6366f1;
+      --green: #22c55e; --yellow: #eab308; --red: #ef4444; --blue: #3b82f6;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: var(--bg); color: var(--text); font: 14px/1.5 'SF Mono', 'Fira Code', monospace; }
+    #app { display: flex; flex-direction: column; min-height: 100vh; }
+    nav { display: flex; gap: 2px; padding: 12px 16px; background: var(--surface); border-bottom: 1px solid var(--border); }
+    nav button { background: none; border: none; color: var(--dim); cursor: pointer; padding: 6px 14px; border-radius: 4px; font: inherit; }
+    nav button.active { background: var(--accent); color: #fff; }
+    main { flex: 1; padding: 20px; max-width: 1400px; }
+    .grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; }
+    .card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 16px; }
+    .card h3 { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--dim); margin-bottom: 10px; }
+    .metric { font-size: 28px; font-weight: 700; }
+    .metric.warn { color: var(--yellow); }
+    .metric.crit { color: var(--red); }
+    .metric.ok   { color: var(--green); }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th { text-align: left; padding: 8px 10px; color: var(--dim); font-size: 11px; text-transform: uppercase; border-bottom: 1px solid var(--border); }
+    td { padding: 8px 10px; border-bottom: 1px solid var(--border); }
+    tr:last-child td { border-bottom: none; }
+    .pill { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; }
+    .pill.running  { background: #166534; color: #86efac; }
+    .pill.stopped  { background: #1e293b; color: var(--dim); }
+    .pill.failed   { background: #7f1d1d; color: #fca5a5; }
+    .pill.warning  { background: #713f12; color: #fde047; }
+    .pill.critical { background: #7f1d1d; color: #fca5a5; }
+    .pill.info     { background: #1e3a5f; color: #93c5fd; }
+    .section { display: none; }
+    .section.active { display: block; }
+    .bar { height: 6px; background: var(--border); border-radius: 3px; overflow: hidden; margin-top: 4px; }
+    .bar-fill { height: 100%; background: var(--accent); border-radius: 3px; transition: width .3s; }
+    .subtext { font-size: 11px; color: var(--dim); margin-top: 2px; }
+    input, select { background: var(--surface); border: 1px solid var(--border); color: var(--text); padding: 6px 10px; border-radius: 4px; font: inherit; }
+    button.rate-btn { border: none; cursor: pointer; padding: 4px 10px; border-radius: 4px; font: 11px/1 inherit; margin: 0 2px; }
+    .good-btn { background: #166534; color: #86efac; }
+    .ok-btn   { background: #713f12; color: #fde047; }
+    .poor-btn { background: #7f1d1d; color: #fca5a5; }
+  </style>
+</head>
+<body>
+<div id="app">
+  <nav>
+    <button class="active" data-view="overview">Overview</button>
+    <button data-view="agents">Agents</button>
+    <button data-view="models">Models</button>
+    <button data-view="traces">Traces</button>
+    <button data-view="quality">Quality</button>
+  </nav>
+  <main>
+    <div id="overview" class="section active"></div>
+    <div id="agents"   class="section"></div>
+    <div id="models"   class="section"></div>
+    <div id="traces"   class="section"></div>
+    <div id="quality"  class="section"></div>
+  </main>
+</div>
+<script src="app.js"></script>
+</body>
+</html>

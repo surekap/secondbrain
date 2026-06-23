@@ -5,6 +5,7 @@ require('dotenv').config({ path: require('path').resolve(__dirname, '../../../..
 const { simpleParser } = require('mailparser');
 const pool = require('@secondbrain/db');
 const { GmailClient } = require('../services/gmail');
+const batching = require('../../shared/batching');
 
 // ── Config ───────────────────────────────────────────────────────────────────
 
@@ -178,27 +179,18 @@ async function processAccount(account, gmailClient, logger, options = {}) {
     return { processed, skipped, errors };
   }
 
-  // 3. Process in batches (sequential to respect Gmail rate limits)
-  const totalBatches = Math.ceil(uids.length / batchSize);
+  // 3. Process in parallel batches (fetching is I/O bound, can be parallelized)
+  const PARALLEL_SIZE = 5; // Fetch 5 emails simultaneously
+  const DELAY_BETWEEN_BATCHES = 500; // Delay between batches to avoid overwhelming Gmail API
 
-  for (let b = 0; b < uids.length; b += batchSize) {
-    const batch       = uids.slice(b, b + batchSize);
-    const batchNumber = Math.floor(b / batchSize) + 1;
-
-    logger.debug(
-      `Batch ${batchNumber}/${totalBatches} — ` +
-      `UIDs ${batch[0]}…${batch[batch.length - 1]}`
-    );
-
-    for (const uid of batch) {
+  const results = await batching.processBatch(
+    uids,
+    async (uid) => {
       try {
-        // Skip if already stored (handles interrupted previous runs)
+        // Skip if already stored
         if (await emailExists(account.id, uid)) {
           logger.debug(`UID ${uid} already in DB — skipping`);
-          skipped++;
-          // Still apply the label in case it was missed last time
-          await gmailClient.applyPsLabel(uid).catch(() => {});
-          continue;
+          return { skipped: true };
         }
 
         // Fetch raw message — read-only; \Seen flag is never set
@@ -215,20 +207,30 @@ async function processAccount(account, gmailClient, logger, options = {}) {
         // Mark as processed in Gmail (COPY to "ps" mailbox = add label)
         await gmailClient.applyPsLabel(uid);
 
-        processed++;
-        logger.info(`Saved UID ${uid}  subject="${emailData.subject}"`);
+        logger.info(`Saved UID ${uid} subject="${emailData.subject}"`);
+        return { success: true, subject: emailData.subject };
 
       } catch (err) {
-        errors++;
         logger.error(`Failed on UID ${uid}: ${err.message}`);
+        return { error: err.message };
+      }
+    },
+    {
+      batchSize: PARALLEL_SIZE,
+      delayBetweenBatches: DELAY_BETWEEN_BATCHES,
+      onBatchComplete: (batchInfo) => {
+        const newProcessed = batchInfo.successCount;
+        processed += newProcessed;
+        skipped += batchInfo.itemsInBatch - newProcessed - batchInfo.errorCount;
+        errors += batchInfo.errorCount;
+
+        logger.info(
+          `Batch ${batchInfo.batchNum}/${batchInfo.totalBatches} done — ` +
+          `processed: ${processed}, skipped: ${skipped}, errors: ${errors}`
+        );
       }
     }
-
-    logger.info(
-      `Batch ${batchNumber}/${totalBatches} done — ` +
-      `processed: ${processed}, skipped: ${skipped}, errors: ${errors}`
-    );
-  }
+  );
 
   // 4. Update sync timestamp
   await updateAccountSyncTime(account.id);
@@ -256,29 +258,48 @@ async function run() {
     accountLog.info('Starting sync');
 
     let gmailClient;
-    try {
-      const account = await upsertAccount(accountConfig.email);
+    let accountRetries = 0;
+    const maxAccountRetries = 2;
 
-      gmailClient = new GmailClient(accountConfig.email, accountConfig.appPassword, accountLog);
-      await gmailClient.connect();
+    while (accountRetries <= maxAccountRetries) {
+      try {
+        const account = await upsertAccount(accountConfig.email);
 
-      const result = await processAccount(account, gmailClient, accountLog, { batchSize, mailbox });
+        gmailClient = new GmailClient(accountConfig.email, accountConfig.appPassword, accountLog);
+        await gmailClient.connect();
 
-      summary.processed += result.processed;
-      summary.skipped   += result.skipped;
-      summary.errors    += result.errors;
+        const result = await processAccount(account, gmailClient, accountLog, { batchSize, mailbox });
 
-      accountLog.info(
-        `Sync complete — processed: ${result.processed}, ` +
-        `skipped: ${result.skipped}, errors: ${result.errors}`
-      );
+        summary.processed += result.processed;
+        summary.skipped   += result.skipped;
+        summary.errors    += result.errors;
 
-    } catch (err) {
-      accountLog.error(`Account sync failed: ${err.message}`);
-      summary.errors++;
-    } finally {
-      if (gmailClient) {
-        await gmailClient.disconnect().catch(() => {});
+        accountLog.info(
+          `Sync complete — processed: ${result.processed}, ` +
+          `skipped: ${result.skipped}, errors: ${result.errors}`
+        );
+
+        // Success - break out of retry loop
+        break;
+
+      } catch (err) {
+        accountRetries++;
+        if (accountRetries <= maxAccountRetries) {
+          const delay = 5000 * accountRetries; // 5s, 10s
+          accountLog.warn(`Account sync failed (attempt ${accountRetries}/${maxAccountRetries + 1}): ${err.message}. Retrying in ${delay}ms...`);
+          if (gmailClient) {
+            await gmailClient.disconnect().catch(() => {});
+            gmailClient = null;
+          }
+          await new Promise(resolve => setTimeout(resolve, delay));
+        } else {
+          accountLog.error(`Account sync failed after ${maxAccountRetries + 1} attempts: ${err.message}`);
+          summary.errors++;
+        }
+      } finally {
+        if (gmailClient) {
+          await gmailClient.disconnect().catch(() => {});
+        }
       }
     }
   }
@@ -294,6 +315,17 @@ async function run() {
 }
 
 if (require.main === module) {
+  // Global error handlers to prevent crashes from unhandled async errors
+  process.on('uncaughtException', (err) => {
+    console.error('Uncaught Exception:', err);
+    pool.end().finally(() => process.exit(1));
+  });
+
+  process.on('unhandledRejection', (reason, promise) => {
+    console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+    pool.end().finally(() => process.exit(1));
+  });
+
   run()
     .then((summary) => pool.end().then(() => process.exit(summary.errors > 0 ? 1 : 0)))
     .catch((err) => {

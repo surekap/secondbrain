@@ -8,7 +8,9 @@ const dotenv     = require('dotenv');
 const { Pool }   = require('pg');
 const Anthropic  = require('@anthropic-ai/sdk');
 const indexer    = require('./services/indexer');
-const { embed, toSql } = require('./services/embedder');
+const { embed, toSql, getEmbeddingConfig } = require('./services/embedder');
+const { getProviderDefinitions, getStaticModels, DEFAULT_OLLAMA_BASE_URL } = require('../agents/shared/model-catalog');
+const { listOllamaModelOptions } = require('../agents/shared/ollama');
 
 // ── Bootstrap ─────────────────────────────────────────────────────────────────
 
@@ -48,6 +50,7 @@ async function runSystemSchema() {
     { file: '../agents/apple-contacts/sql/schema.sql', required: true  },
     { file: '../agents/whatsapp/src/db/schema.sql',    required: true  },
     { file: '../agents/shared/sql/system-schema.sql',  required: true  },
+    { file: '../agents/shared/sql/telemetry-schema.sql', required: true },
     { file: './sql/search_schema.sql',                 required: false }, // needs pgvector
   ];
 
@@ -99,6 +102,8 @@ async function migrateEnvToDb() {
 
   // ── Non-secret defaults: always seed on fresh install ──────────────────────
   await seed('system.EMBEDDING_MODEL', 'gemini-embedding-2-preview');
+  await seed('system.EMBEDDING_PROVIDER', 'gemini');
+  await seed('system.OLLAMA_BASE_URL', DEFAULT_OLLAMA_BASE_URL);
 
   await seed('email.BATCH_SIZE',  '50');
   await seed('email.MAILBOX',     'INBOX');
@@ -1614,10 +1619,11 @@ app.get('/api/search', async (req, res) => {
   if (!db)          return res.status(503).json({ error: 'No database' });
 
   try {
+    const { model: embeddingModel } = await getEmbeddingConfig();
     const vec = await embed(q, 'RETRIEVAL_QUERY');
 
     let sourceClause = '';
-    const params = [toSql(vec), limit];
+    const params = [embeddingModel, toSql(vec), limit];
     if (sources?.length) {
       params.push(sources);
       sourceClause = `AND source = ANY($${params.length})`;
@@ -1629,17 +1635,42 @@ app.get('/api/search', async (req, res) => {
         source_id,
         content,
         metadata,
-        1 - (embedding <=> $1::public.vector) AS similarity
+        1 - (embedding <=> $2::public.vector) AS similarity
       FROM search.embeddings
-      WHERE 1 - (embedding <=> $1::public.vector) > 0.25
+      WHERE embedding_model = $1
+        AND 1 - (embedding <=> $2::public.vector) > 0.25
       ${sourceClause}
-      ORDER BY embedding <=> $1::public.vector
-      LIMIT $2
+      ORDER BY embedding <=> $2::public.vector
+      LIMIT $3
     `, params);
 
     res.json({ results: rows });
   } catch (e) {
     res.status(500).json({ error: e.message });
+  }
+});
+
+app.get('/api/system/model-catalog', async (req, res) => {
+  const providerType = String(req.query.provider_type || '').trim() || null;
+  const capability = String(req.query.capability || '').trim() || null;
+  const explicitBaseUrl = String(req.query.base_url || '').trim();
+
+  try {
+    const providers = getProviderDefinitions(capability);
+    if (providerType === 'ollama') {
+      const { getConfig } = require('../agents/shared/config');
+      const baseUrl = explicitBaseUrl || await getConfig('system.OLLAMA_BASE_URL') || DEFAULT_OLLAMA_BASE_URL;
+      try {
+        const models = await listOllamaModelOptions({ baseUrl, capability });
+        return res.json({ providers, models, base_url: baseUrl });
+      } catch (error) {
+        return res.json({ providers, models: [], base_url: baseUrl, error: error.message });
+      }
+    }
+
+    res.json({ providers, models: getStaticModels({ providerType, capability }) });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
   }
 });
 
@@ -1654,18 +1685,14 @@ app.post('/api/search/reindex', async (req, res) => {
   }
 });
 
-// GET /api/search/stats — how many items are indexed per source + indexer status
+// GET /api/search/stats — indexed counts, pending queue, and indexer status
 app.get('/api/search/stats', async (req, res) => {
   if (!db) return res.status(503).json({ error: 'No database' });
   try {
-    const { rows } = await db.query(`
-      SELECT source, COUNT(*) AS total,
-             MAX(indexed_at) AS last_indexed
-      FROM search.embeddings
-      GROUP BY source
-      ORDER BY source
-    `);
-    res.json({ sources: rows, indexer: indexer.getStatus() });
+    const { getConfig } = require('../agents/shared/config')
+    const embeddingModel = await getConfig('system.EMBEDDING_MODEL') || 'gemini-embedding-2-preview'
+    const pending = await indexer.getPendingCounts(embeddingModel)
+    res.json({ sources: pending, indexer: indexer.getStatus(), batchPerRun: indexer.BATCH_PER_RUN });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -1696,13 +1723,16 @@ app.get('/api/system/providers', async (req, res) => {
 
 app.post('/api/system/providers', async (req, res) => {
   if (!db) return res.status(503).json({ error: 'No database' });
-  const { name, provider_type, api_key, model } = req.body;
+  const { name, provider_type, api_key, base_url, model } = req.body;
   if (!name || !provider_type) return res.status(400).json({ error: 'name and provider_type required' });
+  const normalizedBaseUrl = provider_type === 'ollama'
+    ? (base_url || DEFAULT_OLLAMA_BASE_URL)
+    : (base_url || null);
   try {
     const { rows } = await db.query(
-      `INSERT INTO system.llm_providers (name, provider_type, api_key, model)
-       VALUES ($1, $2, $3, $4) RETURNING *`,
-      [name, provider_type, api_key || null, model || null]
+      `INSERT INTO system.llm_providers (name, provider_type, api_key, base_url, model)
+       VALUES ($1, $2, $3, $4, $5) RETURNING *`,
+      [name, provider_type, api_key || null, normalizedBaseUrl, model || null]
     );
     res.json(rows[0]);
   } catch (err) {
@@ -1712,16 +1742,17 @@ app.post('/api/system/providers', async (req, res) => {
 
 app.patch('/api/system/providers/:id', async (req, res) => {
   if (!db) return res.status(503).json({ error: 'No database' });
-  const { name, api_key, model, is_enabled } = req.body;
+  const { name, api_key, base_url, model, is_enabled } = req.body;
   try {
     const { rows } = await db.query(
       `UPDATE system.llm_providers
        SET name = COALESCE($2, name),
            api_key = COALESCE($3, api_key),
-           model = COALESCE($4, model),
-           is_enabled = COALESCE($5, is_enabled)
+           base_url = COALESCE($4, base_url),
+           model = COALESCE($5, model),
+           is_enabled = COALESCE($6, is_enabled)
        WHERE id = $1 RETURNING *`,
-      [req.params.id, name || null, api_key || null, model || null, is_enabled != null ? is_enabled : null]
+      [req.params.id, name || null, api_key || null, base_url || null, model || null, is_enabled != null ? is_enabled : null]
     );
     if (rows.length === 0) return res.status(404).json({ error: 'not found' });
     const { invalidatePriorityCache } = require('../agents/shared/llm');

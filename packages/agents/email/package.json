@@ -11,6 +11,7 @@
     },
     "dependencies": {
         "@secondbrain/db": "*",
+        "@secondbrain/telemetry": "*",
         "dotenv": "^16.0.0",
         "imapflow": "^1.0.0",
         "mailparser": "^3.6.0",

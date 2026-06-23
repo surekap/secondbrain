@@ -11,16 +11,36 @@ CREATE TABLE IF NOT EXISTS search.embeddings (
   source      TEXT NOT NULL,   -- 'email' | 'whatsapp' | 'lifelog' | 'contact' | 'insight' | 'project' | 'project_insight'
   source_id   TEXT NOT NULL,   -- primary key from the source table
   content     TEXT NOT NULL,   -- the text that was embedded
-  embedding   vector(3072),    -- gemini-embedding-2-preview (3072 dims)
+  embedding   vector,          -- variable dimensions; must match embedding_model at query time
+  embedding_model TEXT NOT NULL DEFAULT 'gemini-embedding-2-preview',
   metadata    JSONB DEFAULT '{}',
   indexed_at  TIMESTAMPTZ DEFAULT NOW(),
   UNIQUE (source, source_id)
 );
 
--- HNSW index: handles incremental inserts well (unlike IVFFlat which needs data upfront)
-CREATE INDEX IF NOT EXISTS search_embeddings_hnsw_idx
-  ON search.embeddings USING hnsw (embedding vector_cosine_ops)
-  WITH (m = 16, ef_construction = 64);
+ALTER TABLE search.embeddings
+  ALTER COLUMN embedding TYPE vector USING embedding::vector;
+
+ALTER TABLE search.embeddings
+  ADD COLUMN IF NOT EXISTS embedding_model TEXT;
+
+UPDATE search.embeddings
+SET embedding_model = 'gemini-embedding-2-preview'
+WHERE embedding_model IS NULL;
+
+ALTER TABLE search.embeddings
+  ALTER COLUMN embedding_model SET DEFAULT 'gemini-embedding-2-preview';
+
+ALTER TABLE search.embeddings
+  ALTER COLUMN embedding_model SET NOT NULL;
+
+DROP INDEX IF EXISTS search_embeddings_hnsw_idx;
 
 CREATE INDEX IF NOT EXISTS search_embeddings_source_idx
   ON search.embeddings (source);
+
+CREATE INDEX IF NOT EXISTS search_embeddings_model_idx
+  ON search.embeddings (embedding_model);
+
+CREATE INDEX IF NOT EXISTS search_embeddings_source_model_idx
+  ON search.embeddings (source, embedding_model);

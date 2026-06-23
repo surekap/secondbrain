@@ -3,12 +3,24 @@
 // Set process title so macOS shows "secondbrain" in Privacy & Security → Contacts
 process.title = 'secondbrain';
 
-const path = require('path');
+const path   = require('path');
+const fs     = require('fs');
 const dotenv = require('dotenv');
 
 dotenv.config({ path: path.resolve(__dirname, '../../../.env.local') });
 
+const db = require('@secondbrain/db');
 const { syncContacts } = require('./services/syncer');
+
+async function ensureSchema() {
+  try {
+    const sql = fs.readFileSync(path.resolve(__dirname, 'sql/schema.sql'), 'utf8');
+    await db.query(sql);
+    console.log('[apple-contacts] Schema ready');
+  } catch (err) {
+    console.error('[apple-contacts] Schema setup error:', err.message);
+  }
+}
 
 const SYNC_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
@@ -39,6 +51,8 @@ async function main() {
     console.log('[apple-contacts] Use "Upload VCF" on the Agents page to import contacts.');
     process.exit(0);
   }
+
+  await ensureSchema();
 
   // Run immediately on start
   await runNativeSync();

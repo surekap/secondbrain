@@ -8,8 +8,9 @@ CREATE TABLE IF NOT EXISTS system.llm_providers (
   id            SERIAL PRIMARY KEY,
   name          TEXT NOT NULL,
   provider_type TEXT NOT NULL
-    CHECK (provider_type IN ('anthropic','claude_cli','openai','gemini')),
+    CHECK (provider_type IN ('anthropic','claude_cli','openai','gemini','kimi','ollama')),
   api_key       TEXT,
+  base_url      TEXT,
   model         TEXT,
   is_enabled    BOOLEAN NOT NULL DEFAULT true,
   has_credits   BOOLEAN NOT NULL DEFAULT true,
@@ -19,6 +20,24 @@ CREATE TABLE IF NOT EXISTS system.llm_providers (
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS llm_providers_name_unique ON system.llm_providers (name);
+
+ALTER TABLE system.llm_providers
+  ADD COLUMN IF NOT EXISTS base_url TEXT;
+
+DO $$ BEGIN
+  IF EXISTS (
+    SELECT 1
+    FROM pg_constraint
+    WHERE conname = 'llm_providers_provider_type_check'
+      AND conrelid = 'system.llm_providers'::regclass
+  ) THEN
+    ALTER TABLE system.llm_providers DROP CONSTRAINT llm_providers_provider_type_check;
+  END IF;
+END $$;
+
+ALTER TABLE system.llm_providers
+  ADD CONSTRAINT llm_providers_provider_type_check
+  CHECK (provider_type IN ('anthropic','claude_cli','openai','gemini','kimi','ollama'));
 
 -- Per-agent ordered provider list
 CREATE TABLE IF NOT EXISTS system.agent_llm_priority (
@@ -93,3 +112,18 @@ DO $$ BEGIN
     );
   END IF;
 END $$;
+
+-- Agent processing cache (tracks what's been processed to skip redundant LLM calls)
+CREATE TABLE IF NOT EXISTS system.agent_cache (
+  agent_id    TEXT NOT NULL,
+  item_type   TEXT NOT NULL,
+  item_id     TEXT NOT NULL,
+  processed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  metadata    JSONB,
+  PRIMARY KEY (agent_id, item_type, item_id)
+);
+
+CREATE INDEX IF NOT EXISTS agent_cache_agent_type
+  ON system.agent_cache (agent_id, item_type);
+CREATE INDEX IF NOT EXISTS agent_cache_processed_time
+  ON system.agent_cache (processed_at DESC);

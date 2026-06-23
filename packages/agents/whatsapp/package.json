@@ -8,6 +8,7 @@
     "setup": "puppeteer install"
   },
   "dependencies": {
+    "@secondbrain/telemetry": "*",
     "axios": "^1.13.5",
     "dotenv": "^16.4.7",
     "express": "^5.2.1",

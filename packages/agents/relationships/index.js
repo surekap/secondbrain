@@ -10,6 +10,12 @@ const extractor     = require('./services/extractor')
 const analyzer      = require('./services/analyzer')
 const insights      = require('./services/insights')
 const opportunities = require('./services/opportunities')
+const batching      = require('../shared/batching')
+const caching       = require('../shared/caching')
+
+let telemetry = null
+try { telemetry = require('@secondbrain/telemetry') } catch (_) {}
+let _runId = null
 
 console.log('🧠 Relationships Agent v1.0')
 console.log('📊 Builds contact profiles from WhatsApp, Email & Limitless\n')
@@ -281,6 +287,10 @@ async function runAnalysis() {
     return
   }
 
+  if (telemetry) {
+    _runId = await telemetry.startRun({ agentId: 'relationships', workflowName: 'relationship_analysis' })
+  }
+
   let runId = null
   let contactsProcessed = 0
   let insightsGenerated = 0
@@ -316,15 +326,22 @@ async function runAnalysis() {
     })
     console.log(`   Processing ${meaningfulContacts.length} contacts with new activity`)
 
-    // ── 2. Process in batches of 5 ───────────────────────────────────────────
-    const BATCH_SIZE = 5
-    const BATCH_DELAY = 2000
+    // ── 2. Filter unchanged items (caching optimization) ────────────────────
+    const contactsNeedingAnalysis = await caching.filterUnprocessedItems(
+      'relationships',
+      'direct_contact',
+      meaningfulContacts
+    )
+    console.log(`   Filtered to ${contactsNeedingAnalysis.length} contacts needing analysis (${meaningfulContacts.length - contactsNeedingAnalysis.length} cached)`)
 
-    for (let i = 0; i < meaningfulContacts.length; i += BATCH_SIZE) {
-      const batch = meaningfulContacts.slice(i, i + BATCH_SIZE)
-      console.log(`   Batch ${Math.floor(i / BATCH_SIZE) + 1}/${Math.ceil(meaningfulContacts.length / BATCH_SIZE)} (contacts ${i + 1}–${Math.min(i + BATCH_SIZE, meaningfulContacts.length)})`)
+    // ── 3. Process contacts in parallel batches ────────────────────────────
+    const PARALLEL_BATCH_SIZE = 5  // Process 5 contacts simultaneously
+    const DELAY_BETWEEN_BATCHES = 1000  // 1s between batches to avoid overwhelming LLM
 
-      for (const contact of batch) {
+    let processedInBatch = 0
+    const results = await batching.processBatch(
+      contactsNeedingAnalysis,
+      async (contact) => {
         try {
           // Check if this contact already exists in DB
           const { rows: existingRows } = await db.query(`
@@ -338,8 +355,7 @@ async function runAnalysis() {
           const messages = await extractor.getDirectMessages(contact.chat_id, 30)
 
           if (existingId && lastRunAt) {
-            // Existing contact: just add new messages, skip Claude
-            // Also update display_name from chat_metadata if current name is a phone number
+            // Existing contact: just add new messages, skip Claude (fast path)
             if (contact.display_name && !/^\+?[0-9]{7,15}$/.test(contact.display_name)) {
               await db.query(`
                 UPDATE relationships.contacts SET
@@ -361,13 +377,15 @@ async function runAnalysis() {
                   WHERE id = $2
                 `, [contact.last_msg_at, existingId])
                 console.log(`   ↑ ${contact.display_name || contact.chat_id} (+${added} new messages)`)
-                contactsProcessed++
+                // Record in cache
+                await caching.recordProcessed('relationships', 'direct_contact', contact.chat_id)
               }
             }
+            return { success: true, contact: contact.chat_id }
           } else {
             // New contact (or first run): full Claude analysis
             const hasMeaningfulContent = messages.some(m => m.body && m.body.length > 5)
-            if (!hasMeaningfulContent && !contact.display_name) continue
+            if (!hasMeaningfulContent && !contact.display_name) return { skipped: true }
 
             // Fetch existing manual overrides so Claude respects user-confirmed facts
             let existingOverrides = {}
@@ -383,35 +401,45 @@ async function runAnalysis() {
             profile.first_msg_at = contact.first_msg_at
 
             const contactId = await upsertContact(profile, contact.chat_id)
-            if (!contactId) continue
+            if (!contactId) return { error: 'Failed to upsert contact' }
 
             await upsertCommunications(contactId, messages, contact.chat_id)
-            contactsProcessed++
 
             if (!profile.is_noise) {
               console.log(`   ✓ NEW ${profile.display_name} (${profile.relationship_type}, ${profile.relationship_strength})`)
             }
 
-            // Only delay after Claude calls
-            await analyzer.sleep(500)
+            // Record in cache
+            await caching.recordProcessed('relationships', 'direct_contact', contact.chat_id, {
+              is_noise: profile.is_noise,
+            })
+
+            return { success: true, contact: contact.chat_id, isNew: true }
           }
         } catch (err) {
-          console.error(`   ✗ Error processing ${contact.chat_id}:`, err.message)
+          console.error(`   ✗ Error processing ${contact.chat_id}: ${err.message}`)
+          return { error: err.message }
+        }
+      },
+      {
+        batchSize: PARALLEL_BATCH_SIZE,
+        delayBetweenBatches: DELAY_BETWEEN_BATCHES,
+        onBatchComplete: async (batchInfo) => {
+          processedInBatch += batchInfo.successCount
+          await db.query(`
+            UPDATE relationships.analysis_runs
+            SET contacts_processed = contacts_processed + $1
+            WHERE id = $2
+          `, [batchInfo.successCount, runId])
+          console.log(`   Batch ${batchInfo.batchNum}/${batchInfo.totalBatches} complete (${batchInfo.successCount} success, ${batchInfo.errorCount} errors)`)
+          if (telemetry && _runId) {
+            telemetry.progress(_runId, 'people_matched', { completed: processedInBatch })
+          }
         }
       }
+    )
 
-      // Delay between batches (except last)
-      if (i + BATCH_SIZE < meaningfulContacts.length) {
-        await analyzer.sleep(BATCH_DELAY)
-      }
-
-      // Update progress
-      await db.query(`
-        UPDATE relationships.analysis_runs
-        SET contacts_processed = $1
-        WHERE id = $2
-      `, [contactsProcessed, runId])
-    }
+    contactsProcessed += results.filter(r => r?.success).length
 
     // ── 3. Process email contacts ─────────────────────────────────────────────
     console.log('\n📧 Processing email contacts...')
@@ -425,9 +453,23 @@ async function runAnalysis() {
       : emailSenders
     console.log(`   ${activeSenders.length} senders with new activity (of ${emailSenders.length} total)`)
 
+    // Filter senders that don't need re-processing (caching)
+    const sendersToProcess = await caching.filterUnprocessedItems(
+      'relationships',
+      'email_sender',
+      activeSenders.map((s, idx) => ({
+        id: s.from_address,
+        item_id: s.from_address,
+        last_activity_at: s.last_email_at,
+      }))
+    )
+    console.log(`   Further filtered to ${sendersToProcess.length} senders needing update`)
+
     let emailContactsProcessed = 0
+    // Map back to full sender objects
+    const senderAddressesToProcess = new Set(sendersToProcess.map(s => s.id))
     for (const sender of activeSenders) {
-      if (!sender.parsed_email) continue
+      if (!sender.parsed_email || !senderAddressesToProcess.has(sender.from_address)) continue
       const isNoise = NOISE_EMAIL_PATTERNS.some(p => p.test(sender.raw_address))
 
       try {
@@ -519,6 +561,8 @@ async function runAnalysis() {
         }
 
         emailContactsProcessed++
+        // Record in cache
+        await caching.recordProcessed('relationships', 'email_sender', sender.from_address)
       } catch (err) {
         console.error(`[index] email contact error for ${sender.from_address}:`, err.message)
       }
@@ -770,6 +814,10 @@ main().catch(err => {
 
 process.on('SIGINT', async () => {
   console.log('\n🛑 Graceful shutdown...')
+  if (telemetry && _runId) {
+    await telemetry.endRun(_runId, { status: 'completed' })
+    await telemetry.flush()
+  }
   try {
     await db.end()
     console.log('✅ Database closed')

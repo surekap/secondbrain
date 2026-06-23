@@ -12,6 +12,8 @@
 require('dotenv').config({ path: require('path').resolve(__dirname, '../../../.env.local') })
 
 const cron   = require('node-cron')
+const fs     = require('fs')
+const path   = require('path')
 const openai = require('./services/openai')
 const gemini = require('./services/gemini')
 const db     = require('@secondbrain/db')
@@ -44,7 +46,18 @@ async function runImports() {
   console.log('✅ Import run complete\n')
 }
 
+async function ensureSchema() {
+  try {
+    const sql = fs.readFileSync(path.resolve(__dirname, 'sql/schema.sql'), 'utf8')
+    await db.query(sql)
+    console.log('✅ Schema ready')
+  } catch (err) {
+    console.error('❌ Schema setup error:', err.message)
+  }
+}
+
 async function main() {
+  await ensureSchema()
   await runImports()
 
   const intervalMinutes = parseInt(process.env.AI_WATCH_INTERVAL_MINUTES || '0', 10)

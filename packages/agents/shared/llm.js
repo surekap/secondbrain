@@ -2,21 +2,35 @@
 'use strict'
 
 const db = require('@secondbrain/db')
+const { ollamaRequest } = require('./ollama')
+
+let telemetry = null
+function getTelemetry() {
+  if (!telemetry) {
+    try { telemetry = require('@secondbrain/telemetry') } catch (_) {}
+  }
+  return telemetry
+}
 
 // ── Cost rate table (per 1k tokens, USD) ─────────────────────────────────────
 
 const RATES = {
   anthropic: {
-    'claude-sonnet-4-6': { in: 0.003,   out: 0.015   },
-    'claude-opus-4-6':   { in: 0.015,   out: 0.075   },
-    'claude-haiku-4-5':  { in: 0.00025, out: 0.00125 },
+    'claude-sonnet-4-6': { in: 0.003,   out: 0.015  },
+    'claude-opus-4-6':   { in: 0.005,   out: 0.025  },
+    'claude-haiku-4-5':  { in: 0.001,   out: 0.005  },
   },
   openai: {
-    'gpt-4o':      { in: 0.0025,  out: 0.010  },
-    'gpt-4o-mini': { in: 0.00015, out: 0.0006 },
+    'gpt-4o':       { in: 0.0025,   out: 0.010  },
+    'gpt-4o-mini':  { in: 0.00015,  out: 0.0006 },
+    'gpt-5.4-mini': { in: 0.00075,  out: 0.0045 },
   },
   gemini: {
-    'gemini-2.0-flash': { in: 0.00035, out: 0.00105 },
+    'gemini-2.0-flash':   { in: 0.0001,  out: 0.0004 },
+    'gemini-2.5-flash':   { in: 0.0003,  out: 0.0025 },
+  },
+  kimi: {
+    'kimi-k2.5': { in: 0.00042, out: 0.0022 },
   },
 }
 
@@ -37,7 +51,7 @@ async function getPriorityList(agentId) {
   if (cached && cached.expiresAt > now) return cached.providers
 
   const { rows } = await db.query(`
-    SELECT p.id, p.name, p.provider_type, p.api_key, p.model,
+    SELECT p.id, p.name, p.provider_type, p.api_key, p.base_url, p.model,
            p.is_enabled, p.has_credits
     FROM system.agent_llm_priority alp
     JOIN system.llm_providers p ON p.id = alp.provider_id
@@ -170,7 +184,7 @@ async function callOpenAI(provider, { system, messages, tools, max_tokens }) {
   })
   const hasSystem = oaiMessages.some(m => m.role === 'system')
   if (system && !hasSystem) oaiMessages.unshift({ role: 'system', content: system })
-  const params = { model: provider.model || 'gpt-4o', max_tokens: max_tokens || 4096, messages: oaiMessages }
+  const params = { model: provider.model || 'gpt-4o', max_completion_tokens: max_tokens || 4096, messages: oaiMessages }
   if (tools?.length) {
     params.tools = tools.map(t => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.input_schema } }))
   }
@@ -244,6 +258,139 @@ async function callGemini(provider, { system, messages, max_tokens }) {
   return { text, tool_calls: [], stop_reason: 'end_turn', tokensIn: usage?.promptTokenCount, tokensOut: usage?.candidatesTokenCount }
 }
 
+function toOllamaMessages(messages, system) {
+  const toolNamesById = new Map()
+  const ollamaMessages = []
+  const hasSystem = messages.some(m => m.role === 'system')
+
+  if (system && !hasSystem) {
+    ollamaMessages.push({ role: 'system', content: system })
+  }
+
+  for (const message of messages) {
+    if (message.role === 'system') {
+      if (message.content) ollamaMessages.push({ role: 'system', content: message.content })
+      continue
+    }
+
+    if (message.role === 'tool') {
+      ollamaMessages.push({
+        role: 'tool',
+        tool_name: toolNamesById.get(message.tool_call_id) || 'tool',
+        content: message.content || '',
+      })
+      continue
+    }
+
+    if (message.role === 'assistant' && message.tool_calls?.length > 0) {
+      const tool_calls = message.tool_calls.map((toolCall, index) => {
+        toolNamesById.set(toolCall.id, toolCall.name)
+        return {
+          type: 'function',
+          function: {
+            index,
+            name: toolCall.name,
+            arguments: toolCall.input || {},
+          },
+        }
+      })
+
+      const assistantText = Array.isArray(message.content)
+        ? message.content.filter(block => block.type === 'text').map(block => block.text).join('\n')
+        : (message.content || '')
+      const assistantMessage = { role: 'assistant', tool_calls }
+      if (assistantText) assistantMessage.content = assistantText
+      ollamaMessages.push(assistantMessage)
+      continue
+    }
+
+    const content = Array.isArray(message.content)
+      ? message.content.filter(block => block.type === 'text').map(block => block.text).join('\n')
+      : (message.content || '')
+    ollamaMessages.push({ role: message.role === 'assistant' ? 'assistant' : 'user', content })
+  }
+
+  return ollamaMessages
+}
+
+async function callOllama(provider, { system, messages, tools, max_tokens }) {
+  const params = {
+    model: provider.model || 'qwen3',
+    messages: toOllamaMessages(messages, system),
+    stream: false,
+  }
+
+  if (max_tokens) params.options = { num_predict: max_tokens }
+  if (tools?.length) {
+    params.tools = tools.map(tool => ({
+      type: 'function',
+      function: {
+        name: tool.name,
+        description: tool.description,
+        parameters: tool.input_schema,
+      },
+    }))
+  }
+
+  const response = await ollamaRequest({
+    baseUrl: provider.base_url,
+    path: '/api/chat',
+    body: params,
+    apiKey: provider.api_key || null,
+  })
+
+  const tool_calls = (response.message?.tool_calls || []).map((toolCall, index) => ({
+    id: `ollama-tool-${index + 1}`,
+    name: toolCall.function?.name,
+    input: toolCall.function?.arguments || {},
+  })).filter(toolCall => toolCall.name)
+
+  let stop_reason = 'end_turn'
+  if (tool_calls.length > 0) stop_reason = 'tool_use'
+  else if (response.done_reason === 'length') stop_reason = 'max_tokens'
+
+  return {
+    text: response.message?.content || null,
+    tool_calls,
+    stop_reason,
+    tokensIn: response.prompt_eval_count,
+    tokensOut: response.eval_count,
+  }
+}
+
+async function callKimi(provider, { system, messages, tools, max_tokens }) {
+  const OpenAI = require('openai')
+  if (!provider.api_key) throw Object.assign(new Error('Kimi API key not configured'), { status: 402 })
+  const kimi = new OpenAI.default({ apiKey: provider.api_key, baseURL: 'https://api.moonshot.ai/v1' })
+  const oaiMessages = messages.map(m => {
+    if (m.role === 'tool') return { role: 'tool', tool_call_id: m.tool_call_id, content: m.content }
+    if (m.role === 'assistant' && m.tool_calls?.length > 0) {
+      return {
+        role: 'assistant', content: m.content || null,
+        tool_calls: m.tool_calls.map(tc => ({ id: tc.id, type: 'function', function: { name: tc.name, arguments: JSON.stringify(tc.input) } })),
+      }
+    }
+    if (Array.isArray(m.content)) {
+      return { role: m.role, content: m.content.map(b => b.type === 'text' ? { type: 'text', text: b.text } : { type: 'image_url', image_url: { url: `data:${b.source?.media_type};base64,${b.source?.data}` } }) }
+    }
+    return { role: m.role, content: m.content || '' }
+  })
+  const hasSystem = oaiMessages.some(m => m.role === 'system')
+  if (system && !hasSystem) oaiMessages.unshift({ role: 'system', content: system })
+  const params = { model: provider.model || 'kimi-k2.5', max_tokens: max_tokens || 4096, messages: oaiMessages }
+  if (tools?.length) {
+    params.tools = tools.map(t => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.input_schema } }))
+  }
+  const response = await kimi.chat.completions.create(params)
+  const choice = response.choices[0]
+  const msg = choice.message
+  const tool_calls = (msg.tool_calls || []).map(tc => ({ id: tc.id, name: tc.function.name, input: JSON.parse(tc.function.arguments) }))
+  let stop_reason = 'end_turn'
+  if (choice.finish_reason === 'tool_calls') stop_reason = 'tool_use'
+  else if (choice.finish_reason === 'length') stop_reason = 'max_tokens'
+  return { text: msg.content || null, tool_calls, stop_reason, tokensIn: response.usage?.prompt_tokens, tokensOut: response.usage?.completion_tokens }
+}
+
 // ── Provider dispatch table ───────────────────────────────────────────────────
 
 const CALL_FNS = {
@@ -251,6 +398,8 @@ const CALL_FNS = {
   openai:     callOpenAI,
   claude_cli: callClaudeCLI,
   gemini:     callGemini,
+  kimi:       callKimi,
+  ollama:     callOllama,
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -263,7 +412,7 @@ const CALL_FNS = {
  * @param {object} opts      { messages, system?, tools?, max_tokens? }
  * @returns {{ text, tool_calls, stop_reason, provider }}
  */
-async function create(agentId, { system, messages, tools, max_tokens }) {
+async function create(agentId, { system, messages, tools, max_tokens, _taskType, _workflowName, _runId } = {}) {
   const providers = await getPriorityList(agentId)
 
   if (providers.length === 0) {
@@ -285,12 +434,53 @@ async function create(agentId, { system, messages, tools, max_tokens }) {
     if (!fn) continue
 
     console.log(`[llm:${agentId}] trying ${prov.name} (${prov.provider_type})`)
+    const t   = getTelemetry()
+    const req = t ? t.startRequest({
+      agentId,
+      runId:        _runId        || null,
+      taskType:     _taskType     || null,
+      model:        prov.model,
+      providerType: prov.provider_type,
+      prompt:       messages,
+      workflowName: _workflowName || null,
+    }) : null
+
     try {
       const result = await fn(prov, { system, messages, tools, max_tokens })
-      const cost = calcCost(prov.provider_type, prov.model, result.tokensIn, result.tokensOut)
+      const cost   = calcCost(prov.provider_type, prov.model, result.tokensIn, result.tokensOut)
       await logUsage({ providerId: prov.id, agentId, tokensIn: result.tokensIn, tokensOut: result.tokensOut, costUsd: cost })
+      if (req) req.finish({
+        tokensIn:   result.tokensIn,
+        tokensOut:  result.tokensOut,
+        success:    true,
+        output:     result.text,
+        retryCount: 0,
+      })
+      // Automatic structural quality check for JSON-expecting task types
+      const t2 = getTelemetry()
+      if (t2 && req && result.text) {
+        const expectJson = (_taskType || '').toLowerCase().includes('extract') ||
+                           (_taskType || '').toLowerCase().includes('classify') ||
+                           (_taskType || '').toLowerCase().includes('json')
+        if (expectJson) {
+          let qModule = null
+          try { qModule = require('@secondbrain/telemetry/quality') } catch (_) {}
+          if (qModule) {
+            const { score, issues } = qModule.scoreStructural(result.text, { expectJson: true })
+            t2.recordQuality({
+              requestId: req.requestId,
+              evaluationType: 'structural',
+              scoreNumeric: score,
+              scoreLabel: score === 1 ? 'valid' : (issues[0] || 'invalid'),
+              evaluator: 'auto',
+              notes: issues.length ? issues.join('; ') : null,
+            })
+          }
+        }
+      }
       return { text: result.text, tool_calls: result.tool_calls, stop_reason: result.stop_reason, provider: prov.name }
     } catch (err) {
+      if (req) req.finish({ success: false, errorType: err.constructor?.name || 'Error' })
       console.warn(`[llm:${agentId}] ${prov.name} failed: ${err.message}`)
       if (isCreditError(err)) {
         await markCreditsFailed(prov.id, err.message)

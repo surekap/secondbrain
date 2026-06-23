@@ -4,6 +4,8 @@
 require('dotenv').config({ path: require('path').resolve(__dirname, '../../../.env.local') })
 
 const cron      = require('node-cron')
+const fs        = require('fs')
+const path      = require('path')
 const llm       = require('../shared/llm')
 const db        = require('@secondbrain/db')
 
@@ -166,7 +168,18 @@ async function runResearch() {
 
 // ── Main entry ────────────────────────────────────────────────────────────────
 
+async function ensureSchema() {
+  try {
+    const sql = fs.readFileSync(path.resolve(__dirname, 'sql/schema.sql'), 'utf8')
+    await db.query(sql)
+    console.log('✅ Schema ready')
+  } catch (err) {
+    console.error('❌ Schema setup error:', err.message)
+  }
+}
+
 async function main() {
+  await ensureSchema()
   // RESEARCH_CONTACT_ID=<id> researches a single contact and exits
   const singleId = process.env.RESEARCH_CONTACT_ID
   if (singleId) {

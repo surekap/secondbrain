@@ -30,7 +30,7 @@ async function saveLifelogsToDB(logs) {
       const contents = log.contents ?? "";
 
       await conn.query(
-        `INSERT INTO lifelogs (id, title, start_time, end_time, contents, markdown) VALUES ($1, $2, $3, $4, $5, $6)
+        `INSERT INTO limitless.lifelogs (id, title, start_time, end_time, contents, markdown) VALUES ($1, $2, $3, $4, $5, $6)
         ON CONFLICT (id) DO UPDATE SET
           title = EXCLUDED.title,
           start_time = EXCLUDED.start_time,
@@ -57,7 +57,7 @@ async function getLatestStartTime() {
   const conn = await pool.connect();
   try {
     const { rows } = await conn.query(
-      `SELECT MAX(start_time) AS latest_start_time FROM lifelogs`
+      `SELECT MAX(start_time) AS latest_start_time FROM limitless.lifelogs`
     );
     return rows[0]?.latest_start_time || null;
   } finally {

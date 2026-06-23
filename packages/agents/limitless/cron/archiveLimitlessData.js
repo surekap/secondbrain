@@ -160,7 +160,7 @@ async function saveLifelogsToDB(logs) {
       const contents = log.contents ?? "";
 
       await conn.query(
-        `INSERT INTO lifelogs (id, title, start_time, end_time, contents, markdown) VALUES ($1, $2, $3, $4, $5, $6)
+        `INSERT INTO limitless.lifelogs (id, title, start_time, end_time, contents, markdown) VALUES ($1, $2, $3, $4, $5, $6)
          ON CONFLICT (id) DO UPDATE SET
            title = EXCLUDED.title,
            start_time = EXCLUDED.start_time,
@@ -186,7 +186,7 @@ async function getMinKnownLifelogStart() {
   const conn = await pool.connect();
   try {
     const { rows } = await conn.query(
-      `SELECT MIN(start_time) AS min_start_time FROM lifelogs`
+      `SELECT MIN(start_time) AS min_start_time FROM limitless.lifelogs`
     );
     return rows[0]?.min_start_time ? new Date(rows[0].min_start_time) : null;
   } finally {
@@ -396,7 +396,7 @@ async function getLifelogRangesForAudio(startDate, endDate) {
   try {
     const { rows } = await conn.query(
       `SELECT id, start_time, end_time
-       FROM lifelogs
+       FROM limitless.lifelogs
        WHERE start_time IS NOT NULL
          AND end_time IS NOT NULL
          AND start_time >= $1

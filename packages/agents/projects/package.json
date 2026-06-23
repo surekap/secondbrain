@@ -9,6 +9,7 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^0.32.1",
     "@secondbrain/db": "*",
+    "@secondbrain/telemetry": "*",
     "dotenv": "^16.5.0",
     "node-cron": "^4.1.0"
   }
