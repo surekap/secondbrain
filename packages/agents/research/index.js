@@ -185,11 +185,30 @@ async function runResearch() {
 
 async function ensureSchema() {
   try {
+    const requiredContactColumns = ['my_role', 'research_summary']
+    const { rows } = await db.query(
+      `SELECT column_name
+       FROM information_schema.columns
+       WHERE table_schema = 'relationships'
+         AND table_name = 'contacts'
+         AND column_name = ANY($1::text[])`,
+      [requiredContactColumns]
+    )
+    const presentColumns = new Set(rows.map(row => row.column_name))
+    const missingColumns = requiredContactColumns.filter(column => !presentColumns.has(column))
+    if (missingColumns.length) {
+      throw new Error(
+        `Research schema dependency missing: relationships.contacts.${missingColumns.join(', relationships.contacts.')}. ` +
+        'Run packages/agents/relationships/sql/schema.sql before starting research.'
+      )
+    }
+
     const sql = fs.readFileSync(path.resolve(__dirname, 'sql/schema.sql'), 'utf8')
     await db.query(sql)
     console.log('✅ Schema ready')
   } catch (err) {
     console.error('❌ Schema setup error:', err.message)
+    throw err
   }
 }
 
