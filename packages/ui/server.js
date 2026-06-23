@@ -1014,11 +1014,20 @@ app.post('/api/relationships/insights/:id/dismiss', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+function parsePositiveIntQuery(value, fallback, max) {
+  if (value === undefined) return fallback
+  if (!/^\d+$/.test(String(value))) return null
+  const parsed = Number(value)
+  if (!Number.isSafeInteger(parsed) || parsed < 1) return null
+  return Math.min(parsed, max)
+}
+
 // GET /api/intelligence/opportunities — first-class opportunity ledger
 app.get('/api/intelligence/opportunities', async (req, res) => {
   if (!db) return res.status(503).json({ error: 'No database' });
   try {
-    const limit = Math.min(parseInt(req.query.limit, 10) || 50, 200);
+    const limit = parsePositiveIntQuery(req.query.limit, 50, 200);
+    if (limit === null) return res.status(400).json({ error: 'Invalid limit' });
     const status = req.query.status || 'open';
     const params = [];
     const conditions = [];
@@ -1032,8 +1041,8 @@ app.get('/api/intelligence/opportunities', async (req, res) => {
       conditions.push(`o.opportunity_type = $${params.length}`);
     }
     if (req.query.contact_id) {
-      const contactId = parseInt(req.query.contact_id, 10);
-      if (isNaN(contactId)) return res.status(400).json({ error: 'Invalid contact_id' });
+      const contactId = parsePositiveIntQuery(req.query.contact_id, null, Number.MAX_SAFE_INTEGER);
+      if (contactId === null) return res.status(400).json({ error: 'Invalid contact_id' });
       params.push(contactId);
       conditions.push(`EXISTS (
         SELECT 1 FROM intelligence.opportunity_contacts oc
@@ -1041,8 +1050,8 @@ app.get('/api/intelligence/opportunities', async (req, res) => {
       )`);
     }
     if (req.query.project_id) {
-      const projectId = parseInt(req.query.project_id, 10);
-      if (isNaN(projectId)) return res.status(400).json({ error: 'Invalid project_id' });
+      const projectId = parsePositiveIntQuery(req.query.project_id, null, Number.MAX_SAFE_INTEGER);
+      if (projectId === null) return res.status(400).json({ error: 'Invalid project_id' });
       params.push(projectId);
       conditions.push(`EXISTS (
         SELECT 1 FROM intelligence.opportunity_projects op
@@ -1082,7 +1091,8 @@ app.get('/api/intelligence/opportunities', async (req, res) => {
 app.get('/api/intelligence/attention', async (req, res) => {
   if (!db) return res.status(503).json({ error: 'No database' });
   try {
-    const limit = Math.min(parseInt(req.query.limit, 10) || 10, 50);
+    const limit = parsePositiveIntQuery(req.query.limit, 10, 50);
+    if (limit === null) return res.status(400).json({ error: 'Invalid limit' });
     const { rows } = await db.query(`
       SELECT *
       FROM intelligence.attention_queue

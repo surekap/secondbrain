@@ -6,7 +6,21 @@ require('dotenv').config({ path: path.resolve(__dirname, '../.env.local') })
 
 const WRITE = process.argv.includes('--write')
 const LIMIT_ARG = process.argv.find(a => a.startsWith('--limit='))
-const LIMIT = Math.min(Number(LIMIT_ARG?.split('=')[1] || 500), 5000)
+function parseLimit(arg) {
+  if (!arg) return 500
+  const raw = arg.split('=')[1]
+  if (!/^\d+$/.test(String(raw))) throw new Error('--limit must be a positive integer')
+  const value = Number(raw)
+  if (!Number.isSafeInteger(value) || value < 1) throw new Error('--limit must be a positive integer')
+  return Math.min(value, 5000)
+}
+let LIMIT
+try {
+  LIMIT = parseLimit(LIMIT_ARG)
+} catch (err) {
+  console.error(err.message)
+  process.exit(1)
+}
 
 if (!process.env.DATABASE_URL) {
   console.error('DATABASE_URL is required. Create .env.local or export DATABASE_URL.')
@@ -39,7 +53,7 @@ async function backfillRelationshipInsights() {
       if (id) written++
     }
   }
-  return { scanned: rows.length, written }
+  return { scanned: rows.length, would_upsert: rows.length, written }
 }
 
 async function backfillProjectInsights() {
@@ -60,7 +74,7 @@ async function backfillProjectInsights() {
       if (id) written++
     }
   }
-  return { scanned: rows.length, written }
+  return { scanned: rows.length, would_upsert: rows.length, written }
 }
 
 async function main() {

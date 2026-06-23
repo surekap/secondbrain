@@ -29,7 +29,7 @@
     "whatsapp": "npm start --workspace=packages/agents/whatsapp",
     "whatsapp:setup": "npm run setup --workspace=packages/agents/whatsapp",
     "apple-contacts": "node packages/agents/apple-contacts/index.js",
-    "init-db": "npm run init-db --workspace=packages/agents/limitless && npm run init-db --workspace=packages/agents/email && npm run init-db --workspace=packages/agents/ai && npm run init-db --workspace=packages/agents/research && npm run init-db --workspace=packages/agents/intelligence",
+    "init-db": "npm run init-db --workspace=packages/agents/limitless && npm run init-db --workspace=packages/agents/email && npm run init-db --workspace=packages/agents/projects && npm run init-db --workspace=packages/agents/relationships && npm run init-db --workspace=packages/agents/ai && npm run init-db --workspace=packages/agents/research && npm run init-db --workspace=packages/agents/intelligence",
     "collector": "node packages/collector/index.js",
     "sampler": "node packages/sampler/index.js",
     "observe": "node packages/observe/server.js"

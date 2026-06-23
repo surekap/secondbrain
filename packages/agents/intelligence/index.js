@@ -74,6 +74,10 @@ function sourceRefFromRelationshipInsight(insightId, insight) {
   return insight.source_ref || `relationships.insights:${insightId}`
 }
 
+function sourceRefFromProjectInsight(projectId, insight) {
+  return `projects.project_insights:${projectId}:${insight.insight_type || 'unknown'}:${stableHash(insight.content || '')}`
+}
+
 function dedupeKeyFor(sourceSystem, sourceRef, title) {
   return `${sourceSystem}:${sourceRef || stableHash(title)}`
 }
@@ -150,20 +154,40 @@ async function recordSignalForOpportunity(opportunityId, input) {
   if (!opportunityId) return
   try {
     const signalType = signalTypeForOpportunity(input.opportunity_type)
+    const existing = await db.query(`
+      UPDATE intelligence.signals
+      SET title = $1,
+          description = $2,
+          contact_id = COALESCE($3, contact_id),
+          project_id = COALESCE($4, project_id),
+          source_ref = COALESCE($5, source_ref),
+          confidence = COALESCE($6, confidence),
+          strength = COALESCE($7, strength),
+          metadata = metadata || $8::jsonb,
+          updated_at = NOW()
+      WHERE source_table = 'intelligence.opportunities'
+        AND source_id = $9
+        AND signal_type = $10
+      RETURNING id
+    `, [
+      input.title,
+      input.description || null,
+      input.primary_contact_id || null,
+      input.primary_project_id || null,
+      input.source_ref || null,
+      input.confidence ?? null,
+      input.expected_value_score ?? priorityScore(input.priority).expected,
+      JSON.stringify({ opportunity_type: input.opportunity_type || 'other' }),
+      String(opportunityId),
+      signalType,
+    ])
+    if (existing.rows.length) return
+
     await db.query(`
       INSERT INTO intelligence.signals (
         signal_type, title, description, contact_id, project_id,
         source_table, source_id, source_ref, occurred_at, confidence, strength, metadata
       ) VALUES ($1, $2, $3, $4, $5, 'intelligence.opportunities', $6, $7, NOW(), $8, $9, $10::jsonb)
-      ON CONFLICT (source_table, source_id, signal_type) WHERE source_table IS NOT NULL AND source_id IS NOT NULL DO UPDATE SET
-        title = EXCLUDED.title,
-        description = EXCLUDED.description,
-        contact_id = COALESCE(EXCLUDED.contact_id, intelligence.signals.contact_id),
-        project_id = COALESCE(EXCLUDED.project_id, intelligence.signals.project_id),
-        confidence = COALESCE(EXCLUDED.confidence, intelligence.signals.confidence),
-        strength = COALESCE(EXCLUDED.strength, intelligence.signals.strength),
-        metadata = intelligence.signals.metadata || EXCLUDED.metadata,
-        updated_at = NOW()
     `, [
       signalType,
       input.title,
@@ -264,7 +288,7 @@ async function upsertFromRelationshipInsight(insightId, contactId, insight) {
 async function upsertFromProjectInsight(projectInsightId, projectId, insight) {
   if (!projectInsightId || !PROJECT_INSIGHT_TYPES.has(insight.insight_type)) return null
   try {
-    const sourceRef = `projects.project_insights:${projectInsightId}`
+    const sourceRef = sourceRefFromProjectInsight(projectId, insight)
     const opportunityId = await upsertOpportunity({
       opportunity_type: projectOpportunityType(insight.insight_type),
       title: insight.content?.slice(0, 100) || 'Project opportunity',

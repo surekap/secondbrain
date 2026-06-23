@@ -56,7 +56,8 @@ CREATE TABLE IF NOT EXISTS intelligence.opportunities (
 CREATE UNIQUE INDEX IF NOT EXISTS opportunities_dedupe_key_idx
   ON intelligence.opportunities (dedupe_key)
   WHERE dedupe_key IS NOT NULL;
-CREATE UNIQUE INDEX IF NOT EXISTS opportunities_source_ref_idx
+DROP INDEX IF EXISTS intelligence.opportunities_source_ref_idx;
+CREATE INDEX IF NOT EXISTS opportunities_source_ref_idx
   ON intelligence.opportunities (source_system, source_ref)
   WHERE source_ref IS NOT NULL;
 CREATE INDEX IF NOT EXISTS opportunities_status_score_idx
@@ -142,7 +143,8 @@ CREATE TABLE IF NOT EXISTS intelligence.signals (
   created_at     TIMESTAMPTZ DEFAULT NOW(),
   updated_at     TIMESTAMPTZ DEFAULT NOW()
 );
-CREATE UNIQUE INDEX IF NOT EXISTS signals_source_idx
+DROP INDEX IF EXISTS intelligence.signals_source_idx;
+CREATE INDEX IF NOT EXISTS signals_source_idx
   ON intelligence.signals (source_table, source_id, signal_type)
   WHERE source_table IS NOT NULL AND source_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS signals_type_time_idx
