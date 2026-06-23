@@ -131,6 +131,7 @@ async function runDerivedFreshness() {
   `);
   report.derived_freshness['relationships.insights_open'] = insightRows ? countVal(insightRows[0], 'open_insights') : { skipped: true };
   report.derived_freshness['projects.projects'] = await scalarFreshness('projects freshness', 'projects.projects', 'last_activity_at');
+  report.derived_freshness['intelligence.opportunities'] = await scalarFreshness('opportunities freshness', 'intelligence.opportunities', 'last_seen_at');
 }
 
 async function runQualityIndicators() {
@@ -350,6 +351,12 @@ async function runSchemaDrift() {
     'projects.projects': ['id','name','description','status','health','priority','tags','next_action','last_activity_at','comm_count','key_contact_ids','is_archived','ai_summary','created_at','updated_at','manual_overrides'],
     'projects.project_communications': ['id','project_id','source','source_id','contact_id','content_snippet','subject','occurred_at','relevance_score','created_at'],
     'projects.project_insights': ['id','project_id','insight_type','content','priority','is_resolved','created_at','updated_at'],
+    'intelligence.opportunities': ['id','opportunity_type','title','description','recommended_next_action','why_now','status','priority','confidence','impact_score','urgency_score','relationship_score','expected_value_score','score_explanation','source_system','source_ref','source_hash','dedupe_key','primary_contact_id','primary_project_id','surfaced_insight_id','surfaced_project_insight_id','expires_at','snoozed_until','first_seen_at','last_seen_at','actioned_at','dismissed_at','feedback','feedback_note','metadata','created_at','updated_at'],
+    'intelligence.opportunity_contacts': ['opportunity_id','contact_id','role','confidence','created_at'],
+    'intelligence.opportunity_projects': ['opportunity_id','project_id','role','confidence','created_at'],
+    'intelligence.opportunity_evidence': ['id','opportunity_id','source_table','source_id','source_ref','occurred_at','quote','relevance','metadata','created_at'],
+    'intelligence.signals': ['id','signal_type','title','description','contact_id','project_id','source_table','source_id','source_ref','occurred_at','confidence','strength','metadata','created_at','updated_at'],
+    'intelligence.opportunity_feedback_events': ['id','opportunity_id','feedback','note','created_by','created_at'],
   };
 
   for (const [table, cols] of Object.entries(expected)) {

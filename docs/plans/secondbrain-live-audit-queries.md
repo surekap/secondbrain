@@ -46,6 +46,7 @@ Read-only count and max timestamp checks for derived intelligence tables:
 - `relationships.contacts`: `COUNT(*)`, `MAX(last_interaction_at)`
 - Open `relationships.insights`: `COUNT(*) WHERE NOT is_actioned AND NOT is_dismissed`
 - `projects.projects`: `COUNT(*)`, `MAX(last_activity_at)`
+- `intelligence.opportunities`: `COUNT(*)`, `MAX(last_seen_at)`
 
 ### Quality indicators
 
@@ -147,6 +148,12 @@ The audit compares live columns from `information_schema.columns` against checke
 - `projects.projects`
 - `projects.project_communications`
 - `projects.project_insights`
+- `intelligence.opportunities`
+- `intelligence.opportunity_contacts`
+- `intelligence.opportunity_projects`
+- `intelligence.opportunity_evidence`
+- `intelligence.signals`
+- `intelligence.opportunity_feedback_events`
 
 It reports missing or extra live columns as drift. It does **not** run migrations, edit schemas, or auto-repair drift.
 
