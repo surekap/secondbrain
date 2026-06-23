@@ -13,8 +13,8 @@
         "@secondbrain/db": "*",
         "@secondbrain/telemetry": "*",
         "dotenv": "^16.0.0",
-        "imapflow": "^1.0.0",
-        "mailparser": "^3.6.0",
+        "imapflow": "^1.4.2",
+        "mailparser": "^3.9.11",
         "node-cron": "^4.1.0"
     }
 }

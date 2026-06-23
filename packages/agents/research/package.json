@@ -15,7 +15,7 @@
     "dotenv": "^16.5.0",
     "node-cron": "^4.1.0",
     "openai": "^4.0.0",
-    "peopledatalabs": "^3.1.0",
+    "peopledatalabs": "^14.1.1",
     "serpapi": "^2.1.0"
   }
 }
