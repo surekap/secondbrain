@@ -4,18 +4,70 @@
 
 **Goal:** Start SecondBrain’s relationship-intelligence evolution with the highest-leverage, lowest-risk improvements: trust/quality papercuts, live-readiness instrumentation, and a concrete execution team for subsequent Opportunity Ledger work.
 
-**Architecture:** Do not rebuild ingestion or create new user-facing agents. Preserve the local workstation trust boundary. First stabilize the existing UI/API/agent behavior, then run a live data-quality audit, then introduce first-class opportunity infrastructure behind the current `relationships.insights` UI.
+**Architecture:** Do not rebuild ingestion or create new user-facing agents. Preserve the local workstation trust boundary. First stabilize existing UI/API/agent behavior, then run a live data-quality audit, then introduce first-class opportunity infrastructure behind the current `relationships.insights` UI.
 
 **Tech Stack:** Node.js npm workspaces, Next.js UI, Express API in `packages/ui/server.js`, PostgreSQL schemas under `packages/agents/*/sql`, existing Hermes subagent workflow.
 
-**Models Used For This Planning Pass:**
-- Coordinator / final plan author: `gpt-5.5` via `openai-codex` — frontier model, appropriate for architecture and prioritization.
-- Parallel repository inspection subagents: Hermes `delegate_task` children spawned from the same `gpt-5.5` / `openai-codex` session; child tool output did not expose a model name, so record as inherited/frontier.
+**Models Used For Current Plan Revision:**
+- Initial coordinator / plan author: `gpt-5.5` via `openai-codex` — frontier model.
+- Independent critique: `claude-sonnet-4-6` via `anthropic` — frontier model.
+- Revalidation: `gpt-5.5` via `openai-codex` — frontier model.
 
 **Model Policy Going Forward:**
-- Frontier model: `gpt-5.5` / `openai-codex` for architecture, cross-cutting code review, database design, identity resolution, opportunity scoring, and final merge-readiness review.
-- Second-tier coding model: use the configured second-tier coding model once available for simple localized implementation tasks: UI field-name fixes, PATCH allowlist additions, small API aliases, simple config reads. If no second-tier model is configured in Hermes profiles, use frontier rather than silently downgrading.
-- Low-cost model: use a configured low-cost model only for high-volume triage/compaction: log summarization, schema inventory, long transcript/message clustering, duplicate candidate pre-filtering. Promote condensed results to frontier analysis before decisions.
+- Frontier: architecture, cross-cutting code review, database design, identity resolution, opportunity scoring, agent-control behavior, final synthesis.
+- Second-tier: simple localized implementation — UI field-name fixes, PATCH allowlist additions, copy changes, simple config reads.
+- Low-cost: high-volume triage/compaction only — log summarization, schema inventory, transcript/message clustering, duplicate pre-filtering. Promote condensed results to frontier analysis before decisions.
+- If the runtime does not expose the exact child model, record it honestly as inherited/unknown rather than inventing a model name.
+
+---
+
+## Cross-Model Review Loop Log
+
+### Round 1 — Sonnet critique
+
+**Model:** `claude-sonnet-4-6` via `anthropic`  
+**Artifact:** `.hermes/model-critiques/sonnet-4-6-round-1.md`
+
+Key suggestions accepted:
+
+1. Preserve `MY_WA_JID` export shape; do not accidentally pass a function into SQL.
+2. Replace research provider env gating with async DB-config preflight, not blind provider execution.
+3. Narrow Task 1: project-count bug is real; relationship insight count fallback made the original issue less severe.
+4. Serialize Tasks 1 and 2 because of possible `server.js` overlap.
+5. Add missed `Math.min` → `Math.max` cross-person scan incrementality bug.
+6. Add stronger behavioral smoke gates; syntax checks are insufficient.
+7. Simplify Run Analysis task to UI copy/status clarity; defer IPC trigger design.
+8. Add duplicate research schema DDL cleanup.
+9. Add dedupe redesign to Phase 1, not Phase 0A.
+
+### Round 1 — GPT-5.5 revalidation
+
+**Model:** `gpt-5.5` via `openai-codex`  
+**Artifact:** `.hermes/model-critiques/gpt-5-5-validation-round-1.md`
+
+GPT-5.5 accepted most Sonnet suggestions, with two refinements:
+
+1. `system.WHATSAPP_SELF_JID` DB config is directionally right, but `getConfig()` is async while `extractor.js` currently exports synchronous constants. Phase 0A should preserve export shape and use env fail-fast; DB-config unification is a follow-up unless implementation cleanly adds startup-time async config initialization.
+2. Current planning artifacts remain on PR #4. Actual code implementation should branch separately, e.g. `feature/phase-0a-papercuts`, after approval.
+
+### Round 2 — Sonnet critique
+
+**Model:** `claude-sonnet-4-6` via `anthropic`  
+**Artifact:** `/opt/data/.hermes/model-critiques/sonnet-4-6-round-2.md`
+
+Remaining good suggestions accepted:
+
+1. Task 1 must also remove the nonexistent `projStats.open_insights` read; use `projInsights.length` directly unless/until the API exposes a canonical field.
+2. Task 3 must check deployment `.env.local` for `WHATSAPP_SELF_JID`/`MY_WA_JID` before introducing module-load failure, and verification must execute the module, not only `node -c`.
+3. Task 4 should resolve active research providers once per run, not once per contact.
+4. Task 5 duplicate-DDL cleanup needs a fresh-environment ordering guard so research does not fail if relationships schema has not initialized.
+
+### Round 2 — GPT-5.5 revalidation
+
+**Model:** `gpt-5.5` via `openai-codex`  
+**Artifact:** `.hermes/model-critiques/gpt-5-5-validation-round-2.md`
+
+GPT-5.5 accepted all four Round 2 suggestions. After these bounded updates, the plan is considered converged; another full critique loop is not justified unless implementation changes introduce new facts.
 
 ---
 
@@ -23,15 +75,15 @@
 
 Work first on **Phase 0A — trust and operability papercuts**, not the Opportunity Ledger.
 
-Rationale:
+Why:
 
-1. These are small changes with high confidence and low blast radius.
-2. They improve user trust before deeper architecture work.
-3. They expose whether current agent/UI flows are reliable enough for live data audits.
-4. They create concrete verification points before database migrations.
-5. They reduce false negatives in the current dashboard and relationship screens.
+1. Low blast radius and high confidence.
+2. Improves user trust before deeper architecture work.
+3. Exposes whether current agent/UI flows are reliable enough for live audits.
+4. Creates verification points before migrations.
+5. Reduces current dashboard/insight noise.
 
-Do **not** begin first with `intelligence.opportunities`. That is strategically right, but it depends on clearer current-state quality, evidence behavior, and reliable “run analysis / refresh” controls.
+Do **not** begin with `intelligence.opportunities`. That is strategically correct, but it depends on clearer current-state quality, evidence behavior, and reliable refresh/control flows.
 
 ---
 
@@ -42,54 +94,70 @@ Do **not** begin first with `intelligence.opportunities`. That is strategically 
 - **Model:** `gpt-5.5` / `openai-codex` frontier.
 - **Owner:** Main Hermes coordinator.
 - **Role:** Maintain roadmap, sequence tasks, arbitrate tradeoffs, verify outputs, update PR.
-- **Tools:** full repo/file/terminal/git/GitHub.
-- **Do not delegate:** final product judgment, final PR summary, security/trust-boundary decisions.
+- **Do not delegate:** final product judgment, security/trust-boundary decisions, final PR summary.
 
 ### 2. Codebase Mapper
 
-- **Model:** low-cost model for first-pass inventory if configured; otherwise second-tier. Promote summary to frontier review.
-- **Role:** High-volume search/read of files, routes, schemas, config usage, long logs.
+- **Model:** low-cost for first-pass inventory if configured; otherwise second-tier. Promote summary to frontier.
+- **Role:** High-volume file/route/schema/config/log inventory.
 - **Output:** compact evidence list with exact paths/line ranges.
 - **Use for:** triage only, not final decisions.
 
 ### 3. Simple Implementation Engineer
 
 - **Model:** second-tier coding model if configured; frontier fallback.
-- **Role:** Localized code changes with narrow tests.
-- **Tasks:** dashboard stat aliases, `my_role` edit support, config-backed self WhatsApp JID, small API response improvements.
-- **Guardrail:** no broad refactors, no schema migrations unless explicitly assigned.
+- **Role:** Localized code changes with narrow verification.
+- **Tasks:** dashboard field reads, `my_role` edit support, UI copy, one-line `Math.max` bug, duplicate DDL cleanup.
+- **Guardrail:** no broad refactors, no migrations unless explicitly assigned.
 
 ### 4. API / Agent-Control Engineer
 
-- **Model:** frontier model.
-- **Role:** Run-analysis endpoint design, process manager behavior, safe refresh/restart/trigger semantics.
-- **Reason for frontier:** agent control is cross-cutting and can create operational surprises.
+- **Model:** frontier.
+- **Role:** Only if/when designing a true on-demand analysis trigger. Not needed for Phase 0A UI copy.
 
 ### 5. Database / Intelligence Schema Architect
 
-- **Model:** frontier model.
-- **Role:** Draft `intelligence` schema, migration plan, compatibility strategy, backfill strategy, evidence model.
+- **Model:** frontier.
+- **Role:** Draft `intelligence` schema, migration plan, backfill strategy, evidence model, dedupe strategy.
 - **Start only after:** Phase 0A and live audit plan are in place.
 
 ### 6. QA / Reviewer Pair
 
-- **Spec Reviewer Model:** frontier for spec compliance.
-- **Code Quality Reviewer Model:** frontier for security, regressions, and architecture fit.
+- **Spec Reviewer Model:** frontier.
+- **Code Quality Reviewer Model:** frontier.
 - **Role:** Two-stage review after each implementation task.
 
 ### 7. Compaction / Data Audit Worker
 
-- **Model:** low-cost model for bulk sampling/triage; frontier for final interpretation.
+- **Model:** low-cost for bulk sampling/triage; frontier for final interpretation.
 - **Role:** summarize sampled contacts/insights/messages from live DB once safe DB access is configured.
-- **Guardrail:** never expose secrets; redact PII in reports unless user explicitly asks otherwise.
+- **Guardrail:** redact secrets/PII unless the user explicitly asks otherwise.
+
+---
+
+## Branching Policy
+
+This plan/spec lives on the current docs PR branch:
+
+```text
+docs/relationship-intelligence-strategy
+```
+
+Actual code implementation should start from a separate branch after plan approval:
+
+```text
+feature/phase-0a-papercuts
+```
+
+Do not mix substantial code changes into the docs-only strategy PR unless explicitly directed.
 
 ---
 
 ## Phase 0A — Trust / Operability Papercuts
 
-### Task 0: Confirm branch and baseline state
+### Task 0: Confirm branch, baseline state, and implementation branch
 
-**Objective:** Ensure implementation starts from the existing PR branch and not from dirty `main`.
+**Objective:** Ensure implementation starts cleanly and separately from the docs PR.
 
 **Files:** none.
 
@@ -102,86 +170,79 @@ Do **not** begin first with `intelligence.opportunities`. That is strategically 
    git branch --show-current
    git log -1 --oneline
    ```
-2. Expected:
-   - Branch: `docs/relationship-intelligence-strategy`
-   - Working tree clean before new edits.
+2. Expected before implementation:
+   - Current docs branch clean.
+   - Create or switch to `feature/phase-0a-papercuts` for code.
 3. If dirty, inspect and decide whether to commit, stash, or stop.
 
 **Model:** coordinator frontier.
 
 ---
 
-### Task 1: Fix Dashboard stats field mismatch
+### Task 1: Fix Dashboard stats field reads — UI only
 
-**Objective:** Make Dashboard stats display correctly without relying on fallback lengths.
+**Objective:** Make Dashboard stats use canonical API fields.
 
 **Files:**
 - Modify: `packages/ui/app/page.jsx`
-- Optionally modify: `packages/ui/server.js`
 
 **Problem:**
 
-Dashboard currently reads:
+Dashboard currently reads stale field names:
 
 ```jsx
 relStats.open_insights
 projStats.total
 ```
 
-but API stats use:
+API stats return:
 
 ```text
 relationshipsStats(): pending_insights
 projectsStats(): total_projects
 ```
 
-**Preferred implementation:**
+**Nuance from review:**
 
-Fix the UI to consume canonical server fields:
+- `projStats.total` is the real visible bug because it falls to `0`.
+- `relStats.open_insights` falls back to `relInsights.length`, so it is less severe but should still be corrected.
+
+**Implementation:**
+
+Use canonical fields in the UI. Do not add server-side aliases in Phase 0A.
 
 ```jsx
 Number(relStats.pending_insights || relInsights.length || 0)
 Number(projStats.total_projects || 0)
+Number(projInsights.length || 0) // project insight card; API has no projStats.open_insights field
 ```
 
-Optionally add server-side aliases only if broader UI compatibility needs them:
-
-```js
-open_insights: pending_insights
- total: total_projects
-```
+Remove stale reads of both `projStats.total` and `projStats.open_insights`.
 
 **Verification:**
 
-1. Search to confirm no stale Dashboard field usage:
-   ```bash
-   grep -R "relStats.open_insights\|projStats.total" -n packages/ui/app
-   ```
-2. Run lint/test command if available:
-   ```bash
-   npm --workspace=packages/ui run lint || true
-   npm --workspace=packages/ui test || true
-   ```
-3. If no lint/test exists, run syntax-level check:
-   ```bash
-   npm --workspace=packages/ui run build
-   ```
-   only if dependencies and environment are available; otherwise document blocker.
+```bash
+grep -R "relStats.open_insights\|projStats.total\|projStats.open_insights" -n packages/ui/app || true
+npm --workspace=packages/ui run lint || true
+npm --workspace=packages/ui run build || true
+```
+
+If build/lint is blocked by missing deps/env, record exact output.
 
 **Model:** second-tier coding model; frontier fallback.
 
 **Commit:**
 
 ```bash
-git add packages/ui/app/page.jsx packages/ui/server.js
-git commit -m "fix: align dashboard stats fields"
+git add packages/ui/app/page.jsx
+git commit -m "fix: align dashboard stats field names"
 ```
 
 ---
 
 ### Task 2: Make `my_role` editable and sticky
 
-**Objective:** Allow manual correction of relationship perspective, because `my_role` is high-trust relationship intelligence.
+**Objective:** Allow manual correction of relationship perspective.
 
 **Files:**
 - Modify: `packages/ui/server.js`
@@ -189,40 +250,26 @@ git commit -m "fix: align dashboard stats fields"
 
 **Problem:**
 
-`my_role` exists, is displayed, and is respected in agent upserts, but is not included in contact edit UI/API allowlist.
+`my_role` exists, is displayed, and is respected in agent upserts, but is not exposed in contact edit UI/API allowlist.
 
 **Implementation:**
 
-1. Add `my_role` to the allowed PATCH fields in `packages/ui/server.js`:
-   ```js
-   const allowed = ['display_name','company','job_title','my_role','relationship_type', ...]
-   ```
-
-2. Add edit state in `relationships/page.jsx`:
-   ```js
-   const [editMyRole, setEditMyRole] = useState('')
-   ```
-
-3. Populate it in `openEditModal()`:
-   ```js
-   setEditMyRole(c.my_role || '')
-   ```
-
-4. Include it in `updates` in `saveContact()`:
-   ```js
-   my_role: editMyRole.trim() || null,
-   ```
-
+1. Add `my_role` to the allowed PATCH fields in `packages/ui/server.js`.
+2. Add edit state in `relationships/page.jsx`.
+3. Populate the edit value in `openEditModal()`.
+4. Include `my_role` in the PATCH updates payload.
 5. Add a form input labelled “Your role relative to this contact”.
+6. Do not add special `manual_overrides` code unless inspection proves necessary; existing PATCH logic already tracks changed fields into `manual_overrides`.
 
 **Verification:**
 
-1. Static check:
-   ```bash
-   grep -n "my_role" packages/ui/server.js packages/ui/app/relationships/page.jsx
-   ```
-2. Confirm `my_role` is in allowlist and updates payload.
-3. Run UI lint/build if feasible.
+```bash
+grep -n "my_role" packages/ui/server.js packages/ui/app/relationships/page.jsx
+npm --workspace=packages/ui run lint || true
+npm --workspace=packages/ui run build || true
+```
+
+If DB/UI is available, PATCH a test contact and confirm `manual_overrides` includes `my_role`.
 
 **Model:** second-tier coding model; frontier fallback.
 
@@ -235,15 +282,15 @@ git commit -m "fix: allow manual editing of contact relationship role"
 
 ---
 
-### Task 3: Replace hardcoded WhatsApp self JID with config-backed value
+### Task 3: Replace hardcoded WhatsApp self JID without changing export shape
 
-**Objective:** Remove hardcoded Prateek-specific WhatsApp JID from relationship extraction logic.
+**Objective:** Remove hardcoded Prateek-specific WhatsApp JID without breaking current imports.
 
 **Files:**
 - Modify: `packages/agents/relationships/services/extractor.js`
-- Modify: `packages/agents/relationships/services/insights.js` only if import behavior changes.
-- Possibly modify: `.env.example`
-- Possibly modify docs/manual if appropriate.
+- Do **not** modify `packages/agents/relationships/services/insights.js` unless you intentionally change its import/call shape.
+- Modify: `.env.example`
+- Optionally modify: `AGENTS.md` or repo docs.
 
 **Current issue:**
 
@@ -251,104 +298,112 @@ git commit -m "fix: allow manual editing of contact relationship role"
 const MY_WA_JID = '919830049540@c.us'
 ```
 
-**Implementation direction:**
+`MY_WA_JID` is exported by `extractor.js` and imported by `insights.js`. Do not turn it into a function unless every call site is updated.
 
-Use environment variable first, default only as explicit fallback if necessary:
+**Precondition before implementation:**
 
-```js
-const MY_WA_JID = process.env.WHATSAPP_SELF_JID || process.env.MY_WA_JID || null
+Confirm the deployment environment already has a self JID configured before introducing module-load failure:
+
+```bash
+grep -E '^(WHATSAPP_SELF_JID|MY_WA_JID)=' /opt/data/workspace/secondbrain/.env.local
 ```
 
-Then guard queries that require it. Better:
+If absent and the value cannot be supplied, defer Task 3. Do not land a change that bricks `npm run relationships` on startup.
+
+**Phase 0A implementation:**
+
+Preserve synchronous export shape:
 
 ```js
-function getMyWaJid() {
-  const jid = process.env.WHATSAPP_SELF_JID || process.env.MY_WA_JID
-  if (!jid) throw new Error('WHATSAPP_SELF_JID is required for WhatsApp relationship analysis')
-  return jid
+const MY_WA_JID = process.env.WHATSAPP_SELF_JID || process.env.MY_WA_JID
+if (!MY_WA_JID) {
+  throw new Error('WHATSAPP_SELF_JID env var is required for WhatsApp relationship analysis')
 }
 ```
 
-Prefer failing clearly over silently including self-chat data.
+Add to `.env.example`:
+
+```bash
+WHATSAPP_SELF_JID=your-number@c.us
+```
+
+**Follow-up design note:**
+
+Eventually unify this with `system.config` / Agents UI (`system.WHATSAPP_SELF_JID`), but that requires a clean async initialization path because `getConfig()` is async and `extractor.js` currently exports a synchronous constant.
 
 **Verification:**
 
-1. Search:
-   ```bash
-   grep -R "919830049540\|MY_WA_JID" -n packages/agents/relationships
-   ```
-2. Ensure no literal phone JID remains.
-3. Run relationship-agent syntax check:
-   ```bash
-   node -c packages/agents/relationships/services/extractor.js
-   node -c packages/agents/relationships/services/insights.js
-   ```
+```bash
+grep -R "919830049540" -n packages/agents/relationships .env.example AGENTS.md || true
+grep -R "MY_WA_JID" -n packages/agents/relationships
+node -c packages/agents/relationships/services/extractor.js
+node -c packages/agents/relationships/services/insights.js
+WHATSAPP_SELF_JID=dummy@c.us node -e "const { MY_WA_JID } = require('./packages/agents/relationships/services/extractor'); if (typeof MY_WA_JID !== 'string') process.exit(1)"
+```
+
+Also verify that `insights.js` still passes a string, not a function, to SQL. `node -c` alone is insufficient because it does not execute module-load code.
 
 **Model:** second-tier coding model; frontier fallback.
 
 **Commit:**
 
 ```bash
-git add packages/agents/relationships/services/extractor.js packages/agents/relationships/services/insights.js .env.example
+git add packages/agents/relationships/services/extractor.js .env.example AGENTS.md
 git commit -m "fix: configure WhatsApp self JID for relationship analysis"
 ```
 
 ---
 
-### Task 4: Audit env-vs-DB config mismatch and fix research provider gating first
+### Task 4: Honor DB-configured research providers
 
-**Objective:** Fix the clearest config bug: research providers read DB config, but `research/index.js` filters providers by `process.env` first.
+**Objective:** Fix the research provider gating bug without making unconfigured providers noisy.
 
 **Files:**
 - Modify: `packages/agents/research/index.js`
-- Possibly modify: `packages/agents/shared/config.js`
 
 **Problem:**
 
-Provider modules call:
-
-```js
-getConfig('system.TAVILY_API_KEY')
-getConfig('system.OPENAI_API_KEY')
-getConfig('system.PEOPLEDATALABS_API_KEY')
-getConfig('system.SERPAPI_API_KEY')
-```
-
-but `research/index.js` filters active providers with:
+Provider modules mostly read keys via async `getConfig('system.KEY')`, but `research/index.js` filters providers using `process.env` first:
 
 ```js
 providers.filter(p => !!process.env[keyMap[p.name]])
 ```
 
-This can make UI-configured keys appear ignored.
+Provider behavior differs:
 
-**Implementation direction:**
+- Tavily/OpenAI/SerpAPI throw if config is missing.
+- PeopleDataLabs returns a `not_configured` object.
 
-Do not pre-filter by `process.env`. Either:
+Therefore do **not** blindly call every provider.
 
-1. Run all providers and let each provider return/throw `not configured`, then summarize results; or
-2. Check `getConfig(...)` in `research/index.js` before filtering.
+**Implementation:**
 
-Preferred minimal fix:
-
-```js
-const activeProviders = providers
-```
-
-Then treat not-configured provider failures as non-fatal. This aligns with provider-level config behavior.
+1. Import `getConfig` in `research/index.js`.
+2. Resolve active providers once per research run, before the contact loop in `runResearch()`, not inside `researchContact()`:
+   ```js
+   async function resolveActiveProviders() {
+     const active = []
+     for (const p of providers) {
+       const key = await getConfig(`system.${keyMap[p.name]}`)
+       if (key) active.push(p)
+     }
+     return active
+   }
+   ```
+3. Pass `activeProviders` into `researchContact(contact, activeProviders)`.
+4. Log active/skipped providers once per agent run. Avoid per-contact noisy error logs for unconfigured providers.
+5. Preserve `Promise.allSettled()` handling for configured providers.
 
 **Verification:**
 
-1. Run syntax:
-   ```bash
-   node -c packages/agents/research/index.js
-   ```
-2. Search:
-   ```bash
-   grep -R "activeProviders\|process.env.*API_KEY" -n packages/agents/research
-   ```
+```bash
+node -c packages/agents/research/index.js
+grep -R "activeProviders\|process.env.*API_KEY" -n packages/agents/research
+```
 
-**Model:** second-tier coding model; frontier fallback.
+If DB is available, run a single-contact dry run with only one provider configured and verify only that provider runs.
+
+**Model:** second-tier implementation; frontier review.
 
 **Commit:**
 
@@ -359,64 +414,146 @@ git commit -m "fix: honor database-configured research providers"
 
 ---
 
-### Task 5: Decide safe semantics for Run Analysis endpoints
+### Task 5: Remove duplicate research schema DDL
 
-**Objective:** Avoid misleading buttons that claim to trigger analysis but only report schedule/restart behavior.
+**Objective:** Clarify schema ownership and avoid drift.
 
 **Files:**
-- Inspect: `packages/ui/server.js`
-- Modify: `packages/ui/server.js`
-- Modify: `packages/ui/app/relationships/page.jsx`
-- Modify: `packages/ui/app/projects/page.jsx`
-- Optional: agent entrypoints if adding IPC/queue trigger.
+- Modify: `packages/agents/research/sql/schema.sql`
 
-**Current issue:**
+**Problem:**
 
-Routes:
+`research/sql/schema.sql` duplicates `relationships.contacts` column additions owned by `relationships/sql/schema.sql`.
 
-```text
-GET /api/relationships/run
-GET /api/projects/run
+**Implementation:**
+
+Remove duplicate `ALTER TABLE relationships.contacts ADD COLUMN IF NOT EXISTS my_role...` and `research_summary...` from research schema. Add a short comment if useful:
+
+```sql
+-- relationships.contacts profile columns are owned by packages/agents/relationships/sql/schema.sql
 ```
 
-appear to not actually trigger immediate analysis when agents are already running.
+Fresh-environment guard: after removing duplicate DDL, verify research startup cannot silently fail if relationships schema has not initialized. Either confirm `packages/ui/server.js` initializes relationships schema before research schema in the normal startup path, or add a startup check in `research/index.js`:
 
-**Decision needed before implementation:**
+```sql
+SELECT column_name
+FROM information_schema.columns
+WHERE table_schema='relationships'
+  AND table_name='contacts'
+  AND column_name IN ('my_role', 'research_summary')
+```
 
-Choose one:
+If either column is missing, log a clear dependency error instead of allowing per-contact write failures.
 
-#### Option A — Rename to status-only / restart guidance
-
-Lowest risk. Change button text from `Run Analysis` to `Analysis Status`, and route response copy to be explicit.
-
-#### Option B — Add restart-and-run behavior
-
-If agent is running, stop and restart it to trigger immediate startup analysis. Medium risk because restart can interrupt current work.
-
-#### Option C — Add explicit trigger mechanism
-
-Best architecture. Add an API-triggered queue/IPC file/signal that the long-running agent watches and runs analysis without restart. More work.
-
-**Recommendation:**
-
-For first work, implement **Option A** unless Prateek explicitly wants active triggering now. Do not add brittle process restarts as a shortcut.
-
-**Model:** frontier model for design decision; second-tier only if implementing Option A copy changes.
-
-**Commit for Option A:**
+**Verification:**
 
 ```bash
-git add packages/ui/server.js packages/ui/app/relationships/page.jsx packages/ui/app/projects/page.jsx
+grep -n "my_role\|research_summary" packages/agents/research/sql/schema.sql packages/agents/relationships/sql/schema.sql
+```
+
+**Model:** second-tier coding model; frontier fallback.
+
+**Commit:**
+
+```bash
+git add packages/agents/research/sql/schema.sql
+git commit -m "chore: remove duplicate research schema contact columns"
+```
+
+---
+
+### Task 6: Clarify scheduled analysis controls
+
+**Objective:** Avoid misleading UI labels that imply immediate analysis runs.
+
+**Files:**
+- Modify: `packages/ui/app/relationships/page.jsx`
+- Modify: `packages/ui/app/projects/page.jsx`
+- Usually no server change needed.
+
+**Current behavior:**
+
+Server already returns messages like:
+
+```text
+Analysis runs on the agent's schedule. Restart the agent to trigger immediately.
+```
+
+**Implementation:**
+
+1. Change button label from `Run Analysis` to `Analysis Status` or `Check Analysis Status`.
+2. Ensure UI surfaces the server response message in the toast.
+3. Defer true on-demand IPC/queue trigger design.
+
+**Verification:**
+
+```bash
+grep -R "Run Analysis\|Analysis Status\|Check Analysis Status" -n packages/ui/app/relationships packages/ui/app/projects
+npm --workspace=packages/ui run build || true
+```
+
+**Model:** second-tier coding model; frontier fallback.
+
+**Commit:**
+
+```bash
+git add packages/ui/app/relationships/page.jsx packages/ui/app/projects/page.jsx
 git commit -m "fix: clarify scheduled analysis controls"
 ```
 
 ---
 
-## Phase 0B — Live Data Quality Audit Preparation
+### Task 7: Fix cross-person opportunity scan incrementality
 
-### Task 6: Create read-only audit script skeleton
+**Objective:** Stop the cross-person opportunity detector from always re-scanning 30 days.
 
-**Objective:** Prepare a safe audit script that can run when `DATABASE_URL` is configured, without requiring Gmail/WhatsApp/Limitless credentials.
+**Files:**
+- Modify: `packages/agents/relationships/services/opportunities.js`
+
+**Current bug:**
+
+```js
+Math.min(new Date(lastRunAt), Date.now() - 30 * 24 * 60 * 60 * 1000)
+```
+
+This chooses the older timestamp, so recent runs still scan from 30 days ago.
+
+**Implementation:**
+
+Use the more recent of `lastRunAt` and the 30-day floor:
+
+```js
+const since = lastRunAt
+  ? new Date(Math.max(new Date(lastRunAt).getTime(), Date.now() - 30 * 24 * 60 * 60 * 1000))
+  : null
+const digest = await buildCrossSourceDigest(since)
+```
+
+**Verification:**
+
+```bash
+grep -n "Math.min\|Math.max\|buildCrossSourceDigest" packages/agents/relationships/services/opportunities.js
+node -c packages/agents/relationships/services/opportunities.js
+```
+
+Add a small unit-style script if feasible to assert recent `lastRunAt` wins over the 30-day floor.
+
+**Model:** second-tier coding model; frontier fallback.
+
+**Commit:**
+
+```bash
+git add packages/agents/relationships/services/opportunities.js
+git commit -m "fix: make cross-person opportunity scan incremental"
+```
+
+---
+
+## Phase 0B — Live Data Quality Audit + Smoke Verification
+
+### Task 8: Create read-only audit and smoke-test script skeleton
+
+**Objective:** Prepare safe audit/smoke checks that can run when `DATABASE_URL` is configured.
 
 **Files:**
 - Create: `scripts/audit-secondbrain-quality.js` or `packages/tools/audit-secondbrain-quality.js` if tools package exists.
@@ -424,33 +561,50 @@ git commit -m "fix: clarify scheduled analysis controls"
 
 **Script should report:**
 
-- Source freshness:
-  - `email.emails` count + max date
-  - `public.messages` count + max `ts`
-  - `limitless.lifelogs` count + max `start_time`
-- Derived freshness:
-  - `relationships.contacts` count + max `last_interaction_at`
-  - open `relationships.insights`
-  - `projects.projects` count + max `last_activity_at`
-- Quality indicators:
-  - duplicate normalized names
-  - contacts with only phone-number names
-  - contacts missing company/job where relationship strength is strong/moderate
-  - open insights older than 30/60/90 days
-  - project communications with null `contact_id`
+Source freshness:
+- `email.emails` count + max date
+- `public.messages` count + max `ts`
+- `limitless.lifelogs` count + max `start_time`
+
+Derived freshness:
+- `relationships.contacts` count + max `last_interaction_at`
+- open `relationships.insights`
+- `projects.projects` count + max `last_activity_at`
+
+Quality indicators:
+- duplicate normalized names
+- contacts with only phone-number names
+- strong/moderate contacts missing company/job title
+- open insights older than 30/60/90 days
+- project communications with null `contact_id`
+
+Smoke gates:
+- `/api/relationships/stats` field names match UI reads.
+- `/api/projects/stats` field names match UI reads.
+- `my_role` PATCH persists and appears in `manual_overrides` when a safe test contact is available.
+- `WHATSAPP_SELF_JID` missing fails loudly, not silently.
+- Research provider preflight shows active/skipped providers without calling unconfigured APIs.
+
+Schema drift check:
+- Compare live DB columns for touched tables against checked-in schema expectations.
+- Report drift, do not auto-migrate.
 
 **Verification:**
 
-Run without DB and confirm it fails cleanly:
+Without DB:
 
 ```bash
 node scripts/audit-secondbrain-quality.js
-# expected: clear message: DATABASE_URL is required
+# expected: clear DATABASE_URL required message
 ```
 
-If DB is configured, run and save redacted report.
+With DB:
 
-**Model:** second-tier for implementation; frontier for interpreting results.
+```bash
+node scripts/audit-secondbrain-quality.js --redact
+```
+
+**Model:** second-tier implementation; low-cost for bulk report compaction; frontier interpretation.
 
 ---
 
@@ -458,7 +612,7 @@ If DB is configured, run and save redacted report.
 
 Do not implement until Phase 0A is complete and Phase 0B audit has at least one run.
 
-### Task 7: Draft schema migration for first-class opportunities
+### Task 9: Draft schema migration for first-class opportunities
 
 **Objective:** Create migration SQL proposal only, not applied automatically.
 
@@ -474,6 +628,8 @@ Do not implement until Phase 0A is complete and Phase 0B audit has at least one 
 - Include evidence references.
 - Include scoring and lifecycle fields.
 - Avoid graph DB.
+- Redesign cross-person deduplication; do not rely on title truncation + contact IDs.
+- Treat `relationships.communications` as existing evidence substrate before adding a separate `intelligence.evidence_items` table.
 
 **Model:** frontier database architect.
 
@@ -483,22 +639,23 @@ Do not implement until Phase 0A is complete and Phase 0B audit has at least one 
 
 ### Before implementation
 
-1. Main coordinator updates PR branch.
-2. Dispatch subagents in groups only when file overlap is low.
-3. Do not let two implementers edit the same file concurrently.
+1. Keep current docs PR branch clean.
+2. Create `feature/phase-0a-papercuts` for code.
+3. Dispatch subagents only when file overlap is low.
+4. Do not let two implementers edit the same file concurrently.
 
 ### Per task
 
 1. Implementer subagent executes one task.
 2. Spec reviewer subagent checks the original task spec.
-3. Code quality reviewer subagent checks conventions, regressions, and security.
+3. Code quality reviewer checks conventions, regressions, and security.
 4. Coordinator runs verification commands.
 5. Commit each completed task separately.
 
 ### Model routing
 
-- **Frontier:** tasks 0, 5 decision, 7, all spec/quality reviews, final integration review.
-- **Second-tier:** tasks 1, 2, 3, 4, 6 implementation if second-tier configured.
+- **Frontier:** Task 0, final review, all spec/quality reviews, Phase 1 schema/dedupe design, any true agent-control trigger design.
+- **Second-tier:** Tasks 1–7 implementation if configured.
 - **Low-cost:** file inventories, long output summarization, DB sample compaction only.
 
 ### Final verification before PR update
@@ -512,37 +669,48 @@ npm --workspace=packages/ui run lint || true
 npm --workspace=packages/ui run build || true
 node -c packages/agents/relationships/services/extractor.js
 node -c packages/agents/relationships/services/insights.js
+node -c packages/agents/relationships/services/opportunities.js
 node -c packages/agents/research/index.js
 ```
 
-If dependencies/env block build, report exact blocker instead of inventing success.
+If dependencies/env block build, report exact blocker.
 
 ---
 
-## Recommended First Subagent Dispatch Batch
+## Revised First Subagent Dispatch Batch
 
-Do not dispatch implementation until Prateek approves this plan or explicitly asks to proceed. Once approved, dispatch:
+Do not dispatch implementation until Prateek approves this updated plan or explicitly asks to proceed.
 
-1. **Stats/UI implementer** — Task 1 only.  
-   Model: second-tier coding model if configured; frontier fallback.
+Once approved:
 
-2. **Relationship-role implementer** — Task 2 only.  
-   Model: second-tier coding model if configured; frontier fallback.
+1. **Task 1 implementer — Dashboard fields**  
+   Model: second-tier coding model if configured; frontier fallback.  
+   Scope: `packages/ui/app/page.jsx` only.
 
-3. **Config audit worker** — read-only audit of Tasks 3 and 4 exact code changes needed.  
-   Model: low-cost if configured for search/triage; frontier for final change design.
+2. **Task 1 review pair**  
+   Model: frontier.  
+   Spec review, then code quality review.
 
-Then review/commit before moving to Task 3/4 implementation.
+3. **Task 2 implementer — `my_role` editing**  
+   Model: second-tier coding model if configured; frontier fallback.  
+   Scope: `server.js` + `relationships/page.jsx`.
+
+4. **Config/research read-only mapper in parallel only after Task 1 commit**  
+   Model: low-cost if configured for search/triage; frontier validation.  
+   Scope: confirm exact changes for Tasks 3–4, no edits.
+
+Then proceed serially through Tasks 3–7. Do not run two editing subagents against `server.js` or the same UI file concurrently.
 
 ---
 
 ## Success Criteria For First Work
 
-- Dashboard stats are accurate.
-- `my_role` can be manually edited and becomes sticky through `manual_overrides`.
-- Hardcoded WhatsApp self JID is removed or made config-backed.
-- Research provider gating no longer ignores DB-configured API keys.
+- Dashboard stats use canonical API fields where they exist; project insight card uses `projInsights.length` directly because `projectsStats()` has no `open_insights` field yet.
+- `my_role` can be manually edited and becomes sticky through existing `manual_overrides` behavior.
+- Hardcoded WhatsApp self JID is removed without changing the `MY_WA_JID` export shape.
+- Research provider gating honors DB-configured API keys and avoids calling unconfigured providers.
+- Duplicate research-schema contact-column DDL is removed.
 - Run-analysis UI no longer misleads the user.
-- A read-only live audit script exists and fails safely without DB credentials.
-- All changes are separate commits on the existing PR branch.
-
+- Cross-person opportunity scan is actually incremental.
+- A read-only live audit/smoke script exists and fails safely without DB credentials.
+- All implementation changes are separate commits on a code branch, not silently folded into the docs PR.
