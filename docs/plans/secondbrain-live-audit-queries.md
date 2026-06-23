@@ -131,7 +131,7 @@ The audit reports active vs skipped providers for:
 - People Data Labs: `PEOPLEDATALABS_API_KEY`
 - SerpAPI: `SERPAPI_API_KEY`
 
-It only checks environment variables and `system.config` keys such as `system.TAVILY_API_KEY`. It never calls unconfigured or configured external provider APIs.
+It only checks environment variables and `system.config` keys as used by `getConfig('system.<KEY>')` — stored rows normally use unqualified keys like `TAVILY_API_KEY` inside `system.config` (legacy fully-qualified keys like `system.TAVILY_API_KEY` are also tolerated). It never calls unconfigured or configured external provider APIs.
 
 ## Schema drift check
 

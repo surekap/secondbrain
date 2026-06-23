@@ -316,11 +316,17 @@ async function runResearchProviderPreflight() {
     ['serpapi', 'SERPAPI_API_KEY'],
   ];
   const entries = [];
+  const hasSystemConfig = await tableExists('system.config');
   for (const [name, key] of providers) {
     let configured = Boolean(process.env[key]);
-    if (!configured && await tableExists('system.config')) {
+    if (!configured && hasSystemConfig) {
       try {
-        const { rows } = await pool.query('SELECT value FROM system.config WHERE key = $1 LIMIT 1', [`system.${key}`]);
+        // shared getConfig('system.KEY') stores/reads key='KEY' inside system.config.
+        // Also accept a legacy fully-qualified key if one was inserted manually.
+        const { rows } = await pool.query(
+          `SELECT value FROM system.config WHERE key = ANY($1::text[]) LIMIT 1`,
+          [[key, `system.${key}`]]
+        );
         configured = Boolean(rows[0]?.value);
       } catch (e) {
         status('WARN', `research provider config lookup failed for ${name}`, e.message);
