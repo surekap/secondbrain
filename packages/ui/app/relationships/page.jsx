@@ -414,8 +414,8 @@ export default function RelationshipsPage() {
   async function runAnalysis() {
     try {
       const r = await apiFetch('GET', '/api/relationships/run')
-      showToast(r.message || r.error || 'Analysis triggered')
-    } catch { showToast('Failed to trigger analysis') }
+      showToast(r.message || r.error || 'Analysis status unavailable')
+    } catch { showToast('Failed to check analysis status') }
   }
 
   function setInsightFilter(filter) {
@@ -605,7 +605,7 @@ export default function RelationshipsPage() {
           {stats?.last_analysis_at && (
             <span style={{ fontSize: '.75rem', color: 'var(--text-3)' }}>Last run {relTime(stats.last_analysis_at)}</span>
           )}
-          <button className="btn btn-ghost btn-sm" onClick={runAnalysis}>Run Analysis</button>
+          <button className="btn btn-ghost btn-sm" onClick={runAnalysis}>Analysis Status</button>
         </div>
       </div>
 

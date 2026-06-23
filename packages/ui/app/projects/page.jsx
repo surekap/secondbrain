@@ -249,7 +249,7 @@ export default function ProjectsPage() {
   async function runAnalysis() {
     try {
       const r = await apiFetch('GET', '/api/projects/run')
-      showToast(r.message || 'Analysis triggered')
+      showToast(r.message || r.error || 'Analysis status unavailable')
     } catch { showToast('Agent not running — start it first') }
   }
 
@@ -506,7 +506,7 @@ export default function ProjectsPage() {
               <div className="grid-header">
                 <h1 className="grid-heading">Projects</h1>
                 <div className="grid-header-actions">
-                  <button className="btn btn-ghost btn-sm" onClick={runAnalysis}>Run Analysis</button>
+                  <button className="btn btn-ghost btn-sm" onClick={runAnalysis}>Analysis Status</button>
                 </div>
               </div>
               <div className="stats-bar">
