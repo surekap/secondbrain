@@ -374,9 +374,10 @@ async function findReadEmailsWithNoResponse() {
 async function detectCrossPersonOpportunities(lastRunAt) {
   const insights = []
   try {
-    const digest = await buildCrossSourceDigest(
-      lastRunAt ? new Date(Math.min(new Date(lastRunAt), Date.now() - 30 * 24 * 60 * 60 * 1000)) : null
-    )
+    const since = lastRunAt
+      ? new Date(Math.max(new Date(lastRunAt).getTime(), Date.now() - 30 * 24 * 60 * 60 * 1000))
+      : null
+    const digest = await buildCrossSourceDigest(since)
     if (!digest || digest.length < 200) return insights
 
     const prompt = `You are a relationship intelligence assistant for a senior executive.

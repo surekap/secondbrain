@@ -1,5 +1,5 @@
 'use client'
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { Suspense, useState, useEffect, useRef, useCallback } from 'react'
 import { useSearchParams } from 'next/navigation'
 import ResizablePanes from '../../components/ResizablePanes'
 
@@ -167,7 +167,7 @@ function TagEditor({ tags, onChange }) {
   )
 }
 
-export default function RelationshipsPage() {
+function RelationshipsPageContent() {
   const searchParams = useSearchParams()
   const autoSelectedRef = useRef(false)
 
@@ -195,6 +195,7 @@ export default function RelationshipsPage() {
   const [editName, setEditName] = useState('')
   const [editCompany, setEditCompany] = useState('')
   const [editTitle, setEditTitle] = useState('')
+  const [editMyRole, setEditMyRole] = useState('')
   const [editRelType, setEditRelType] = useState('unknown')
   const [editStrength, setEditStrength] = useState('weak')
   const [editSummary, setEditSummary] = useState('')
@@ -321,6 +322,7 @@ export default function RelationshipsPage() {
     setEditName(c.display_name || '')
     setEditCompany(c.company || '')
     setEditTitle(c.job_title || '')
+    setEditMyRole(c.my_role || '')
     setEditRelType(c.relationship_type || 'unknown')
     setEditStrength(c.relationship_strength || 'weak')
     setEditSummary(c.summary || '')
@@ -337,6 +339,7 @@ export default function RelationshipsPage() {
       display_name: editName.trim(),
       company: editCompany.trim() || null,
       job_title: editTitle.trim() || null,
+      my_role: editMyRole.trim() || null,
       relationship_type: editRelType,
       relationship_strength: editStrength,
       summary: editSummary.trim() || null,
@@ -377,6 +380,7 @@ export default function RelationshipsPage() {
       const result = await apiFetch('POST', `/api/relationships/contacts/${selectedContact.id}/reanalyze`)
       setEditCompany(result.company || '')
       setEditTitle(result.job_title || '')
+      setEditMyRole(result.my_role || '')
       setEditRelType(result.relationship_type || 'unknown')
       setEditStrength(result.relationship_strength || 'weak')
       setEditSummary(result.summary || '')
@@ -410,8 +414,8 @@ export default function RelationshipsPage() {
   async function runAnalysis() {
     try {
       const r = await apiFetch('GET', '/api/relationships/run')
-      showToast(r.message || r.error || 'Analysis triggered')
-    } catch { showToast('Failed to trigger analysis') }
+      showToast(r.message || r.error || 'Analysis status unavailable')
+    } catch { showToast('Failed to check analysis status') }
   }
 
   function setInsightFilter(filter) {
@@ -601,7 +605,7 @@ export default function RelationshipsPage() {
           {stats?.last_analysis_at && (
             <span style={{ fontSize: '.75rem', color: 'var(--text-3)' }}>Last run {relTime(stats.last_analysis_at)}</span>
           )}
-          <button className="btn btn-ghost btn-sm" onClick={runAnalysis}>Run Analysis</button>
+          <button className="btn btn-ghost btn-sm" onClick={runAnalysis}>Analysis Status</button>
         </div>
       </div>
 
@@ -968,6 +972,11 @@ export default function RelationshipsPage() {
               </div>
             </div>
             <div className="field-group">
+              <label className="field-label" htmlFor="edit-my-role-rel">Your role relative to this contact</label>
+              <input className="form-input" id="edit-my-role-rel" type="text" placeholder="e.g. client, patient, mentor"
+                value={editMyRole} onChange={e => setEditMyRole(e.target.value)} />
+            </div>
+            <div className="field-group">
               <label className="field-label" htmlFor="edit-strength-rel">Relationship strength</label>
               <select className="form-select" id="edit-strength-rel" value={editStrength} onChange={e => setEditStrength(e.target.value)}>
                 <option value="strong">Strong — frequent meaningful contact</option>
@@ -1022,5 +1031,13 @@ export default function RelationshipsPage() {
         transition: 'opacity .2s, transform .2s',
       }}>{toast.msg}</div>
     </>
+  )
+}
+
+export default function RelationshipsPage() {
+  return (
+    <Suspense fallback={<div className="empty-state">Loading relationships…</div>}>
+      <RelationshipsPageContent />
+    </Suspense>
   )
 }

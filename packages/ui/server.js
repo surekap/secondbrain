@@ -1037,7 +1037,7 @@ app.patch('/api/relationships/contacts/:id', async (req, res) => {
   const id = parseInt(req.params.id, 10);
   if (isNaN(id)) return res.status(400).json({ error: 'Invalid id' });
 
-  const allowed = ['display_name','company','job_title','relationship_type',
+  const allowed = ['display_name','company','job_title','my_role','relationship_type',
                    'relationship_strength','summary','tags','is_noise'];
   const updates = {};
   for (const key of allowed) {
