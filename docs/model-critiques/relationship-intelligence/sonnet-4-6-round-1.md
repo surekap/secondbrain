@@ -41,7 +41,7 @@ No code was written or modified. All evidence is cited by path and line number.
 **Priority:** P0
 
 **Evidence:**
-- `extractor.js:5` — `const MY_WA_JID = '919830049540@c.us'`
+- `extractor.js:5` — `const MY_WA_JID = '[REDACTED]@c.us'`
 - `extractor.js:364` — `module.exports = { MY_WA_JID, ... }`
 - `insights.js:4` — `const { MY_WA_JID } = require('./extractor')`
 - `insights.js:39` — used inline as SQL parameter `$1`
@@ -430,7 +430,7 @@ begins or after it completes:
    on a drifted DB can silently succeed or silently fail.
 
 2. **MY_WA_JID value presence**: Before Task 3, verify that
-   `WHATSAPP_SELF_JID=919830049540@c.us` (or current value) exists in `.env.local`
+   `WHATSAPP_SELF_JID=[REDACTED]@c.us` (or current value) exists in `.env.local`
    or `system.config`. If absent and the fail-fast approach is adopted, the
    relationship agent will refuse to start after the change.
 

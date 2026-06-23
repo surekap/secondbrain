@@ -295,7 +295,7 @@ git commit -m "fix: allow manual editing of contact relationship role"
 **Current issue:**
 
 ```js
-const MY_WA_JID = '919830049540@c.us'
+const MY_WA_JID = '[REDACTED]@c.us'
 ```
 
 `MY_WA_JID` is exported by `extractor.js` and imported by `insights.js`. Do not turn it into a function unless every call site is updated.
@@ -334,7 +334,7 @@ Eventually unify this with `system.config` / Agents UI (`system.WHATSAPP_SELF_JI
 **Verification:**
 
 ```bash
-grep -R "919830049540" -n packages/agents/relationships .env.example AGENTS.md || true
+grep -R "SELF_WA_JID_REDACTED" -n packages/agents/relationships .env.example AGENTS.md || true
 grep -R "MY_WA_JID" -n packages/agents/relationships
 node -c packages/agents/relationships/services/extractor.js
 node -c packages/agents/relationships/services/insights.js

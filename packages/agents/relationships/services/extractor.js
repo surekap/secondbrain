@@ -2,7 +2,11 @@
 
 const db = require('@secondbrain/db')
 
-const MY_WA_JID = '919830049540@c.us'
+const MY_WA_JID = process.env.WHATSAPP_SELF_JID || process.env.MY_WA_JID || '__missing_whatsapp_self_jid__'
+
+if (MY_WA_JID === '__missing_whatsapp_self_jid__') {
+  console.warn('WHATSAPP_SELF_JID or MY_WA_JID is not configured; self-message exclusion may be incomplete.')
+}
 
 /**
  * Get distinct direct chat contacts from WhatsApp messages.
