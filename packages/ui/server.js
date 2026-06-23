@@ -11,6 +11,7 @@ const indexer    = require('./services/indexer');
 const { embed, toSql, getEmbeddingConfig } = require('./services/embedder');
 const { getProviderDefinitions, getStaticModels, DEFAULT_OLLAMA_BASE_URL } = require('../agents/shared/model-catalog');
 const { listOllamaModelOptions } = require('../agents/shared/ollama');
+const { getAvailableModels } = require('../agents/shared/model-fetcher');
 
 // ── Bootstrap ─────────────────────────────────────────────────────────────────
 
@@ -1667,9 +1668,11 @@ app.get('/api/system/model-catalog', async (req, res) => {
   const explicitBaseUrl = String(req.query.base_url || '').trim();
 
   try {
+    const { getConfig } = require('../agents/shared/config');
     const providers = getProviderDefinitions(capability);
+
+    // Handle Ollama provider
     if (providerType === 'ollama') {
-      const { getConfig } = require('../agents/shared/config');
       const baseUrl = explicitBaseUrl || await getConfig('system.OLLAMA_BASE_URL') || DEFAULT_OLLAMA_BASE_URL;
       try {
         const models = await listOllamaModelOptions({ baseUrl, capability });
@@ -1679,6 +1682,15 @@ app.get('/api/system/model-catalog', async (req, res) => {
       }
     }
 
+    // Handle Anthropic and OpenAI providers with live API discovery
+    if (providerType === 'anthropic' || providerType === 'openai') {
+      const apiKeyConfig = providerType === 'anthropic' ? 'system.ANTHROPIC_API_KEY' : 'system.OPENAI_API_KEY';
+      const apiKey = await getConfig(apiKeyConfig);
+      const models = await getAvailableModels({ providerType, apiKey, capability });
+      return res.json({ providers, models });
+    }
+
+    // For other providers, use static models
     res.json({ providers, models: getStaticModels({ providerType, capability }) });
   } catch (error) {
     res.status(500).json({ error: error.message });
