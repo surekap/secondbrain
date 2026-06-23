@@ -11,7 +11,7 @@
     "@secondbrain/telemetry": "*",
     "axios": "^1.18.1",
     "dotenv": "^16.4.7",
-    "express": "^4.22.2",
+    "express": "^5.2.1",
     "pg": "^8.13.1",
     "puppeteer": "^23.11.1",
     "qrcode-terminal": "^0.12.0",

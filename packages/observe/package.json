@@ -8,7 +8,7 @@
   },
   "dependencies": {
     "@secondbrain/db": "*",
-    "express": "^4.22.2",
+    "express": "^5.2.1",
     "dotenv": "^16.5.0"
   }
 }
