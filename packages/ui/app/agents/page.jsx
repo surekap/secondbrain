@@ -20,6 +20,52 @@ async function fetchModelCatalog({ providerType, capability, baseUrl }) {
   return apiFetch('GET', `/api/system/model-catalog?${params.toString()}`)
 }
 
+function ModelSelector({ label, providerType, model, onModelChange, apiKey, error }) {
+  const [options, setOptions] = useState([])
+  const [localError, setLocalError] = useState(error)
+
+  useEffect(() => {
+    if (!providerType) return
+
+    const fetchModels = async () => {
+      try {
+        const data = await fetchModelCatalog({ providerType })
+        setOptions(data.models || [])
+        setLocalError(null)
+      } catch (err) {
+        setLocalError(err.message)
+        setOptions([])
+      }
+    }
+
+    const timer = setTimeout(fetchModels, 100)
+    return () => clearTimeout(timer)
+  }, [providerType, apiKey])
+
+  return (
+    <div className="form-row">
+      <label>{label}</label>
+      {!apiKey && providerType !== 'claude-cli' ? (
+        <div style={{ padding: '0.5rem', fontSize: '0.75rem', color: '#f59e0b', background: 'rgba(245,158,11,0.1)', borderRadius: 4 }}>
+          Add API key above to see available models
+        </div>
+      ) : options.length > 0 ? (
+        <select value={model} onChange={e => onModelChange(e.target.value)} style={{ width: '100%' }}>
+          <option value="">Select a model…</option>
+          {options.map(opt => (
+            <option key={opt.value} value={opt.value}>
+              {opt.label}
+            </option>
+          ))}
+        </select>
+      ) : (
+        <input type="text" value={model} onChange={e => onModelChange(e.target.value)} placeholder="Paste model ID (e.g., claude-sonnet-4-6)" style={{ width: '100%' }} />
+      )}
+      {localError && <div style={{ marginTop: '0.35rem', fontSize: '0.72rem', color: '#f59e0b' }}>{localError}</div>}
+    </div>
+  )
+}
+
 function relativeTime(iso) {
   if (!iso) return '—'
   const s = Math.floor((Date.now() - new Date(iso)) / 1000)
@@ -367,18 +413,26 @@ function LimitlessConfigForm({ config, onSave }) {
           <label>Anthropic API Key</label>
           <input type="password" value={anthropicKey} onChange={e => setAnthropicKey(e.target.value)} placeholder="sk-ant-…" autoComplete="new-password" />
         </div>
-        <div className="form-row">
-          <label>Anthropic model</label>
-          <input type="text" value={anthropicModel} onChange={e => setAnthropicModel(e.target.value)} placeholder="claude-sonnet-4-6 (default)" />
-        </div>
+        <ModelSelector
+          label="Anthropic model"
+          providerType="anthropic"
+          model={anthropicModel}
+          onModelChange={setAnthropicModel}
+          apiKey={anthropicKey}
+          error={null}
+        />
         <div className="form-row">
           <label>OpenAI API Key</label>
           <input type="password" value={openaiKey} onChange={e => setOpenaiKey(e.target.value)} placeholder="sk-…" autoComplete="new-password" />
         </div>
-        <div className="form-row">
-          <label>OpenAI model</label>
-          <input type="text" value={openaiModel} onChange={e => setOpenaiModel(e.target.value)} placeholder="gpt-4o (default)" />
-        </div>
+        <ModelSelector
+          label="OpenAI model"
+          providerType="openai"
+          model={openaiModel}
+          onModelChange={setOpenaiModel}
+          apiKey={openaiKey}
+          error={null}
+        />
       </>)}
       <div className="divider" />
       <div className="form-section-title">Schedule</div>
