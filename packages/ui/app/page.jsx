@@ -271,7 +271,7 @@ export default function DashboardPage() {
                 <div className="sc-lbl">Contacts</div>
               </Link>
               <Link href="/relationships" className="stat-card sc-link">
-                <div className="sc-val">{Number(relStats.open_insights || relInsights.length || 0).toLocaleString()}</div>
+                <div className="sc-val">{Number(relStats.pending_insights ?? relInsights.length ?? 0).toLocaleString()}</div>
                 <div className="sc-lbl">Open Insights</div>
               </Link>
             </>
@@ -279,11 +279,11 @@ export default function DashboardPage() {
           {projStats && (
             <>
               <Link href="/projects" className="stat-card sc-link">
-                <div className="sc-val">{Number(projStats.total || 0).toLocaleString()}</div>
+                <div className="sc-val">{Number(projStats.total_projects ?? 0).toLocaleString()}</div>
                 <div className="sc-lbl">Projects</div>
               </Link>
               <Link href="/projects" className="stat-card sc-link">
-                <div className="sc-val">{Number(projStats.open_insights || projInsights.length || 0).toLocaleString()}</div>
+                <div className="sc-val">{Number(projInsights.length || 0).toLocaleString()}</div>
                 <div className="sc-lbl">Project Insights</div>
               </Link>
             </>
