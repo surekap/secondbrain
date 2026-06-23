@@ -8,16 +8,41 @@ const fs        = require('fs')
 const path      = require('path')
 const llm       = require('../shared/llm')
 const db        = require('@secondbrain/db')
+const { getConfig } = require('../shared/config')
 
 const tavily        = require('./providers/tavily')
 const openaiProv    = require('./providers/openai')
 const pdl           = require('./providers/peopledatalabs')
 const serpapiProv   = require('./providers/serpapi')
 
+const PROVIDERS = [
+  { name: 'tavily',         configKey: 'TAVILY_API_KEY',         fn: contact => tavily.researchContact(contact) },
+  { name: 'openai',         configKey: 'OPENAI_API_KEY',         fn: contact => openaiProv.researchContact(contact) },
+  { name: 'peopledatalabs', configKey: 'PEOPLEDATALABS_API_KEY', fn: contact => pdl.researchContact(contact) },
+  { name: 'serpapi',        configKey: 'SERPAPI_API_KEY',        fn: contact => serpapiProv.researchContact(contact) },
+]
+
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)) }
 
 console.log('🔬 Research Agent v1.0')
 console.log('📡 Enriches contacts via Tavily, OpenAI, PDL, SerpAPI\n')
+
+async function resolveActiveProviders() {
+  const activeProviders = []
+  const skippedProviders = []
+
+  for (const provider of PROVIDERS) {
+    const value = await getConfig(`system.${provider.configKey}`)
+    if (value) activeProviders.push(provider)
+    else skippedProviders.push(provider.name)
+  }
+
+  const activeNames = activeProviders.map(p => p.name)
+  console.log(`[research] active providers: ${activeNames.length ? activeNames.join(', ') : 'none'}`)
+  if (skippedProviders.length) console.log(`[research] skipped unconfigured providers: ${skippedProviders.join(', ')}`)
+
+  return activeProviders
+}
 
 // ── Find stale contacts ────────────────────────────────────────────────────────
 
@@ -84,31 +109,15 @@ Write ONLY the dossier paragraph, no preamble.`
 
 // ── Run research for one contact ───────────────────────────────────────────────
 
-async function researchContact(contact) {
+async function researchContact(contact, activeProviders) {
   console.log(`  🔍 Researching ${contact.display_name}…`)
 
-  const providers = [
-    { name: 'tavily',         fn: () => tavily.researchContact(contact) },
-    { name: 'openai',         fn: () => openaiProv.researchContact(contact) },
-    { name: 'peopledatalabs', fn: () => pdl.researchContact(contact) },
-    { name: 'serpapi',        fn: () => serpapiProv.researchContact(contact) },
-  ]
-
-  const keyMap = {
-    tavily:         'TAVILY_API_KEY',
-    openai:         'OPENAI_API_KEY',
-    peopledatalabs: 'PEOPLEDATALABS_API_KEY',
-    serpapi:        'SERPAPI_API_KEY',
-  }
-
-  const activeProviders = providers.filter(p => !!process.env[keyMap[p.name]])
-
   if (activeProviders.length === 0) {
-    console.log('    ⚠ No research API keys configured — skipping')
+    console.log('    ⚠ No database-configured research providers — skipping')
     return
   }
 
-  const results = await Promise.allSettled(activeProviders.map(p => p.fn()))
+  const results = await Promise.allSettled(activeProviders.map(p => p.fn(contact)))
 
   for (let i = 0; i < activeProviders.length; i++) {
     const providerName = activeProviders[i].name
@@ -148,12 +157,18 @@ async function researchContact(contact) {
 async function runResearch() {
   console.log('\n🏁 Starting research run…')
   try {
+    const activeProviders = await resolveActiveProviders()
+    if (activeProviders.length === 0) {
+      console.log('   ⚠ No database-configured research providers — skipping run')
+      return
+    }
+
     const contacts = await findStaleContacts(20)
     console.log(`   Found ${contacts.length} contacts to research`)
 
     for (const contact of contacts) {
       try {
-        await researchContact(contact)
+        await researchContact(contact, activeProviders)
         await sleep(1000)
       } catch (err) {
         console.error(`  ✗ Error researching ${contact.display_name}:`, err.message)
@@ -188,7 +203,12 @@ async function main() {
       [parseInt(singleId, 10)]
     )
     if (rows.length === 0) { console.error('Contact not found'); process.exit(1) }
-    await researchContact(rows[0])
+    const activeProviders = await resolveActiveProviders()
+    if (activeProviders.length === 0) {
+      console.log('⚠ No database-configured research providers — skipping contact research')
+    } else {
+      await researchContact(rows[0], activeProviders)
+    }
     await db.end()
     process.exit(0)
   }
