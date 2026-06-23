@@ -87,24 +87,27 @@ export default function DashboardPage() {
   const [relStats, setRelStats]           = useState(null)
   const [projStats, setProjStats]         = useState(null)
   const [recentActivity, setRecentActivity] = useState([])
+  const [attentionItems, setAttentionItems] = useState([])
   const [groupsMap, setGroupsMap]         = useState({})
   const [loading, setLoading]             = useState(true)
 
   async function load() {
     try {
-      const [ri, pi, rs, ps, ra, gr] = await Promise.all([
+      const [ri, pi, rs, ps, ra, gr, aq] = await Promise.all([
         fetch('/api/relationships/insights').then(r => r.json()),
         fetch('/api/projects/insights/open').then(r => r.json()),
         fetch('/api/relationships/stats').then(r => r.json()),
         fetch('/api/projects/stats').then(r => r.json()),
         fetch('/api/projects/activity/recent').then(r => r.json()),
         fetch('/api/relationships/groups').then(r => r.json()),
+        fetch('/api/intelligence/attention?limit=5').then(r => r.ok ? r.json() : []).catch(() => []),
       ])
       if (Array.isArray(ri)) setRelInsights(ri)
       if (Array.isArray(pi)) setProjInsights(pi)
       if (rs && !rs.error)  setRelStats(rs)
       if (ps && !ps.error)  setProjStats(ps)
       if (Array.isArray(ra)) setRecentActivity(ra.slice(0, 8))
+      if (Array.isArray(aq)) setAttentionItems(aq)
       if (Array.isArray(gr)) {
         const map = {}
         for (const g of gr) if (g.wa_chat_id && g.name) map[g.wa_chat_id] = g.name
@@ -129,6 +132,15 @@ export default function DashboardPage() {
   async function handleProjResolve(id) {
     await fetch(`/api/projects/insights/${id}/resolve`, { method: 'POST' })
     setProjInsights(prev => prev.filter(x => x.id !== id))
+  }
+
+  async function updateOpportunityStatus(id, status) {
+    await fetch(`/api/intelligence/opportunities/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status }),
+    })
+    setAttentionItems(prev => prev.filter(x => x.id !== id))
   }
 
   // Build Eisenhower matrix — combine rel + proj insights
@@ -212,6 +224,17 @@ export default function DashboardPage() {
         .ic-btn:hover { border-color:var(--border-strong); color:var(--text); background:var(--surface-2); }
         .ic-btn-dim { opacity:.6; }
 
+        /* Attention queue */
+        .attention-list { display:flex; flex-direction:column; gap:.5rem; margin-bottom:2.25rem; }
+        .attention-card { display:grid; grid-template-columns:1fr auto; gap:.75rem; align-items:start; background:var(--surface); border:1px solid var(--border); border-radius:10px; padding:.75rem .875rem; }
+        .attention-meta { display:flex; align-items:center; gap:.4rem; flex-wrap:wrap; margin-bottom:.2rem; }
+        .attention-type { font-size:.65rem; color:var(--text-3); background:var(--surface-2); border:1px solid var(--border); border-radius:100px; padding:.08rem .4rem; text-transform:capitalize; }
+        .attention-score { font-size:.68rem; color:var(--text-3); }
+        .attention-title { font-size:.875rem; font-weight:600; color:var(--text); line-height:1.35; }
+        .attention-desc { font-size:.75rem; color:var(--text-2); line-height:1.45; margin-top:.2rem; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
+        .attention-action { font-size:.72rem; color:var(--accent); margin-top:.3rem; }
+        .attention-actions { display:flex; gap:.35rem; }
+
         /* Recent activity */
         .activity-list { display:flex; flex-direction:column; gap:.375rem; }
         .activity-item {
@@ -289,6 +312,37 @@ export default function DashboardPage() {
             </>
           )}
         </div>
+
+        {/* Attention queue */}
+        {attentionItems.length > 0 && (
+          <>
+            <div className="section-head">
+              <span className="section-title">Attention Queue</span>
+              <span className="section-count">{attentionItems.length}</span>
+            </div>
+            <div className="attention-list">
+              {attentionItems.map(item => (
+                <div className="attention-card" key={item.id}>
+                  <div>
+                    <div className="attention-meta">
+                      <span className="attention-type">{String(item.opportunity_type || item.item_type || 'opportunity').replace(/_/g, ' ')}</span>
+                      {item.primary_contact_name && <span className="ic-label">{item.primary_contact_name}</span>}
+                      {item.primary_project_name && <span className="ic-label">{item.primary_project_name}</span>}
+                      {item.expected_value_score != null && <span className="attention-score">score {Number(item.expected_value_score).toFixed(0)}</span>}
+                    </div>
+                    <div className="attention-title">{resolveGroupIds(item.title, groupsMap)}</div>
+                    {item.description && <div className="attention-desc">{resolveGroupIds(item.description, groupsMap)}</div>}
+                    {item.recommended_next_action && <div className="attention-action">Next: {item.recommended_next_action}</div>}
+                  </div>
+                  <div className="attention-actions">
+                    <button className="ic-btn" onClick={() => updateOpportunityStatus(item.id, 'actioned')} title="Mark actioned">✓</button>
+                    <button className="ic-btn ic-btn-dim" onClick={() => updateOpportunityStatus(item.id, 'dismissed')} title="Dismiss">✕</button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
 
         {/* Eisenhower matrix */}
         <div className="section-head">

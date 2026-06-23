@@ -1014,6 +1014,139 @@ app.post('/api/relationships/insights/:id/dismiss', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// GET /api/intelligence/opportunities — first-class opportunity ledger
+app.get('/api/intelligence/opportunities', async (req, res) => {
+  if (!db) return res.status(503).json({ error: 'No database' });
+  try {
+    const limit = Math.min(parseInt(req.query.limit, 10) || 50, 200);
+    const status = req.query.status || 'open';
+    const params = [];
+    const conditions = [];
+
+    if (status !== 'all') {
+      params.push(status);
+      conditions.push(`o.status = $${params.length}`);
+    }
+    if (req.query.type) {
+      params.push(req.query.type);
+      conditions.push(`o.opportunity_type = $${params.length}`);
+    }
+    if (req.query.contact_id) {
+      params.push(parseInt(req.query.contact_id, 10));
+      conditions.push(`EXISTS (
+        SELECT 1 FROM intelligence.opportunity_contacts oc
+        WHERE oc.opportunity_id = o.id AND oc.contact_id = $${params.length}
+      )`);
+    }
+    if (req.query.project_id) {
+      params.push(parseInt(req.query.project_id, 10));
+      conditions.push(`EXISTS (
+        SELECT 1 FROM intelligence.opportunity_projects op
+        WHERE op.opportunity_id = o.id AND op.project_id = $${params.length}
+      )`);
+    }
+
+    const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+    params.push(limit);
+
+    const { rows } = await db.query(`
+      SELECT o.*,
+             c.display_name AS primary_contact_name,
+             p.name AS primary_project_name,
+             COALESCE(ev.evidence_count, 0)::int AS evidence_count
+      FROM intelligence.opportunities o
+      LEFT JOIN relationships.contacts c ON c.id = o.primary_contact_id
+      LEFT JOIN projects.projects p ON p.id = o.primary_project_id
+      LEFT JOIN LATERAL (
+        SELECT COUNT(*) AS evidence_count
+        FROM intelligence.opportunity_evidence e
+        WHERE e.opportunity_id = o.id
+      ) ev ON true
+      ${where}
+      ORDER BY
+        o.expected_value_score DESC NULLS LAST,
+        CASE o.priority WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END,
+        o.last_seen_at DESC NULLS LAST,
+        o.created_at DESC
+      LIMIT $${params.length}
+    `, params);
+    res.json(rows);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// GET /api/intelligence/attention — highest-value open attention items
+app.get('/api/intelligence/attention', async (req, res) => {
+  if (!db) return res.status(503).json({ error: 'No database' });
+  try {
+    const limit = Math.min(parseInt(req.query.limit, 10) || 10, 50);
+    const { rows } = await db.query(`
+      SELECT *
+      FROM intelligence.attention_queue
+      LIMIT $1
+    `, [limit]);
+    res.json(rows);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// PATCH /api/intelligence/opportunities/:id — lifecycle/status/feedback updates
+app.patch('/api/intelligence/opportunities/:id', async (req, res) => {
+  if (!db) return res.status(503).json({ error: 'No database' });
+  const id = parseInt(req.params.id, 10);
+  if (isNaN(id)) return res.status(400).json({ error: 'Invalid id' });
+
+  const allowed = ['status','priority','recommended_next_action','snoozed_until','expires_at','feedback','feedback_note'];
+  const updates = {};
+  for (const key of allowed) if (key in req.body) updates[key] = req.body[key];
+  if (!Object.keys(updates).length) return res.status(400).json({ error: 'Nothing to update' });
+
+  const setClauses = [];
+  const values = [];
+  let idx = 1;
+  for (const [key, value] of Object.entries(updates)) {
+    setClauses.push(`${key} = $${idx++}`);
+    values.push(value);
+  }
+  if (updates.status === 'actioned') setClauses.push('actioned_at = NOW()');
+  if (updates.status === 'dismissed') setClauses.push('dismissed_at = NOW()');
+  setClauses.push('updated_at = NOW()');
+  values.push(id);
+
+  try {
+    const { rows } = await db.query(`
+      UPDATE intelligence.opportunities
+      SET ${setClauses.join(', ')}
+      WHERE id = $${idx}
+      RETURNING *
+    `, values);
+    if (!rows.length) return res.status(404).json({ error: 'Not found' });
+    res.json(rows[0]);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// POST /api/intelligence/opportunities/:id/feedback — append feedback event
+app.post('/api/intelligence/opportunities/:id/feedback', async (req, res) => {
+  if (!db) return res.status(503).json({ error: 'No database' });
+  const id = parseInt(req.params.id, 10);
+  if (isNaN(id)) return res.status(400).json({ error: 'Invalid id' });
+  const feedback = req.body?.feedback;
+  const note = req.body?.note || null;
+  if (!feedback) return res.status(400).json({ error: 'feedback is required' });
+
+  try {
+    const { rows } = await db.query(`
+      INSERT INTO intelligence.opportunity_feedback_events (opportunity_id, feedback, note)
+      VALUES ($1, $2, $3)
+      RETURNING *
+    `, [id, feedback, note]);
+    await db.query(`
+      UPDATE intelligence.opportunities
+      SET feedback = $2, feedback_note = COALESCE($3, feedback_note), updated_at = NOW()
+      WHERE id = $1
+    `, [id, feedback, note]);
+    res.json(rows[0]);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // GET /api/relationships/stats
 app.get('/api/relationships/stats', async (req, res) => {
   const stats = await relationshipsStats();
