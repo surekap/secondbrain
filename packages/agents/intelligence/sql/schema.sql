@@ -192,7 +192,8 @@ SELECT
   p.name AS primary_project_name,
   o.expires_at,
   o.last_seen_at,
-  o.created_at
+  o.created_at,
+  o.first_seen_at
 FROM intelligence.opportunities o
 LEFT JOIN relationships.contacts c ON c.id = o.primary_contact_id
 LEFT JOIN projects.projects p ON p.id = o.primary_project_id
