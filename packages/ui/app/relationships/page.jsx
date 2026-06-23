@@ -1,5 +1,5 @@
 'use client'
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { Suspense, useState, useEffect, useRef, useCallback } from 'react'
 import { useSearchParams } from 'next/navigation'
 import ResizablePanes from '../../components/ResizablePanes'
 
@@ -167,7 +167,7 @@ function TagEditor({ tags, onChange }) {
   )
 }
 
-export default function RelationshipsPage() {
+function RelationshipsPageContent() {
   const searchParams = useSearchParams()
   const autoSelectedRef = useRef(false)
 
@@ -1031,5 +1031,13 @@ export default function RelationshipsPage() {
         transition: 'opacity .2s, transform .2s',
       }}>{toast.msg}</div>
     </>
+  )
+}
+
+export default function RelationshipsPage() {
+  return (
+    <Suspense fallback={<div className="empty-state">Loading relationships…</div>}>
+      <RelationshipsPageContent />
+    </Suspense>
   )
 }

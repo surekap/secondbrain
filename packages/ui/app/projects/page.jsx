@@ -1,5 +1,5 @@
 'use client'
-import { useState, useEffect, useRef } from 'react'
+import { Suspense, useState, useEffect, useRef } from 'react'
 import { useSearchParams } from 'next/navigation'
 import ResizablePanes from '../../components/ResizablePanes'
 
@@ -71,7 +71,7 @@ function TagEditor({ tags, onChange }) {
   )
 }
 
-export default function ProjectsPage() {
+function ProjectsPageContent() {
   const searchParams = useSearchParams()
   const autoSelectedRef = useRef(false)
 
@@ -835,5 +835,13 @@ export default function ProjectsPage() {
         transition: 'opacity .2s, transform .2s',
       }}>{toast.msg}</div>
     </>
+  )
+}
+
+export default function ProjectsPage() {
+  return (
+    <Suspense fallback={<div style={{ padding: '3rem', textAlign: 'center', color: 'var(--text-3)', fontSize: '.875rem' }}>Loading projects…</div>}>
+      <ProjectsPageContent />
+    </Suspense>
   )
 }
