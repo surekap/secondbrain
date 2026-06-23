@@ -1,0 +1,11 @@
+{
+  "name": "@secondbrain/agent-intelligence",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "init-db": "psql $DATABASE_URL < sql/schema.sql"
+  },
+  "dependencies": {
+    "@secondbrain/db": "*"
+  }
+}
