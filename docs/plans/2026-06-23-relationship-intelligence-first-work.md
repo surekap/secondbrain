@@ -334,7 +334,7 @@ Eventually unify this with `system.config` / Agents UI (`system.WHATSAPP_SELF_JI
 **Verification:**
 
 ```bash
-grep -R "919830049540" -n packages/agents/relationships .env.example AGENTS.md || true
+grep -R "SELF_WA_JID_REDACTED" -n packages/agents/relationships .env.example AGENTS.md || true
 grep -R "MY_WA_JID" -n packages/agents/relationships
 node -c packages/agents/relationships/services/extractor.js
 node -c packages/agents/relationships/services/insights.js
