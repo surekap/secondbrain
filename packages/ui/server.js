@@ -1032,14 +1032,18 @@ app.get('/api/intelligence/opportunities', async (req, res) => {
       conditions.push(`o.opportunity_type = $${params.length}`);
     }
     if (req.query.contact_id) {
-      params.push(parseInt(req.query.contact_id, 10));
+      const contactId = parseInt(req.query.contact_id, 10);
+      if (isNaN(contactId)) return res.status(400).json({ error: 'Invalid contact_id' });
+      params.push(contactId);
       conditions.push(`EXISTS (
         SELECT 1 FROM intelligence.opportunity_contacts oc
         WHERE oc.opportunity_id = o.id AND oc.contact_id = $${params.length}
       )`);
     }
     if (req.query.project_id) {
-      params.push(parseInt(req.query.project_id, 10));
+      const projectId = parseInt(req.query.project_id, 10);
+      if (isNaN(projectId)) return res.status(400).json({ error: 'Invalid project_id' });
+      params.push(projectId);
       conditions.push(`EXISTS (
         SELECT 1 FROM intelligence.opportunity_projects op
         WHERE op.opportunity_id = o.id AND op.project_id = $${params.length}
@@ -1099,6 +1103,13 @@ app.patch('/api/intelligence/opportunities/:id', async (req, res) => {
   for (const key of allowed) if (key in req.body) updates[key] = req.body[key];
   if (!Object.keys(updates).length) return res.status(400).json({ error: 'Nothing to update' });
 
+  const validStatuses = new Set(['open','snoozed','actioned','dismissed','expired']);
+  const validPriorities = new Set(['high','medium','low']);
+  const validFeedback = new Set(['useful','not_useful','false_positive','too_late','too_low_value']);
+  if (updates.status && !validStatuses.has(updates.status)) return res.status(400).json({ error: 'Invalid status' });
+  if (updates.priority && !validPriorities.has(updates.priority)) return res.status(400).json({ error: 'Invalid priority' });
+  if (updates.feedback && !validFeedback.has(updates.feedback)) return res.status(400).json({ error: 'Invalid feedback' });
+
   const setClauses = [];
   const values = [];
   let idx = 1;
@@ -1130,7 +1141,9 @@ app.post('/api/intelligence/opportunities/:id/feedback', async (req, res) => {
   if (isNaN(id)) return res.status(400).json({ error: 'Invalid id' });
   const feedback = req.body?.feedback;
   const note = req.body?.note || null;
+  const validFeedback = new Set(['useful','not_useful','false_positive','too_late','too_low_value']);
   if (!feedback) return res.status(400).json({ error: 'feedback is required' });
+  if (!validFeedback.has(feedback)) return res.status(400).json({ error: 'Invalid feedback' });
 
   try {
     const { rows } = await db.query(`
