@@ -61,6 +61,15 @@ function projectOpportunityType(insightType) {
   return 'other'
 }
 
+function signalTypeForOpportunity(opportunityType) {
+  if (opportunityType === 'risk') return 'risk'
+  if (opportunityType === 'check_in') return 'event'
+  if (opportunityType === 'meeting_action' || opportunityType === 'follow_up') return 'intent'
+  if (opportunityType === 'project_match' || opportunityType === 'introduction') return 'capability'
+  if (opportunityType && opportunityType.includes('opportunity')) return 'need'
+  return 'other'
+}
+
 function sourceRefFromRelationshipInsight(insightId, insight) {
   return insight.source_ref || `relationships.insights:${insightId}`
 }
@@ -132,7 +141,44 @@ async function upsertOpportunity(input) {
     JSON.stringify(input.metadata || {}),
   ])
 
-  return rows[0]?.id || null
+  const opportunityId = rows[0]?.id || null
+  await recordSignalForOpportunity(opportunityId, input)
+  return opportunityId
+}
+
+async function recordSignalForOpportunity(opportunityId, input) {
+  if (!opportunityId) return
+  try {
+    const signalType = signalTypeForOpportunity(input.opportunity_type)
+    await db.query(`
+      INSERT INTO intelligence.signals (
+        signal_type, title, description, contact_id, project_id,
+        source_table, source_id, source_ref, occurred_at, confidence, strength, metadata
+      ) VALUES ($1, $2, $3, $4, $5, 'intelligence.opportunities', $6, $7, NOW(), $8, $9, $10::jsonb)
+      ON CONFLICT (source_table, source_id, signal_type) WHERE source_table IS NOT NULL AND source_id IS NOT NULL DO UPDATE SET
+        title = EXCLUDED.title,
+        description = EXCLUDED.description,
+        contact_id = COALESCE(EXCLUDED.contact_id, intelligence.signals.contact_id),
+        project_id = COALESCE(EXCLUDED.project_id, intelligence.signals.project_id),
+        confidence = COALESCE(EXCLUDED.confidence, intelligence.signals.confidence),
+        strength = COALESCE(EXCLUDED.strength, intelligence.signals.strength),
+        metadata = intelligence.signals.metadata || EXCLUDED.metadata,
+        updated_at = NOW()
+    `, [
+      signalType,
+      input.title,
+      input.description || null,
+      input.primary_contact_id || null,
+      input.primary_project_id || null,
+      opportunityId,
+      input.source_ref || null,
+      input.confidence ?? null,
+      input.expected_value_score ?? priorityScore(input.priority).expected,
+      JSON.stringify({ opportunity_type: input.opportunity_type || 'other' }),
+    ])
+  } catch (err) {
+    console.error('[intelligence] signal upsert failed:', err.message)
+  }
 }
 
 async function linkContacts(opportunityId, contactIds, primaryContactId) {
@@ -250,6 +296,7 @@ async function upsertFromProjectInsight(projectInsightId, projectId, insight) {
 module.exports = {
   ensureSchema,
   upsertOpportunity,
+  recordSignalForOpportunity,
   upsertFromRelationshipInsight,
   upsertFromProjectInsight,
   relationshipOpportunityType,
