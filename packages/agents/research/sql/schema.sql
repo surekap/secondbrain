@@ -1,6 +1,5 @@
 -- Research agent schema — idempotent, safe to run multiple times
-ALTER TABLE relationships.contacts ADD COLUMN IF NOT EXISTS my_role TEXT;
-ALTER TABLE relationships.contacts ADD COLUMN IF NOT EXISTS research_summary TEXT;
+-- relationships.contacts profile columns are owned by packages/agents/relationships/sql/schema.sql
 
 CREATE TABLE IF NOT EXISTS relationships.contact_research (
   id              BIGSERIAL PRIMARY KEY,

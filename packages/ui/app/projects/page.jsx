@@ -1,5 +1,5 @@
 'use client'
-import { useState, useEffect, useRef } from 'react'
+import { Suspense, useState, useEffect, useRef } from 'react'
 import { useSearchParams } from 'next/navigation'
 import ResizablePanes from '../../components/ResizablePanes'
 
@@ -71,7 +71,7 @@ function TagEditor({ tags, onChange }) {
   )
 }
 
-export default function ProjectsPage() {
+function ProjectsPageContent() {
   const searchParams = useSearchParams()
   const autoSelectedRef = useRef(false)
 
@@ -249,7 +249,7 @@ export default function ProjectsPage() {
   async function runAnalysis() {
     try {
       const r = await apiFetch('GET', '/api/projects/run')
-      showToast(r.message || 'Analysis triggered')
+      showToast(r.message || r.error || 'Analysis status unavailable')
     } catch { showToast('Agent not running — start it first') }
   }
 
@@ -506,7 +506,7 @@ export default function ProjectsPage() {
               <div className="grid-header">
                 <h1 className="grid-heading">Projects</h1>
                 <div className="grid-header-actions">
-                  <button className="btn btn-ghost btn-sm" onClick={runAnalysis}>Run Analysis</button>
+                  <button className="btn btn-ghost btn-sm" onClick={runAnalysis}>Analysis Status</button>
                 </div>
               </div>
               <div className="stats-bar">
@@ -835,5 +835,13 @@ export default function ProjectsPage() {
         transition: 'opacity .2s, transform .2s',
       }}>{toast.msg}</div>
     </>
+  )
+}
+
+export default function ProjectsPage() {
+  return (
+    <Suspense fallback={<div style={{ padding: '3rem', textAlign: 'center', color: 'var(--text-3)', fontSize: '.875rem' }}>Loading projects…</div>}>
+      <ProjectsPageContent />
+    </Suspense>
   )
 }
