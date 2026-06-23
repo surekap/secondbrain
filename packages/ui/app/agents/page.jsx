@@ -342,6 +342,54 @@ function EmailConfigForm({ config, onSave }) {
   )
 }
 
+function QuickModelSwitcher({ onSwitch }) {
+  const presets = {
+    latest: {
+      label: 'Latest',
+      tooltip: 'Newest available models',
+      models: { anthropic: 'claude-opus-4-8', openai: 'gpt-4o' }
+    },
+    balanced: {
+      label: 'Balanced',
+      tooltip: 'Good speed/quality tradeoff',
+      models: { anthropic: 'claude-sonnet-4-6', openai: 'gpt-4o' }
+    },
+    budget: {
+      label: 'Budget',
+      tooltip: 'Fastest/cheapest',
+      models: { anthropic: 'claude-haiku-4-5-20251001', openai: 'gpt-4o-mini' }
+    },
+  }
+
+  return (
+    <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem' }}>
+      {Object.entries(presets).map(([key, preset]) => (
+        <button
+          key={key}
+          type="button"
+          onClick={() => onSwitch(preset.models)}
+          title={preset.tooltip}
+          style={{
+            padding: '0.4rem 0.8rem',
+            fontSize: '0.75rem',
+            fontWeight: 500,
+            background: 'var(--bg-2, #f5f5f5)',
+            border: '1px solid var(--border)',
+            borderRadius: 4,
+            cursor: 'pointer',
+            transition: 'all 0.2s',
+            color: 'var(--text)',
+          }}
+          onMouseEnter={e => e.target.style.background = 'var(--bg-3, #e8e8e8)'}
+          onMouseLeave={e => e.target.style.background = 'var(--bg-2, #f5f5f5)'}
+        >
+          {preset.label}
+        </button>
+      ))}
+    </div>
+  )
+}
+
 function LimitlessConfigForm({ config, onSave }) {
   const [limitlessApiKey, setLimitlessApiKey] = useState(config.LIMITLESS_API_KEY || '')
   const [fetchCron, setFetchCron] = useState(config.FETCH_INTERVAL_CRON || '*/5 * * * *')
@@ -394,6 +442,14 @@ function LimitlessConfigForm({ config, onSave }) {
       </div>
       <div className="divider" />
       <div className="form-section-title">AI Provider <span style={{ fontWeight: 400, fontSize: '.7rem', color: 'var(--text-3)', textTransform: 'none', letterSpacing: 0 }}>(applies to all agents — fallback is automatic)</span></div>
+      {aiProvider !== 'claude-cli' && (
+        <QuickModelSwitcher
+          onSwitch={(models) => {
+            setAnthropicModel(models.anthropic)
+            setOpenaiModel(models.openai)
+          }}
+        />
+      )}
       <div className="form-row">
         <label>Preferred provider</label>
         <select value={aiProvider} onChange={e => setAiProvider(e.target.value)}>
