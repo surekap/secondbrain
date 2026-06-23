@@ -295,7 +295,7 @@ git commit -m "fix: allow manual editing of contact relationship role"
 **Current issue:**
 
 ```js
-const MY_WA_JID = '919830049540@c.us'
+const MY_WA_JID = '[REDACTED]@c.us'
 ```
 
 `MY_WA_JID` is exported by `extractor.js` and imported by `insights.js`. Do not turn it into a function unless every call site is updated.
