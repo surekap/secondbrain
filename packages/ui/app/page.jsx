@@ -21,6 +21,24 @@ function fmtDate(iso) {
   return d.toLocaleDateString([], { month: 'short', day: 'numeric' })
 }
 
+function fmtAge(iso) {
+  if (!iso) return ''
+  const d = new Date(iso)
+  if (isNaN(d)) return ''
+  const diff = Math.max(0, Date.now() - d.getTime())
+  const min = Math.floor(diff / 60000)
+  if (min < 1) return 'just now'
+  if (min < 60) return `${min}m ago`
+  const hrs = Math.floor(min / 60)
+  if (hrs < 24) return `${hrs}h ago`
+  const days = Math.floor(hrs / 24)
+  if (days < 30) return `${days}d ago`
+  const months = Math.floor(days / 30)
+  if (months < 12) return `${months}mo ago`
+  const years = Math.floor(days / 365)
+  return `${years}y ago`
+}
+
 // Map insight priority + type to Eisenhower quadrant
 // Q1 = Urgent + Important (Do First)
 // Q2 = Not Urgent + Important (Schedule)
@@ -230,6 +248,8 @@ export default function DashboardPage() {
         .attention-meta { display:flex; align-items:center; gap:.4rem; flex-wrap:wrap; margin-bottom:.2rem; }
         .attention-type { font-size:.65rem; color:var(--text-3); background:var(--surface-2); border:1px solid var(--border); border-radius:100px; padding:.08rem .4rem; text-transform:capitalize; }
         .attention-score { font-size:.68rem; color:var(--text-3); }
+        .attention-age { font-size:.68rem; color:var(--text-3); }
+        .attention-age-strong { color:var(--text); font-weight:600; }
         .attention-title { font-size:.875rem; font-weight:600; color:var(--text); line-height:1.35; }
         .attention-desc { font-size:.75rem; color:var(--text-2); line-height:1.45; margin-top:.2rem; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
         .attention-action { font-size:.72rem; color:var(--accent); margin-top:.3rem; }
@@ -329,6 +349,14 @@ export default function DashboardPage() {
                       {item.primary_contact_name && <span className="ic-label">{item.primary_contact_name}</span>}
                       {item.primary_project_name && <span className="ic-label">{item.primary_project_name}</span>}
                       {item.expected_value_score != null && <span className="attention-score">score {Number(item.expected_value_score).toFixed(0)}</span>}
+                      {(item.first_seen_at || item.created_at) && (
+                        <span className="attention-age">
+                          first seen <span className="attention-age-strong">{fmtAge(item.first_seen_at || item.created_at)}</span>
+                        </span>
+                      )}
+                      {item.last_seen_at && item.last_seen_at !== (item.first_seen_at || item.created_at) && (
+                        <span className="attention-age">updated {fmtAge(item.last_seen_at)}</span>
+                      )}
                     </div>
                     <div className="attention-title">{resolveGroupIds(item.title, groupsMap)}</div>
                     {item.description && <div className="attention-desc">{resolveGroupIds(item.description, groupsMap)}</div>}
