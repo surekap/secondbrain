@@ -2,6 +2,7 @@
 
 const llm = require('../../shared/llm')
 const db        = require('@secondbrain/db')
+const intelligence = require('../../intelligence')
 
 function parseJSON(text) {
   const clean = text.replace(/^```(?:json)?\n?/m, '').replace(/\n?```$/m, '').trim()
@@ -95,15 +96,19 @@ Rules:
 
       for (const insight of result.insights.slice(0, 5)) {
         try {
-          await db.query(`
+          const { rows } = await db.query(`
             INSERT INTO projects.project_insights (project_id, insight_type, content, priority)
             VALUES ($1, $2, $3, $4)
+            RETURNING id
           `, [
             project.id,
             insight.insight_type || 'status',
             insight.content      || '',
             insight.priority     || 'medium',
           ])
+          if (rows[0]?.id) {
+            await intelligence.upsertFromProjectInsight(rows[0].id, project.id, insight)
+          }
         } catch (err) {
           // ignore
         }

@@ -10,6 +10,7 @@ const extractor     = require('./services/extractor')
 const analyzer      = require('./services/analyzer')
 const insights      = require('./services/insights')
 const opportunities = require('./services/opportunities')
+const intelligence   = require('../intelligence')
 const batching      = require('../shared/batching')
 const caching       = require('../shared/caching')
 
@@ -224,7 +225,10 @@ async function upsertInsight(contactId, insightData) {
           AND is_dismissed = false
         LIMIT 1
       `, [insightData.source_ref])
-      if (exists.length > 0) return exists[0].id
+      if (exists.length > 0) {
+        await intelligence.upsertFromRelationshipInsight(exists[0].id, contactId, insightData)
+        return exists[0].id
+      }
     }
 
     const contactIds = Array.isArray(insightData.contact_ids) ? insightData.contact_ids : []
@@ -243,7 +247,9 @@ async function upsertInsight(contactId, insightData) {
       insightData.source_ref || null,
       contactIds,
     ])
-    return rows[0]?.id || null
+    const insightId = rows[0]?.id || null
+    if (insightId) await intelligence.upsertFromRelationshipInsight(insightId, contactId, insightData)
+    return insightId
   } catch (err) {
     console.error('[index] upsertInsight error:', err.message)
     return null
