@@ -377,6 +377,7 @@ async function startAgent(id) {
   const proc = spawn(process.execPath, [def.entrypoint], {
     env:   { ...process.env, ...extraEnv },
     stdio: ['ignore', 'pipe', 'pipe'],
+    detached: true,
   });
 
   // Rotate log file on fresh start
@@ -392,6 +393,11 @@ async function startAgent(id) {
   try { fs.writeFileSync(pidFile(id), String(proc.pid)); } catch {}
 
   appendLog(id, 'system', `[${def.name}] started (pid ${proc.pid})`);
+
+  // Put agents in their own process group so restarting the UI/API server does
+  // not SIGINT/SIGTERM long-running analysis jobs. Recovery on the next server
+  // boot uses the PID file above and a ps scan fallback.
+  proc.unref();
 
   proc.stdout.on('data', d => {
     const text = d.toString();
@@ -673,7 +679,7 @@ app.get('/api/agents', async (req, res) => {
       name:        def.name,
       description: def.description,
       status,
-      pid:         entry.proc ? entry.pid : null,
+      pid:         entry.pid || null,
       startTime:   entry.startTime  || null,
       stoppedAt:   entry.stoppedAt  || null,
       exitCode:    entry.exitCode   ?? null,

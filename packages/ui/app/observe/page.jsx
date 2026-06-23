@@ -57,9 +57,9 @@ function ProgressBar({ completed, total }) {
 async function apiFetch(path) {
   try {
     const r = await fetch(path)
-    if (!r.ok) return {}
+    if (!r.ok) return { _error: `${r.status} ${r.statusText || 'request failed'}` }
     return r.json()
-  } catch { return {} }
+  } catch (err) { return { _error: err?.message || 'request failed' } }
 }
 
 // ── View: Overview ────────────────────────────────────────────────────────────
@@ -439,10 +439,18 @@ export default function ObservePage() {
     fetchQuality()
   }
 
+  const observeError = [sysData, agentsData, alertsData, modelsData, tracesData, qualityData]
+    .find(d => d?._error)?._error
+
   return (
     <div className={styles.container}>
       <h1 className={styles.heading}>Observe</h1>
       <p className={styles.desc}>Live telemetry — agents, models, traces, quality</p>
+      {observeError && (
+        <div className={styles.errorBanner}>
+          Observe API unavailable: <code>{observeError}</code>. Start it with <code>npm run observe</code> or <code>npm run ui:dev</code>.
+        </div>
+      )}
       <div className={styles.tabs}>
         {VIEWS.map(v => (
           <button
