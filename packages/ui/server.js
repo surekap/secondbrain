@@ -12,6 +12,8 @@ const { embed, toSql, getEmbeddingConfig } = require('./services/embedder');
 const { getProviderDefinitions, getStaticModels, DEFAULT_OLLAMA_BASE_URL } = require('../agents/shared/model-catalog');
 const { listOllamaModelOptions } = require('../agents/shared/ollama');
 const { getAvailableModels } = require('../agents/shared/model-fetcher');
+const { createObserveRouter } = require('../observe/routes');
+const observeAlerts = require('../observe/alerts');
 
 // ── Bootstrap ─────────────────────────────────────────────────────────────────
 
@@ -642,6 +644,7 @@ function readGmailAccounts(env) {
 
 const app = express();
 app.use(express.json());
+app.use('/api/observe', createObserveRouter(db));
 
 // ── Media serving ─────────────────────────────────────────────────────────────
 app.get('/api/media/wa/:msgId', async (req, res) => {
@@ -2117,8 +2120,21 @@ async function startServer() {
   const PORT = process.env.UI_PORT || 4001;
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`\n  secondbrain UI → http://localhost:${PORT}\n`);
-    if (db) indexer.start(db);
+    if (db) {
+      indexer.start(db);
+      observeAlerts.start(db);
+    }
   });
 }
 
 startServer();
+
+function shutdown() {
+  try { observeAlerts.stop(); } catch {}
+  try { indexer.stop?.(); } catch {}
+  try { db?.end?.(); } catch {}
+  process.exit(0);
+}
+
+process.on('SIGINT', shutdown);
+process.on('SIGTERM', shutdown);

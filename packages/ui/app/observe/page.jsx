@@ -382,9 +382,9 @@ export default function ObservePage() {
 
   const fetchOverview = useCallback(async () => {
     const [sys, agents, alerts] = await Promise.all([
-      apiFetch('/observe-api/api/system'),
-      apiFetch('/observe-api/api/agents'),
-      apiFetch('/observe-api/api/alerts'),
+      apiFetch('/api/observe/system'),
+      apiFetch('/api/observe/agents'),
+      apiFetch('/api/observe/alerts'),
     ])
     setSysData(sys)
     setAgentsData(agents)
@@ -396,30 +396,29 @@ export default function ObservePage() {
     if (filters.agent)          params.set('agent',   filters.agent)
     if (filters.model)          params.set('model',   filters.model)
     if (filters.success !== '') params.set('success', filters.success)
-    setTracesData(await apiFetch(`/observe-api/api/requests?${params}`))
+    setTracesData(await apiFetch(`/api/observe/requests?${params}`))
   }, [])
 
   const fetchQuality = useCallback(async () => {
     const [q, t] = await Promise.all([
-      apiFetch('/observe-api/api/quality'),
-      apiFetch('/observe-api/api/requests?limit=20'),
+      apiFetch('/api/observe/quality'),
+      apiFetch('/api/observe/requests?limit=20'),
     ])
     setQualityData({ comparison: q.comparison || [], recentTraces: t.requests || [] })
   }, [])
 
   useEffect(() => {
     if (view === 'overview') fetchOverview()
-    else if (view === 'agents')  apiFetch('/observe-api/api/agents').then(setAgentsData)
-    else if (view === 'models')  apiFetch('/observe-api/api/models').then(setModelsData)
+    else if (view === 'agents')  apiFetch('/api/observe/agents').then(setAgentsData)
+    else if (view === 'models')  apiFetch('/api/observe/models').then(setModelsData)
     else if (view === 'traces')  fetchTraces(traceFilters)
     else if (view === 'quality') fetchQuality()
   }, [view, fetchOverview, fetchTraces, fetchQuality])
 
-  // SSE connects directly to the observe port — avoids Next.js proxy buffering issues
+  // SSE uses the same API process as the rest of the dashboard.
   useEffect(() => {
     if (typeof window === 'undefined') return
-    const url = `${window.location.protocol}//${window.location.hostname}:${process.env.NEXT_PUBLIC_OBSERVE_PORT || 4002}/api/stream`
-    const es = new EventSource(url)
+    const es = new EventSource('/api/observe/stream')
     es.onmessage = () => { if (viewRef.current === 'overview') fetchOverview() }
     es.onerror   = () => es.close()
     return () => es.close()
@@ -431,7 +430,7 @@ export default function ObservePage() {
   }
 
   async function handleRate(requestId, scoreLabel) {
-    await fetch('/observe-api/api/quality/rate', {
+    await fetch('/api/observe/quality/rate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ requestId, scoreLabel }),
@@ -448,7 +447,7 @@ export default function ObservePage() {
       <p className={styles.desc}>Live telemetry — agents, models, traces, quality</p>
       {observeError && (
         <div className={styles.errorBanner}>
-          Observe API unavailable: <code>{observeError}</code>. Start it with <code>npm run observe</code> or <code>npm run ui:dev</code>.
+          Observe API unavailable: <code>{observeError}</code>. Restart <code>npm run ui:dev</code> so the integrated API is serving <code>/api/observe</code>.
         </div>
       )}
       <div className={styles.tabs}>

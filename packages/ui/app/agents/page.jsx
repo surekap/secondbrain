@@ -1210,7 +1210,7 @@ export default function AgentsPage() {
         <h1 className="page-heading">Configure <em>your agents</em></h1>
         <p className="page-desc">Start, stop, and configure each background agent from one place.</p>
         <a
-          href="http://localhost:4002"
+          href="/observe"
           target="_blank"
           rel="noopener noreferrer"
           style={{

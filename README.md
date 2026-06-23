@@ -308,7 +308,7 @@ Import ChatGPT and Gemini conversation exports into the `ai` schema.
  |                    Observability                         |
  | Telemetry SDK → Buffer → Collector → telemetry.*        |
  | Sampler (powermetrics, process stats, ollama ps)         |
- | Observe Dashboard (port 4002)                            |
+ | Observe UI (/observe) + API (/api/observe/* via 4001)    |
  +----------------------------------------------------------+
 ```
 
@@ -341,7 +341,7 @@ packages/
 ├── telemetry-buffer/       In-memory + disk-spill queue (no silent drops)
 ├── collector/              Drains spill files to DB; computes ETAs and work efficiency
 ├── sampler/                macOS system sampler (powermetrics, process stats, ollama ps)
-├── observe/                Observability dashboard + API (port 4002)
+├── observe/                Observability routes + optional standalone server
 └── ui/
     ├── app/                Next.js frontend (port 4000)
     ├── services/           Search / embeddings background services
@@ -359,7 +359,7 @@ packages/
 npm run ui
 ```
 
-Starts the UI plus API / agent-control server.
+Starts the UI plus API / agent-control server, including `/api/observe/*`.
 
 ### Development mode
 
@@ -367,7 +367,7 @@ Starts the UI plus API / agent-control server.
 npm run ui:dev
 ```
 
-Runs the same stack with Next.js dev mode.
+Runs the same stack with Next.js dev mode, including `/api/observe/*`.
 
 ### Individual agents
 
@@ -387,12 +387,12 @@ In normal usage, you can start and stop agents from `/agents` instead of using t
 ### Observability
 
 ```bash
-npm run observe          # observability dashboard on http://localhost:4002
 npm run collector        # replays spilled telemetry events; computes ETAs
 sudo npm run sampler     # system sampler — requires sudo for powermetrics (macOS)
+npm run observe          # optional standalone legacy observe API/dashboard on http://localhost:4002
 ```
 
-The observe dashboard shows live agent runs, LLM request traces, per-model token stats, quality scores, system health (CPU/GPU/power/thermals), and embedding indexer progress. All agents write telemetry through an in-memory buffer that drains to `telemetry.*` in Postgres every 5 seconds.
+The primary observe dashboard is `/observe` in the main UI. Its API is mounted inside the main Express server at `/api/observe/*` (port 4001), so normal `npm run ui` / `npm run ui:dev` startup is enough. The observe dashboard shows live agent runs, LLM request traces, per-model token stats, quality scores, system health (CPU/GPU/power/thermals), and embedding indexer progress. All agents write telemetry through an in-memory buffer that drains to `telemetry.*` in Postgres every 5 seconds.
 
 ---
 
