@@ -1032,6 +1032,93 @@ function parsePositiveIntQuery(value, fallback, max) {
   return Math.min(parsed, max)
 }
 
+// GET /api/intelligence/graph/summary — entity graph readiness summary
+app.get('/api/intelligence/graph/summary', async (req, res) => {
+  if (!db) return res.status(503).json({ error: 'No database' });
+  try {
+    const { rows } = await db.query(`
+      SELECT
+        (SELECT COUNT(*)::int FROM intelligence.organizations) AS organizations,
+        (SELECT COUNT(*)::int FROM intelligence.entity_aliases) AS entity_aliases,
+        (SELECT COUNT(*)::int FROM intelligence.contact_organizations) AS contact_organizations,
+        (SELECT COUNT(*)::int FROM intelligence.topics) AS topics,
+        (SELECT COUNT(*)::int FROM intelligence.object_topics) AS object_topics,
+        (SELECT COUNT(*)::int FROM relationships.contacts WHERE relationship_tier IS NOT NULL) AS tiered_contacts,
+        (SELECT COUNT(*)::int FROM relationships.contacts WHERE next_suggested_touch_at IS NOT NULL) AS contacts_with_next_touch
+    `);
+    res.json(rows[0]);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// GET /api/intelligence/organizations — organization/entity graph surface
+app.get('/api/intelligence/organizations', async (req, res) => {
+  if (!db) return res.status(503).json({ error: 'No database' });
+  try {
+    const limit = parsePositiveIntQuery(req.query.limit, 50, 200);
+    if (limit === null) return res.status(400).json({ error: 'Invalid limit' });
+    const params = [];
+    const conditions = [];
+    if (req.query.q) {
+      params.push(`%${String(req.query.q).trim().toLowerCase()}%`);
+      conditions.push(`(LOWER(o.name) LIKE $${params.length} OR LOWER(COALESCE(o.domain, '')) LIKE $${params.length})`);
+    }
+    const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+    params.push(limit);
+    const { rows } = await db.query(`
+      SELECT o.*,
+             COALESCE(co.contact_count, 0)::int AS contact_count,
+             COALESCE(co.key_contacts, '[]'::json) AS key_contacts
+      FROM intelligence.organizations o
+      LEFT JOIN LATERAL (
+        SELECT COUNT(*) AS contact_count,
+               JSON_AGG(JSON_BUILD_OBJECT('id', c.id, 'name', c.display_name, 'role', x.role) ORDER BY c.display_name) FILTER (WHERE c.id IS NOT NULL) AS key_contacts
+        FROM intelligence.contact_organizations x
+        LEFT JOIN relationships.contacts c ON c.id = x.contact_id
+        WHERE x.organization_id = o.id
+      ) co ON true
+      ${where}
+      ORDER BY o.strategic_importance_score DESC NULLS LAST, contact_count DESC, o.name ASC
+      LIMIT $${params.length}
+    `, params);
+    res.json(rows);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// GET /api/intelligence/topics — global topic ontology surface
+app.get('/api/intelligence/topics', async (req, res) => {
+  if (!db) return res.status(503).json({ error: 'No database' });
+  try {
+    const limit = parsePositiveIntQuery(req.query.limit, 50, 200);
+    if (limit === null) return res.status(400).json({ error: 'Invalid limit' });
+    const params = [];
+    const conditions = [];
+    if (req.query.q) {
+      params.push(`%${String(req.query.q).trim().toLowerCase()}%`);
+      conditions.push(`LOWER(t.name) LIKE $${params.length}`);
+    }
+    if (req.query.type) {
+      params.push(req.query.type);
+      conditions.push(`t.topic_type = $${params.length}`);
+    }
+    const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+    params.push(limit);
+    const { rows } = await db.query(`
+      SELECT t.*,
+             COALESCE(ot.link_count, 0)::int AS link_count
+      FROM intelligence.topics t
+      LEFT JOIN LATERAL (
+        SELECT COUNT(*) AS link_count
+        FROM intelligence.object_topics ot
+        WHERE ot.topic_id = t.id
+      ) ot ON true
+      ${where}
+      ORDER BY t.strategic_weight DESC NULLS LAST, link_count DESC, t.name ASC
+      LIMIT $${params.length}
+    `, params);
+    res.json(rows);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // GET /api/intelligence/opportunities — first-class opportunity ledger
 app.get('/api/intelligence/opportunities', async (req, res) => {
   if (!db) return res.status(503).json({ error: 'No database' });

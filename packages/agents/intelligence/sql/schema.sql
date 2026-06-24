@@ -3,6 +3,118 @@
 
 CREATE SCHEMA IF NOT EXISTS intelligence;
 
+-- ── Entity graph foundation ──────────────────────────────────────────────────
+-- Pragmatic relationship intelligence graph. Contacts remain canonical people in
+-- relationships.contacts; these tables add organizations, aliases, topics, and
+-- typed links without introducing a graph database.
+
+ALTER TABLE relationships.contacts
+  ADD COLUMN IF NOT EXISTS identity_confidence NUMERIC(5,4)
+    CHECK (identity_confidence IS NULL OR (identity_confidence >= 0 AND identity_confidence <= 1)),
+  ADD COLUMN IF NOT EXISTS relationship_tier TEXT
+    CHECK (relationship_tier IS NULL OR relationship_tier IN ('tier_1','tier_2','tier_3','noise','unknown')),
+  ADD COLUMN IF NOT EXISTS strategic_importance_score NUMERIC(6,2),
+  ADD COLUMN IF NOT EXISTS preferred_cadence_days INTEGER
+    CHECK (preferred_cadence_days IS NULL OR preferred_cadence_days > 0),
+  ADD COLUMN IF NOT EXISTS dormant_threshold_days INTEGER
+    CHECK (dormant_threshold_days IS NULL OR dormant_threshold_days > 0),
+  ADD COLUMN IF NOT EXISTS next_suggested_touch_at TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS intro_sensitivity TEXT
+    CHECK (intro_sensitivity IS NULL OR intro_sensitivity IN ('low','medium','high','do_not_intro','unknown')),
+  ADD COLUMN IF NOT EXISTS do_not_contact_unless TEXT;
+
+CREATE INDEX IF NOT EXISTS contacts_relationship_tier_idx
+  ON relationships.contacts (relationship_tier)
+  WHERE relationship_tier IS NOT NULL;
+CREATE INDEX IF NOT EXISTS contacts_next_touch_idx
+  ON relationships.contacts (next_suggested_touch_at)
+  WHERE next_suggested_touch_at IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS intelligence.organizations (
+  id                         BIGSERIAL PRIMARY KEY,
+  name                       TEXT NOT NULL,
+  normalized_name            TEXT GENERATED ALWAYS AS (LOWER(REGEXP_REPLACE(TRIM(name), '[[:space:]]+', ' ', 'g'))) STORED,
+  domain                     TEXT,
+  sector                     TEXT,
+  geography                  TEXT,
+  relationship_to_prateek    TEXT,
+  strategic_importance_score NUMERIC(6,2),
+  tags                       TEXT[] DEFAULT '{}',
+  metadata                   JSONB DEFAULT '{}',
+  created_at                 TIMESTAMPTZ DEFAULT NOW(),
+  updated_at                 TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE (normalized_name)
+);
+CREATE INDEX IF NOT EXISTS organizations_domain_idx
+  ON intelligence.organizations (LOWER(domain))
+  WHERE domain IS NOT NULL;
+CREATE INDEX IF NOT EXISTS organizations_tags_idx
+  ON intelligence.organizations USING GIN (tags);
+
+CREATE TABLE IF NOT EXISTS intelligence.entity_aliases (
+  id             BIGSERIAL PRIMARY KEY,
+  entity_type    TEXT NOT NULL CHECK (entity_type IN ('contact','organization','project','topic','group','event','other')),
+  entity_id      TEXT NOT NULL,
+  alias          TEXT NOT NULL,
+  normalized_alias TEXT GENERATED ALWAYS AS (LOWER(REGEXP_REPLACE(TRIM(alias), '[[:space:]]+', ' ', 'g'))) STORED,
+  source         TEXT,
+  confidence     NUMERIC(5,4) CHECK (confidence IS NULL OR (confidence >= 0 AND confidence <= 1)),
+  metadata       JSONB DEFAULT '{}',
+  created_at     TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE (entity_type, entity_id, normalized_alias)
+);
+CREATE INDEX IF NOT EXISTS entity_aliases_lookup_idx
+  ON intelligence.entity_aliases (entity_type, normalized_alias);
+
+CREATE TABLE IF NOT EXISTS intelligence.contact_organizations (
+  id                BIGSERIAL PRIMARY KEY,
+  contact_id       BIGINT NOT NULL REFERENCES relationships.contacts(id) ON DELETE CASCADE,
+  organization_id  BIGINT NOT NULL REFERENCES intelligence.organizations(id) ON DELETE CASCADE,
+  role             TEXT,
+  relationship     TEXT CHECK (relationship IS NULL OR relationship IN ('employee','founder','owner','advisor','investor','customer','supplier','partner','board','alumni','other')),
+  is_current       BOOLEAN DEFAULT true,
+  confidence       NUMERIC(5,4) CHECK (confidence IS NULL OR (confidence >= 0 AND confidence <= 1)),
+  source_ref       TEXT,
+  created_at       TIMESTAMPTZ DEFAULT NOW(),
+  updated_at       TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS contact_organizations_unique_idx
+  ON intelligence.contact_organizations (contact_id, organization_id, (COALESCE(relationship, 'other')));
+CREATE INDEX IF NOT EXISTS contact_organizations_org_idx
+  ON intelligence.contact_organizations (organization_id, is_current);
+
+CREATE TABLE IF NOT EXISTS intelligence.topics (
+  id                BIGSERIAL PRIMARY KEY,
+  name              TEXT NOT NULL,
+  normalized_name   TEXT GENERATED ALWAYS AS (LOWER(REGEXP_REPLACE(TRIM(name), '[[:space:]]+', ' ', 'g'))) STORED,
+  topic_type        TEXT CHECK (topic_type IS NULL OR topic_type IN ('domain','sector','geography','event','project','personal','investment','operations','other')) DEFAULT 'other',
+  parent_topic_id   BIGINT REFERENCES intelligence.topics(id) ON DELETE SET NULL,
+  description       TEXT,
+  strategic_weight  NUMERIC(6,2),
+  metadata          JSONB DEFAULT '{}',
+  created_at        TIMESTAMPTZ DEFAULT NOW(),
+  updated_at        TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE (normalized_name)
+);
+CREATE INDEX IF NOT EXISTS topics_type_idx
+  ON intelligence.topics (topic_type);
+
+CREATE TABLE IF NOT EXISTS intelligence.object_topics (
+  id             BIGSERIAL PRIMARY KEY,
+  topic_id       BIGINT NOT NULL REFERENCES intelligence.topics(id) ON DELETE CASCADE,
+  object_type    TEXT NOT NULL CHECK (object_type IN ('contact','organization','project','opportunity','group','communication','message','email','lifelog','other')),
+  object_id      TEXT NOT NULL,
+  role           TEXT CHECK (role IS NULL OR role IN ('primary','secondary','mentioned','need','offer','risk','interest','other')) DEFAULT 'mentioned',
+  confidence     NUMERIC(5,4) CHECK (confidence IS NULL OR (confidence >= 0 AND confidence <= 1)),
+  source_ref     TEXT,
+  metadata       JSONB DEFAULT '{}',
+  created_at     TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS object_topics_unique_idx
+  ON intelligence.object_topics (topic_id, object_type, object_id, (COALESCE(role, 'mentioned')));
+CREATE INDEX IF NOT EXISTS object_topics_object_idx
+  ON intelligence.object_topics (object_type, object_id);
+
 -- ── Opportunity ledger ───────────────────────────────────────────────────────
 -- Durable opportunity/action candidates across relationships, projects, groups,
 -- research, and future signal-matching jobs. Existing relationships.insights and
