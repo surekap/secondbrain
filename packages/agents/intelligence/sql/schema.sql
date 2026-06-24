@@ -307,6 +307,8 @@ WITH scored AS (
     o.last_seen_at,
     o.created_at,
     o.first_seen_at,
+    ev.first_occurred_at AS source_first_seen_at,
+    ev.last_occurred_at AS source_last_seen_at,
     COALESCE(ev.evidence_count, 0)::int AS evidence_count,
     LOWER(REGEXP_REPLACE(COALESCE(o.title, ''), '[[:space:]]+', ' ', 'g')) AS normalized_title,
     (
@@ -314,20 +316,22 @@ WITH scored AS (
       - CASE WHEN LOWER(o.title) LIKE 're-engage %' THEN 25 ELSE 0 END
       - CASE WHEN COALESCE(ev.evidence_count, 0) = 0 THEN 20 WHEN COALESCE(ev.evidence_count, 0) = 1 THEN 6 ELSE 0 END
       - CASE WHEN NULLIF(TRIM(COALESCE(o.recommended_next_action, '')), '') IS NULL THEN 8 ELSE 0 END
-      - CASE WHEN o.last_seen_at < NOW() - INTERVAL '30 days' THEN 10 ELSE 0 END
+      - CASE WHEN COALESCE(ev.last_occurred_at, o.last_seen_at) < NOW() - INTERVAL '30 days' THEN 10 ELSE 0 END
     )::numeric(8,2) AS attention_score,
     ARRAY_REMOVE(ARRAY[
       CASE WHEN COALESCE(ev.evidence_count, 0) = 0 THEN 'no_evidence' END,
       CASE WHEN COALESCE(ev.evidence_count, 0) = 1 THEN 'single_evidence' END,
       CASE WHEN LOWER(o.title) LIKE 're-engage %' THEN 'generic_reengage' END,
       CASE WHEN NULLIF(TRIM(COALESCE(o.recommended_next_action, '')), '') IS NULL THEN 'missing_next_action' END,
-      CASE WHEN o.last_seen_at < NOW() - INTERVAL '30 days' THEN 'stale' END
+      CASE WHEN COALESCE(ev.last_occurred_at, o.last_seen_at) < NOW() - INTERVAL '30 days' THEN 'stale' END
     ], NULL)::text[] AS quality_flags
   FROM intelligence.opportunities o
   LEFT JOIN relationships.contacts c ON c.id = o.primary_contact_id
   LEFT JOIN projects.projects p ON p.id = o.primary_project_id
   LEFT JOIN LATERAL (
-    SELECT COUNT(*) AS evidence_count
+    SELECT COUNT(*) AS evidence_count,
+           MIN(e.occurred_at) FILTER (WHERE e.occurred_at IS NOT NULL) AS first_occurred_at,
+           MAX(e.occurred_at) FILTER (WHERE e.occurred_at IS NOT NULL) AS last_occurred_at
     FROM intelligence.opportunity_evidence e
     WHERE e.opportunity_id = o.id
   ) ev ON true
@@ -339,7 +343,7 @@ WITH scored AS (
     scored.*,
     ROW_NUMBER() OVER (
       PARTITION BY normalized_title
-      ORDER BY attention_score DESC NULLS LAST, last_seen_at DESC NULLS LAST, created_at DESC
+      ORDER BY attention_score DESC NULLS LAST, COALESCE(source_last_seen_at, last_seen_at) DESC NULLS LAST, created_at DESC
     ) AS duplicate_rank
   FROM scored
 )
@@ -363,6 +367,8 @@ SELECT
   last_seen_at,
   created_at,
   first_seen_at,
+  source_first_seen_at,
+  source_last_seen_at,
   evidence_count,
   attention_score,
   quality_flags
@@ -371,5 +377,5 @@ WHERE duplicate_rank = 1
 ORDER BY
   attention_score DESC NULLS LAST,
   CASE priority WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END,
-  last_seen_at DESC NULLS LAST,
+  COALESCE(source_last_seen_at, last_seen_at) DESC NULLS LAST,
   created_at DESC;
