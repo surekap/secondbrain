@@ -54,6 +54,14 @@ function decorateRun(row) {
   }
 }
 
+function parseBoolean(value, fallback = false) {
+  if (value == null || value === '') return fallback
+  if (typeof value === 'boolean') return value
+  if (['true', '1', 'yes'].includes(String(value).toLowerCase())) return true
+  if (['false', '0', 'no'].includes(String(value).toLowerCase())) return false
+  return null
+}
+
 function createObserveRouter(db) {
   const router = express.Router()
 
@@ -220,6 +228,79 @@ function createObserveRouter(db) {
       res.json({
         ...decorateSystemHealth(latest || null),
         stale_running_runs: staleRuns.map(decorateRun),
+      })
+    } catch (err) {
+      res.status(500).json({ error: err.message })
+    }
+  })
+
+
+
+  // ── Agent-run cleanup: close old idle telemetry rows ────────────────────────
+  router.post('/agent-runs/cleanup-stale', async (req, res) => {
+    const olderThanHours = parsePositiveInt(req.body?.older_than_hours ?? req.query.older_than_hours, 6, 24 * 30)
+    const inactiveMinutes = parsePositiveInt(req.body?.inactive_minutes ?? req.query.inactive_minutes, 10, 24 * 60)
+    const limit = parsePositiveInt(req.body?.limit ?? req.query.limit, 100, 1000)
+    const dryRun = parseBoolean(req.body?.dry_run ?? req.query.dry_run, true)
+    if (olderThanHours === null) return res.status(400).json({ error: 'Invalid older_than_hours' })
+    if (inactiveMinutes === null) return res.status(400).json({ error: 'Invalid inactive_minutes' })
+    if (limit === null) return res.status(400).json({ error: 'Invalid limit' })
+    if (dryRun === null) return res.status(400).json({ error: 'Invalid dry_run' })
+
+    try {
+      const params = [olderThanHours, inactiveMinutes, limit]
+      const { rows: candidates } = await db.query(`
+        SELECT r.run_id, r.agent_name, r.workflow_name, r.status, r.started_at, r.ended_at, r.host_name, r.pid,
+               GREATEST(
+                 COALESCE((SELECT MAX(lr.started_at) FROM telemetry.llm_requests lr WHERE lr.run_id = r.run_id), r.started_at),
+                 COALESCE((SELECT MAX(wp.last_updated_at) FROM telemetry.work_progress wp WHERE wp.run_id = r.run_id), r.started_at)
+               ) AS last_activity_at
+        FROM telemetry.agent_runs r
+        WHERE r.ended_at IS NULL
+          AND r.started_at < NOW() - ($1::int * INTERVAL '1 hour')
+          AND NOT EXISTS (
+            SELECT 1 FROM telemetry.llm_requests lr
+            WHERE lr.run_id = r.run_id
+              AND lr.started_at > NOW() - ($2::int * INTERVAL '1 minute')
+          )
+          AND NOT EXISTS (
+            SELECT 1 FROM telemetry.work_progress wp
+            WHERE wp.run_id = r.run_id
+              AND wp.last_updated_at > NOW() - ($2::int * INTERVAL '1 minute')
+          )
+        ORDER BY r.started_at ASC
+        LIMIT $3
+      `, params)
+
+      if (dryRun || candidates.length === 0) {
+        return res.json({
+          dry_run: dryRun,
+          older_than_hours: olderThanHours,
+          inactive_minutes: inactiveMinutes,
+          candidate_count: candidates.length,
+          updated_count: 0,
+          candidates: candidates.map(decorateRun),
+          updated: [],
+        })
+      }
+
+      const runIds = candidates.map(r => r.run_id)
+      const { rows: updated } = await db.query(`
+        UPDATE telemetry.agent_runs
+        SET ended_at = NOW(), status = 'stale'
+        WHERE run_id = ANY($1::text[])
+          AND ended_at IS NULL
+        RETURNING run_id, agent_name, workflow_name, status, started_at, ended_at, host_name, pid
+      `, [runIds])
+
+      res.json({
+        dry_run: false,
+        older_than_hours: olderThanHours,
+        inactive_minutes: inactiveMinutes,
+        candidate_count: candidates.length,
+        updated_count: updated.length,
+        candidates: candidates.map(decorateRun),
+        updated: updated.map(decorateRun),
       })
     } catch (err) {
       res.status(500).json({ error: err.message })
