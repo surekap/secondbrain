@@ -13,8 +13,8 @@
     "packages/ui"
   ],
   "scripts": {
-    "ui": "concurrently \"node packages/ui/server.js\" \"npm start --workspace=packages/ui\" \"npm run observe\"",
-    "ui:dev": "concurrently \"node packages/ui/server.js\" \"npm run dev --workspace=packages/ui\" \"npm run observe\"",
+    "ui": "concurrently \"node packages/ui/server.js\" \"npm start --workspace=packages/ui\"",
+    "ui:dev": "concurrently \"node packages/ui/server.js\" \"npm run dev --workspace=packages/ui\"",
     "limitless": "npm start --workspace=packages/agents/limitless",
     "limitless:fetch": "npm run fetch --workspace=packages/agents/limitless",
     "limitless:archive": "npm run archive --workspace=packages/agents/limitless",
