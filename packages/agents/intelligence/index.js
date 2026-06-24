@@ -61,6 +61,49 @@ function projectOpportunityType(insightType) {
   return 'other'
 }
 
+
+function compactText(value, max = 140) {
+  return String(value || '').replace(/\s+/g, ' ').trim().slice(0, max)
+}
+
+function deriveRecommendedNextAction(input = {}) {
+  if (input.recommended_next_action && String(input.recommended_next_action).trim()) {
+    return compactText(input.recommended_next_action, 220)
+  }
+  const type = input.opportunity_type || 'other'
+  const title = compactText(input.title, 120) || 'this opportunity'
+
+  if (/^re-engage\b/i.test(title)) {
+    return `Send a lightweight check-in referencing the last known context; ask one specific question before investing more time.`
+  }
+
+  switch (type) {
+    case 'follow_up':
+    case 'email_response_gap':
+      return `Send a concise follow-up on "${title}" and ask for the next concrete response or decision.`
+    case 'introduction':
+    case 'project_match':
+      return `Identify the best-fit person or project owner, then send a short intro note explaining the specific mutual value.`
+    case 'meeting_action':
+      return `Turn "${title}" into a concrete task with owner, deadline, and the next message/meeting required.`
+    case 'urgent_message':
+      return `Review the source message now and either reply, delegate, or dismiss it as no longer urgent.`
+    case 'relationship_health':
+    case 'check_in':
+      return `Send a low-friction check-in that references shared context and offers one useful next step.`
+    case 'research_opportunity':
+      return `Send a targeted note or save a research task tying "${title}" to a concrete collaboration angle.`
+    case 'group_opportunity':
+      return `Use the relevant group thread to ask one specific question or make one useful introduction tied to this signal.`
+    case 'project_opportunity':
+      return `Review the linked project and convert this into the next owner/action/date if it is still valuable.`
+    case 'risk':
+      return `Assess the risk, name the owner, and decide whether to mitigate, monitor, or dismiss it.`
+    default:
+      return `Review the evidence for "${title}" and decide: act, delegate, snooze, or dismiss.`
+  }
+}
+
 function signalTypeForOpportunity(opportunityType) {
   if (opportunityType === 'risk') return 'risk'
   if (opportunityType === 'check_in') return 'event'
@@ -86,6 +129,7 @@ async function upsertOpportunity(input) {
   await ensureSchema()
   const scores = priorityScore(input.priority)
   const dedupeKey = input.dedupe_key || dedupeKeyFor(input.source_system, input.source_ref, input.title)
+  const recommendedNextAction = deriveRecommendedNextAction(input)
 
   const { rows } = await db.query(`
     INSERT INTO intelligence.opportunities (
@@ -125,7 +169,7 @@ async function upsertOpportunity(input) {
     input.opportunity_type || 'other',
     input.title,
     input.description || null,
-    input.recommended_next_action || null,
+    recommendedNextAction || null,
     input.why_now || null,
     input.priority || 'medium',
     input.confidence ?? null,
@@ -325,4 +369,5 @@ module.exports = {
   upsertFromProjectInsight,
   relationshipOpportunityType,
   projectOpportunityType,
+  deriveRecommendedNextAction,
 }
