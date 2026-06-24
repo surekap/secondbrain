@@ -1076,7 +1076,21 @@ app.get('/api/intelligence/opportunities', async (req, res) => {
       SELECT o.*,
              c.display_name AS primary_contact_name,
              p.name AS primary_project_name,
-             COALESCE(ev.evidence_count, 0)::int AS evidence_count
+             COALESCE(ev.evidence_count, 0)::int AS evidence_count,
+             (
+               COALESCE(o.expected_value_score, CASE o.priority WHEN 'high' THEN 80 WHEN 'low' THEN 30 ELSE 55 END)
+               - CASE WHEN LOWER(o.title) LIKE 're-engage %' THEN 25 ELSE 0 END
+               - CASE WHEN COALESCE(ev.evidence_count, 0) = 0 THEN 20 WHEN COALESCE(ev.evidence_count, 0) = 1 THEN 6 ELSE 0 END
+               - CASE WHEN NULLIF(TRIM(COALESCE(o.recommended_next_action, '')), '') IS NULL THEN 8 ELSE 0 END
+               - CASE WHEN o.last_seen_at < NOW() - INTERVAL '30 days' THEN 10 ELSE 0 END
+             )::numeric(8,2) AS attention_score,
+             ARRAY_REMOVE(ARRAY[
+               CASE WHEN COALESCE(ev.evidence_count, 0) = 0 THEN 'no_evidence' END,
+               CASE WHEN COALESCE(ev.evidence_count, 0) = 1 THEN 'single_evidence' END,
+               CASE WHEN LOWER(o.title) LIKE 're-engage %' THEN 'generic_reengage' END,
+               CASE WHEN NULLIF(TRIM(COALESCE(o.recommended_next_action, '')), '') IS NULL THEN 'missing_next_action' END,
+               CASE WHEN o.last_seen_at < NOW() - INTERVAL '30 days' THEN 'stale' END
+             ], NULL)::text[] AS quality_flags
       FROM intelligence.opportunities o
       LEFT JOIN relationships.contacts c ON c.id = o.primary_contact_id
       LEFT JOIN projects.projects p ON p.id = o.primary_project_id
@@ -1087,6 +1101,7 @@ app.get('/api/intelligence/opportunities', async (req, res) => {
       ) ev ON true
       ${where}
       ORDER BY
+        attention_score DESC NULLS LAST,
         o.expected_value_score DESC NULLS LAST,
         CASE o.priority WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END,
         o.last_seen_at DESC NULLS LAST,
