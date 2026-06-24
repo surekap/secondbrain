@@ -450,7 +450,7 @@ async function runIntelligenceServices(pool) {
         const contactId = signal.contact_id || (await resolveContactFromEmail(pool, signal.source_id))
         if (contactId) {
           const oppInput = {
-            opportunity_type: 'signal',
+            opportunity_type: 'research_opportunity',
             source_system: 'email',
             source_ref: `${signal.source_table}:${signal.source_id}:${signal.signal_type}`,
             title: signal.signal_type,
