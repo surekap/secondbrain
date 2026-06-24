@@ -1168,12 +1168,16 @@ app.get('/api/intelligence/opportunities', async (req, res) => {
                COALESCE(o.expected_value_score, CASE o.priority WHEN 'high' THEN 80 WHEN 'low' THEN 30 ELSE 55 END)
                - CASE WHEN LOWER(o.title) LIKE 're-engage %' THEN 25 ELSE 0 END
                - CASE WHEN COALESCE(ev.evidence_count, 0) = 0 THEN 20 WHEN COALESCE(ev.evidence_count, 0) = 1 THEN 6 ELSE 0 END
+               - CASE WHEN o.opportunity_type = 'group_opportunity' AND COALESCE(ev.evidence_count, 0) < 2 THEN 16 ELSE 0 END
+               - CASE WHEN o.opportunity_type = 'group_opportunity' AND o.primary_contact_id IS NULL AND o.primary_project_id IS NULL THEN 8 ELSE 0 END
                - CASE WHEN NULLIF(TRIM(COALESCE(o.recommended_next_action, '')), '') IS NULL THEN 8 ELSE 0 END
                - CASE WHEN o.last_seen_at < NOW() - INTERVAL '30 days' THEN 10 ELSE 0 END
              )::numeric(8,2) AS attention_score,
              ARRAY_REMOVE(ARRAY[
                CASE WHEN COALESCE(ev.evidence_count, 0) = 0 THEN 'no_evidence' END,
                CASE WHEN COALESCE(ev.evidence_count, 0) = 1 THEN 'single_evidence' END,
+               CASE WHEN o.opportunity_type = 'group_opportunity' AND COALESCE(ev.evidence_count, 0) < 2 THEN 'group_single_evidence' END,
+               CASE WHEN o.opportunity_type = 'group_opportunity' AND o.primary_contact_id IS NULL AND o.primary_project_id IS NULL THEN 'unlinked_group_opportunity' END,
                CASE WHEN LOWER(o.title) LIKE 're-engage %' THEN 'generic_reengage' END,
                CASE WHEN NULLIF(TRIM(COALESCE(o.recommended_next_action, '')), '') IS NULL THEN 'missing_next_action' END,
                CASE WHEN o.last_seen_at < NOW() - INTERVAL '30 days' THEN 'stale' END
