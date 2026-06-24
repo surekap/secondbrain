@@ -21,6 +21,29 @@
 
 ---
 
+## Current Status — 2026-06-24
+
+This original first-work plan has been overtaken by implementation. Phase 0A, observe integration, stale telemetry cleanup, opportunity-ledger foundation, group-opportunity backfill, next-action derivation, holistic smoke testing, group-opportunity quality damping, and source-date attention labels have all been merged into `main` through PRs #10–#19.
+
+Use this file as historical rationale. Use the current operational plan for live verification and next work:
+
+```text
+docs/plans/2026-06-24-relationship-intelligence-status-and-next-plan.md
+```
+
+Latest verified repo state from Hermes after `git pull --ff-only`:
+
+```text
+branch: main
+HEAD: acb73f1 fix: map signal opportunities to research_opportunity enum value
+local code checks: UI build passed; intelligence node tests passed
+live server from Hermes: not reachable — 100.105.11.84 ports 3000/4000/4001/4002/4003/8000/8080 refused TCP connections
+```
+
+Until the UI/API are reachable again, do not claim deployment health. The next work is live runtime verification, source-date backfill, and one manual intelligence refresh, not more product surface.
+
+---
+
 ## Cross-Model Review Loop Log
 
 ### Round 1 — Sonnet critique

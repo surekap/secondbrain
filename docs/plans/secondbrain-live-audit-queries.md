@@ -4,6 +4,14 @@ This plan documents the read-only live audit checks in `scripts/audit-secondbrai
 
 ## Runbook
 
+Current operational status/next plan lives here:
+
+```text
+docs/plans/2026-06-24-relationship-intelligence-status-and-next-plan.md
+```
+
+Use this audit file for query/check definitions. Use the status plan for the live sequence after PRs #10–#19.
+
 ```bash
 node scripts/audit-secondbrain-quality.js
 ```
