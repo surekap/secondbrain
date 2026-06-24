@@ -1290,6 +1290,31 @@ app.post('/api/intelligence/opportunities/:id/feedback', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// POST /api/intelligence/refresh — trigger intelligence pipeline on-demand
+app.post('/api/intelligence/refresh', async (req, res) => {
+  try {
+    const { runIntelligenceServices } = require('../agents/intelligence/index.js');
+
+    // Run in background
+    setImmediate(async () => {
+      try {
+        await runIntelligenceServices(db);
+        console.log('[API] Intelligence refresh completed');
+      } catch (error) {
+        console.error('[API] Intelligence refresh failed:', error.message);
+      }
+    });
+
+    res.json({
+      status: 'queued',
+      message: 'Intelligence pipeline queued for execution'
+    });
+  } catch (error) {
+    console.error('[API] Intelligence refresh error:', error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // GET /api/relationships/stats
 app.get('/api/relationships/stats', async (req, res) => {
   const stats = await relationshipsStats();
