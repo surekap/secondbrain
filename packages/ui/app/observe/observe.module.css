@@ -34,6 +34,10 @@
 }
 
 .warnBanner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
   margin-bottom: 1rem;
   padding: .75rem 1rem;
   border: 1px solid var(--amber-border);
@@ -45,6 +49,33 @@
 
 .warnBanner code {
   color: inherit;
+}
+
+.successBanner {
+  margin-bottom: 1rem;
+  padding: .75rem 1rem;
+  border: 1px solid var(--green-border);
+  background: var(--green-bg);
+  color: var(--green);
+  border-radius: 8px;
+  font-size: .8125rem;
+}
+
+.bannerAction {
+  flex-shrink: 0;
+  padding: .375rem .625rem;
+  border: 1px solid var(--amber-border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--amber);
+  font-size: .75rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.bannerAction:disabled {
+  opacity: .55;
+  cursor: not-allowed;
 }
 
 .tabs {

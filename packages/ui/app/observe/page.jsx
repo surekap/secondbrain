@@ -66,7 +66,7 @@ async function apiFetch(path) {
 
 // ── View: Overview ────────────────────────────────────────────────────────────
 
-function Overview({ sys, agents, alerts }) {
+function Overview({ sys, agents, alerts, onCleanupStaleRuns, cleanupBusy, cleanupResult }) {
   const s = sys?.sample || {}
   const health = sys?.health || {}
   const activeRuns = (agents?.runs || []).filter(r => !r.ended_at)
@@ -84,8 +84,25 @@ function Overview({ sys, agents, alerts }) {
       )}
       {staleRuns.length > 0 && (
         <div className={styles.warnBanner}>
-          {staleRuns.length} telemetry run{staleRuns.length === 1 ? '' : 's'} appear stuck as <code>running</code> for over 6h.
-          They are flagged as stale so they do not look like active work.
+          <div>
+            {staleRuns.length} telemetry run{staleRuns.length === 1 ? '' : 's'} appear stuck as <code>running</code> for over 6h.
+            They are flagged as stale so they do not look like active work.
+          </div>
+          <button
+            className={styles.bannerAction}
+            disabled={cleanupBusy}
+            onClick={onCleanupStaleRuns}
+          >
+            {cleanupBusy ? 'Cleaning…' : 'Clear stale telemetry'}
+          </button>
+        </div>
+      )}
+      {cleanupResult && (
+        <div className={styles.successBanner}>
+          Marked {cleanupResult.updated_count || 0} stale telemetry run{cleanupResult.updated_count === 1 ? '' : 's'} closed.
+          {cleanupResult.candidate_count > cleanupResult.updated_count
+            ? ` ${cleanupResult.candidate_count - cleanupResult.updated_count} candidate(s) were already changed or skipped.`
+            : ''}
         </div>
       )}
       <div className={styles.grid2}>
@@ -393,6 +410,8 @@ export default function ObservePage() {
   const [modelsData, setModelsData] = useState(null)
   const [tracesData, setTracesData] = useState(null)
   const [qualityData, setQualityData] = useState(null)
+  const [cleanupBusy, setCleanupBusy] = useState(false)
+  const [cleanupResult, setCleanupResult] = useState(null)
   const [traceFilters, setTraceFilters] = useState({ agent: '', model: '', success: '' })
   const viewRef = useRef(view)
   viewRef.current = view
@@ -455,7 +474,23 @@ export default function ObservePage() {
     fetchQuality()
   }
 
-  const observeError = [sysData, agentsData, alertsData, modelsData, tracesData, qualityData]
+  async function handleCleanupStaleRuns() {
+    const staleCount = (agentsData?.runs || []).filter(r => r.stale_running).length
+    if (!staleCount) return
+    const ok = window.confirm(`Close stale telemetry for ${staleCount} old inactive run(s)? This only marks telemetry rows ended; it does not stop agent processes.`)
+    if (!ok) return
+    setCleanupBusy(true)
+    setCleanupResult(null)
+    try {
+      const result = await apiFetch('/api/observe/agent-runs/cleanup-stale?dry_run=false')
+      setCleanupResult(result)
+      await fetchOverview()
+    } finally {
+      setCleanupBusy(false)
+    }
+  }
+
+  const observeError = [sysData, agentsData, alertsData, modelsData, tracesData, qualityData, cleanupResult]
     .find(d => d?._error)?._error
 
   return (
@@ -478,7 +513,16 @@ export default function ObservePage() {
           </button>
         ))}
       </div>
-      {view === 'overview' && <Overview sys={sysData}    agents={agentsData} alerts={alertsData} />}
+      {view === 'overview' && (
+        <Overview
+          sys={sysData}
+          agents={agentsData}
+          alerts={alertsData}
+          onCleanupStaleRuns={handleCleanupStaleRuns}
+          cleanupBusy={cleanupBusy}
+          cleanupResult={cleanupResult}
+        />
+      )}
       {view === 'agents'   && <Agents   data={agentsData} />}
       {view === 'models'   && <Models   data={modelsData} />}
       {view === 'traces'   && <Traces   data={tracesData} filters={traceFilters} onFilterChange={handleFilterChange} />}
