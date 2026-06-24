@@ -5,6 +5,7 @@ const fs = require('fs')
 const path = require('path')
 const db = require('@secondbrain/db')
 const { extractSignals } = require('./services/signal-extractor')
+const { extractOrganizations } = require('./services/organization-extractor')
 const { checkDormancy } = require('./services/dormancy-monitor')
 
 let schemaReady = false
@@ -138,6 +139,7 @@ async function upsertOpportunity(input) {
   const scores = priorityScore(input.priority)
   const dedupeKey = input.dedupe_key || dedupeKeyFor(input.source_system, input.source_ref, input.title)
   const recommendedNextAction = deriveRecommendedNextAction(input)
+  const expectedValueScore = input.expected_value_score ?? computeExpectedValue({ ...input, recommended_next_action: recommendedNextAction })
 
   const { rows } = await db.query(`
     INSERT INTO intelligence.opportunities (
@@ -184,8 +186,8 @@ async function upsertOpportunity(input) {
     input.impact_score ?? scores.impact,
     input.urgency_score ?? scores.urgency,
     input.relationship_score ?? null,
-    input.expected_value_score ?? scores.expected,
-    input.score_explanation || `Initial score derived from ${input.priority || 'medium'} priority until richer scoring is available.`,
+    input.expected_value_score ?? expectedValueScore,
+    input.score_explanation || `Expected attention score from impact, urgency, relationship leverage, actionability, confidence, and evidence penalties.`,
     input.source_system || 'relationships',
     input.source_ref || null,
     input.source_hash || stableHash(`${input.source_system}:${input.source_ref}:${input.title}:${input.description || ''}`),
@@ -300,6 +302,140 @@ async function addEvidence(opportunityId, evidence) {
     evidence.relevance ?? null,
     JSON.stringify(evidence.metadata || {}),
   ])
+}
+
+async function upsertSignal(pool, signal) {
+  if (!signal?.source_table || !signal?.source_id || !signal?.signal_type) return null
+  const sourceId = String(signal.source_id)
+  const existing = await pool.query(`
+    UPDATE intelligence.signals
+    SET title = $1,
+        description = $2,
+        contact_id = COALESCE($3, contact_id),
+        project_id = COALESCE($4, project_id),
+        source_ref = COALESCE($5, source_ref),
+        occurred_at = COALESCE($6, occurred_at),
+        confidence = COALESCE($7, confidence),
+        strength = COALESCE($8, strength),
+        metadata = metadata || $9::jsonb,
+        updated_at = NOW()
+    WHERE source_table = $10 AND source_id = $11 AND signal_type = $12
+    RETURNING id
+  `, [
+    signal.title || signal.signal_type,
+    signal.description || signal.content || null,
+    signal.contact_id || null,
+    signal.project_id || null,
+    signal.source_ref || null,
+    signal.occurred_at || null,
+    signal.confidence ?? null,
+    signal.strength ?? null,
+    JSON.stringify(signal.metadata || {}),
+    signal.source_table,
+    sourceId,
+    signal.signal_type,
+  ])
+  if (existing.rows[0]?.id) return existing.rows[0].id
+
+  const inserted = await pool.query(`
+    INSERT INTO intelligence.signals (
+      signal_type, title, description, contact_id, project_id,
+      source_table, source_id, source_ref, occurred_at, confidence, strength, metadata
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb)
+    RETURNING id
+  `, [
+    signal.signal_type,
+    signal.title || signal.signal_type,
+    signal.description || signal.content || null,
+    signal.contact_id || null,
+    signal.project_id || null,
+    signal.source_table,
+    sourceId,
+    signal.source_ref || null,
+    signal.occurred_at || null,
+    signal.confidence ?? null,
+    signal.strength ?? null,
+    JSON.stringify(signal.metadata || {}),
+  ])
+  return inserted.rows[0]?.id || null
+}
+
+async function upsertOrganizationGraph(pool, extracted) {
+  const orgIdByHash = new Map()
+  let organizationCount = 0
+  let contactLinkCount = 0
+  let topicCount = 0
+
+  for (const org of extracted.organizations || []) {
+    const result = await pool.query(`
+      INSERT INTO intelligence.organizations (name, domain, metadata)
+      VALUES ($1, $2, $3::jsonb)
+      ON CONFLICT (normalized_name) DO UPDATE SET
+        domain = COALESCE(intelligence.organizations.domain, EXCLUDED.domain),
+        metadata = intelligence.organizations.metadata || EXCLUDED.metadata,
+        updated_at = NOW()
+      RETURNING id
+    `, [org.name, org.domain || null, JSON.stringify({ source: org.source || 'extracted', source_ref: org.source_ref || null })])
+    const orgId = result.rows[0]?.id
+    if (orgId) {
+      orgIdByHash.set(org.org_id_hash, orgId)
+      organizationCount++
+    }
+  }
+
+  for (const link of extracted.contactLinks || []) {
+    const orgId = orgIdByHash.get(link.org_id_hash)
+    if (!orgId || !link.contact_id || !Number.isFinite(Number(link.contact_id))) continue
+    await pool.query(`
+      INSERT INTO intelligence.contact_organizations (contact_id, organization_id, role, relationship, confidence, source_ref)
+      VALUES ($1, $2, $3, $4, $5, $6)
+      ON CONFLICT (contact_id, organization_id, (COALESCE(relationship, 'other'))) DO UPDATE SET
+        role = COALESCE(EXCLUDED.role, intelligence.contact_organizations.role),
+        confidence = COALESCE(EXCLUDED.confidence, intelligence.contact_organizations.confidence),
+        source_ref = COALESCE(EXCLUDED.source_ref, intelligence.contact_organizations.source_ref),
+        updated_at = NOW()
+    `, [Number(link.contact_id), orgId, link.role || null, link.relationship || 'employee', link.confidence || null, link.source_ref || null])
+    contactLinkCount++
+  }
+
+  for (const topic of extracted.topics || []) {
+    if (!topic.name || !topic.object_id) continue
+    const result = await pool.query(`
+      INSERT INTO intelligence.topics (name, topic_type)
+      VALUES ($1, $2)
+      ON CONFLICT (normalized_name) DO UPDATE SET
+        topic_type = COALESCE(intelligence.topics.topic_type, EXCLUDED.topic_type),
+        updated_at = NOW()
+      RETURNING id
+    `, [topic.name, topic.topic_type || 'other'])
+    const topicId = result.rows[0]?.id
+    if (!topicId) continue
+    await pool.query(`
+      INSERT INTO intelligence.object_topics (topic_id, object_type, object_id, role, confidence, source_ref)
+      VALUES ($1, $2, $3, $4, $5, $6)
+      ON CONFLICT (topic_id, object_type, object_id, (COALESCE(role, 'mentioned'))) DO UPDATE SET
+        confidence = COALESCE(EXCLUDED.confidence, intelligence.object_topics.confidence),
+        source_ref = COALESCE(EXCLUDED.source_ref, intelligence.object_topics.source_ref)
+    `, [topicId, topic.object_type, String(topic.object_id), topic.role || 'mentioned', topic.confidence || null, topic.source_ref || null])
+    topicCount++
+  }
+
+  return { organizationCount, contactLinkCount, topicCount }
+}
+
+function computeExpectedValue(input = {}) {
+  const priority = priorityScore(input.priority)
+  const impact = Number(input.impact_score ?? priority.impact)
+  const urgency = Number(input.urgency_score ?? priority.urgency)
+  const relationship = Number(input.relationship_score ?? (input.primary_contact_id ? 60 : 45))
+  const confidence = input.confidence == null ? 0.55 : Number(input.confidence)
+  const actionability = input.recommended_next_action ? 70 : 50
+  const evidence = Array.isArray(input.evidence) ? input.evidence.length : 1
+  const evidencePenalty = evidence === 0 ? 20 : evidence === 1 ? 6 : 0
+  const groupPenalty = input.opportunity_type === 'group_opportunity' && evidence < 2 ? 16 : 0
+  return Math.max(0, Math.min(100, (
+    impact * 0.28 + urgency * 0.22 + relationship * 0.18 + actionability * 0.17 + confidence * 100 * 0.15
+  ) - evidencePenalty - groupPenalty)).toFixed(2)
 }
 
 async function upsertFromRelationshipInsight(insightId, contactId, insight) {
@@ -435,39 +571,48 @@ async function runIntelligenceServices(pool) {
     }
     console.log(`[intelligence] Backfilled ${backfillCount} insights`)
 
-    // Step 2: Extract organizations — skipped; requires schema columns not yet available
-    // (org_id_hash / contact_organizations are not in the current schema)
-    console.log('[intelligence] Organization extraction skipped (schema support pending)')
+    // Step 2: Populate organization/topic graph from contacts, groups, and opportunities.
+    console.log('[intelligence] Extracting organizations/topics...')
     const contactsResult = await pool.query('SELECT * FROM relationships.contacts')
+    const groupsResult = await pool.query('SELECT * FROM relationships.groups ORDER BY updated_at DESC NULLS LAST LIMIT 1000')
+    const opportunitiesResult = await pool.query('SELECT * FROM intelligence.opportunities ORDER BY updated_at DESC LIMIT 2000')
+    const contactGraph = await extractOrganizations(contactsResult.rows, 'contacts')
+    const groupGraph = await extractOrganizations(groupsResult.rows, 'groups')
+    const opportunityGraph = await extractOrganizations(opportunitiesResult.rows, 'opportunities')
+    const graphStats = await upsertOrganizationGraph(pool, {
+      organizations: [...contactGraph.organizations, ...groupGraph.organizations, ...opportunityGraph.organizations],
+      contactLinks: contactGraph.contactLinks,
+      topics: [...contactGraph.topics, ...groupGraph.topics, ...opportunityGraph.topics],
+    })
+    console.log(`[intelligence] Graph extraction complete (${graphStats.organizationCount} org upserts, ${graphStats.contactLinkCount} contact-org links, ${graphStats.topicCount} topic links)`)
 
-    // Step 3: Extract signals from emails
-    console.log('[intelligence] Extracting signals from emails...')
-    const emailsResult = await pool.query('SELECT * FROM email.emails WHERE created_at > NOW() - INTERVAL \'30 days\' LIMIT 5000')
-    const emailSignals = await extractSignals(emailsResult.rows, 'email')
+    // Step 3: Extract durable weak signals from multiple sources.
+    console.log('[intelligence] Extracting weak signals...')
+    const emailsResult = await pool.query('SELECT * FROM email.emails WHERE COALESCE(date, received_at, created_at) > NOW() - INTERVAL \'45 days\' ORDER BY COALESCE(date, received_at, created_at) DESC LIMIT 5000')
+    const whatsappResult = await pool.query('SELECT * FROM public.messages WHERE ts > NOW() - INTERVAL \'45 days\' ORDER BY ts DESC LIMIT 5000')
+    const lifelogResult = await pool.query('SELECT * FROM limitless.lifelogs WHERE COALESCE(start_time, created_at) > NOW() - INTERVAL \'45 days\' ORDER BY COALESCE(start_time, created_at) DESC LIMIT 2000')
+    const signalInputs = [
+      ...(await extractSignals(emailsResult.rows, 'email')),
+      ...(await extractSignals(whatsappResult.rows, 'whatsapp')),
+      ...(await extractSignals(lifelogResult.rows, 'limitless')),
+      ...(await extractSignals(groupsResult.rows, 'groups')),
+      ...(await extractSignals(opportunitiesResult.rows, 'opportunities')),
+    ]
     let signalCount = 0
-    for (const signal of emailSignals) {
+    for (const signal of signalInputs) {
       try {
-        const contactId = signal.contact_id || (await resolveContactFromEmail(pool, signal.source_id))
-        if (contactId) {
-          const oppInput = {
-            opportunity_type: 'research_opportunity',
-            source_system: 'email',
-            source_ref: `${signal.source_table}:${signal.source_id}:${signal.signal_type}`,
-            title: signal.signal_type,
-            description: signal.content,
-            primary_contact_id: contactId,
-            metadata: { signal_type: signal.signal_type, ...signal.metadata },
-          }
-          await upsertOpportunity(oppInput)
-          signalCount++
+        if (!signal.contact_id && signal.source_table === 'email') {
+          signal.contact_id = await resolveContactFromEmail(pool, signal.source_id)
         }
+        await upsertSignal(pool, signal)
+        signalCount++
       } catch (error) {
         console.error(`[intelligence] Failed to record signal:`, error.message)
       }
     }
-    console.log(`[intelligence] Recorded ${signalCount} email signals`)
+    console.log(`[intelligence] Recorded/updated ${signalCount} weak signals`)
 
-    // Step 4: Check dormancy
+    // Step 4: Check relationship dormancy using tier-aware thresholds.
     console.log('[intelligence] Checking dormancy...')
     const dormantResult = await checkDormancy(contactsResult.rows)
     let dormancyCount = 0
@@ -479,9 +624,10 @@ async function runIntelligenceServices(pool) {
           source_ref: `dormancy:${opp.contact_id}`,
           title: opp.title,
           description: opp.description,
-          primary_contact_id: opp.contact_id,
+          primary_contact_id: Number.isFinite(Number(opp.contact_id)) ? Number(opp.contact_id) : null,
           why_now: opp.why_now,
-          metadata: {},
+          confidence: 0.5,
+          metadata: { source: 'dormancy', threshold_days: opp.threshold_days, days_since_contact: opp.days_since_contact },
         }
         await upsertOpportunity(oppInput)
         dormancyCount++
@@ -499,8 +645,20 @@ async function runIntelligenceServices(pool) {
 }
 
 async function resolveContactFromEmail(pool, emailId) {
-  const result = await pool.query('SELECT from_addr FROM email.emails WHERE id = $1', [emailId])
-  return result.rows[0]?.from_addr || null
+  const result = await pool.query(`
+    SELECT c.id
+    FROM email.emails e
+    LEFT JOIN relationships.email_senders s
+      ON LOWER(s.parsed_email) = LOWER(REGEXP_REPLACE(COALESCE(e.from_address, ''), '^.*<([^>]+)>.*$', '\\1'))
+      OR LOWER(s.raw_address) = LOWER(COALESCE(e.from_address, ''))
+    LEFT JOIN relationships.contacts c
+      ON c.id = s.contact_id
+      OR LOWER(REGEXP_REPLACE(COALESCE(e.from_address, ''), '^.*<([^>]+)>.*$', '\\1')) = ANY(SELECT LOWER(x) FROM unnest(c.emails) AS x)
+    WHERE e.id = $1
+      AND c.id IS NOT NULL
+    LIMIT 1
+  `, [emailId])
+  return result.rows[0]?.id || null
 }
 
 module.exports = {

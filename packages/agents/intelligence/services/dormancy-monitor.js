@@ -5,35 +5,44 @@ const DORMANCY_THRESHOLDS = {
   tier_2: 60,
   tier_3: 120,
   noise: 180,
+  unknown: 120,
 };
+
+function lastContactAt(contact) {
+  return contact.last_contact_date || contact.last_interaction_at || contact.updated_at || null;
+}
 
 async function checkDormancy(contacts) {
   const opportunities = [];
   const now = new Date();
 
-  for (const contact of contacts) {
-    if (!contact.last_contact_date) continue;
+  for (const contact of contacts || []) {
+    if (contact.is_noise || contact.relationship_tier === 'noise') continue;
+    const last = lastContactAt(contact);
+    if (!last) continue;
 
-    const threshold = DORMANCY_THRESHOLDS[contact.relationship_tier] || 120;
+    const threshold = contact.dormant_threshold_days || contact.preferred_cadence_days || DORMANCY_THRESHOLDS[contact.relationship_tier || 'unknown'] || 120;
     const daysSinceContact = Math.floor(
-      (now.getTime() - new Date(contact.last_contact_date).getTime()) / (24 * 60 * 60 * 1000)
+      (now.getTime() - new Date(last).getTime()) / (24 * 60 * 60 * 1000)
     );
 
     if (daysSinceContact > threshold) {
       const weekNumber = Math.floor(daysSinceContact / 7);
       const dedupeKey = crypto
         .createHash('sha256')
-        .update(`dormancy:${contact.id}:${contact.relationship_tier}:${weekNumber}`)
+        .update(`dormancy:${contact.id}:${contact.relationship_tier || 'unknown'}:${weekNumber}`)
         .digest('hex');
 
       opportunities.push({
         contact_id: contact.id,
-        title: `Check in with ${contact.name || contact.id}`,
-        description: `No contact for ${daysSinceContact} days (threshold: ${threshold} days)`,
+        title: `Check in with ${contact.display_name || contact.name || contact.id}`,
+        description: `No meaningful interaction for ${daysSinceContact} days (threshold: ${threshold} days)`,
         source: 'dormancy',
-        why_now: 'dormancy threshold hit',
+        why_now: `${contact.relationship_tier || 'unknown'} relationship crossed dormancy threshold`,
         source_id: dedupeKey,
         source_id_hash: dedupeKey,
+        threshold_days: threshold,
+        days_since_contact: daysSinceContact,
         created_at: now,
       });
     }

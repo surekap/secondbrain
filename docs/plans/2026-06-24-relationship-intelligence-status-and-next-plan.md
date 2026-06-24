@@ -252,15 +252,43 @@ curl -sS -X POST http://localhost:4001/api/intelligence/refresh | jq .
 
 **Objective:** Decide whether org/topic extraction is useful enough to show in product or should remain backend-only.
 
+**Implementation update:** `runIntelligenceServices()` now actively extracts organizations/topics from contacts, groups, and opportunities and writes `intelligence.organizations`, `intelligence.contact_organizations`, `intelligence.topics`, and `intelligence.object_topics`. It no longer logs “Organization extraction skipped”.
+
 **Commands:**
 
 ```bash
+curl -sS -X POST http://localhost:4001/api/intelligence/refresh | jq .
 curl -sS http://localhost:4001/api/intelligence/graph/summary | jq .
 curl -sS 'http://localhost:4001/api/intelligence/organizations?limit=20' | jq '.[] | {id,name,organization_type,strategic_importance_score,contact_count}'
 curl -sS 'http://localhost:4001/api/intelligence/topics?limit=20' | jq '.[] | {id,name,topic_type,strategic_weight,link_count}'
 ```
 
-**Exit criteria:** If graph counts stay zero after refresh, inspect `packages/agents/intelligence/services/organization-extractor.js` and DB inputs before building UI around graph data.
+**Exit criteria:** Graph counts should become nonzero after refresh. If they stay zero, inspect DB input quality (`relationships.contacts.company`, contact email domains, `relationships.groups`, and opportunity titles/descriptions) before exposing graph UI.
+
+---
+
+### Task F — Weak-signal extraction v1.5
+
+**Objective:** Move from email-only/regex toy extraction toward a durable, source-aware signal memory.
+
+**Implemented:**
+
+- Extracts signals from recent `email.emails`, `public.messages`, `limitless.lifelogs`, `relationships.groups`, and `intelligence.opportunities`.
+- Upserts into `intelligence.signals` by `(source_table, source_id, signal_type)`.
+- Stores `occurred_at`, `confidence`, `strength`, `source_ref`, `contact_id` where resolvable, `project_id`, and metadata.
+- Stops creating opportunity rows directly from every email signal; weak signals now accumulate separately until promotion logic is worth adding.
+
+**Remaining:** semantic retrieval and cross-signal threshold promotion are still future work.
+
+---
+
+### Task G — Scoring v1.5
+
+**Objective:** Reduce priority-only scoring.
+
+**Implemented:** `upsertOpportunity()` now computes `expected_value_score` from impact, urgency, relationship leverage, actionability, confidence, and evidence/group penalties. The attention queue still applies final display penalties for weak evidence, missing next action, stale items, and group spam.
+
+**Remaining:** strategic-fit, effort-cost, silence-risk, and feedback-learned penalties are not yet first-class fields.
 
 ---
 
