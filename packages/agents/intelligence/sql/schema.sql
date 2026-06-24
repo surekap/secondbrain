@@ -285,7 +285,8 @@ CREATE INDEX IF NOT EXISTS opportunity_feedback_opp_idx
 -- Read-only daily surface: currently opportunities only. Future revisions can
 -- UNION relationship/project/group risks and events once scoring is normalized.
 
-CREATE OR REPLACE VIEW intelligence.attention_queue AS
+DROP VIEW IF EXISTS intelligence.attention_queue;
+CREATE VIEW intelligence.attention_queue AS
 WITH scored AS (
   SELECT
     o.id,
