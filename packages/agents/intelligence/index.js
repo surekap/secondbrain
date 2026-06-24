@@ -284,6 +284,7 @@ async function addEvidence(opportunityId, evidence) {
     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb)
     ON CONFLICT (opportunity_id, source_table, source_id) DO UPDATE SET
       source_ref = COALESCE(EXCLUDED.source_ref, intelligence.opportunity_evidence.source_ref),
+      occurred_at = COALESCE(EXCLUDED.occurred_at, intelligence.opportunity_evidence.occurred_at),
       quote = COALESCE(EXCLUDED.quote, intelligence.opportunity_evidence.quote),
       relevance = COALESCE(EXCLUDED.relevance, intelligence.opportunity_evidence.relevance),
       metadata = intelligence.opportunity_evidence.metadata || EXCLUDED.metadata
@@ -324,6 +325,7 @@ async function upsertFromRelationshipInsight(insightId, contactId, insight) {
       source_table: 'relationships.insights',
       source_id: insightId,
       source_ref: sourceRef,
+      occurred_at: insight.created_at || null,
       quote: insight.description || null,
       relevance: 1,
       metadata: { title: insight.title, insight_type: insight.insight_type },
@@ -356,6 +358,7 @@ async function upsertFromProjectInsight(projectInsightId, projectId, insight) {
       source_table: 'projects.project_insights',
       source_id: projectInsightId,
       source_ref: sourceRef,
+      occurred_at: insight.created_at || null,
       quote: insight.content || null,
       relevance: 1,
       metadata: { insight_type: insight.insight_type },

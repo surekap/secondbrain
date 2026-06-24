@@ -357,13 +357,13 @@ export default function DashboardPage() {
                       {(item.quality_flags || []).slice(0, 2).map(flag => (
                         <span className="attention-quality" key={flag}>{String(flag).replace(/_/g, ' ')}</span>
                       ))}
-                      {(item.first_seen_at || item.created_at) && (
+                      {(item.source_first_seen_at || item.first_seen_at || item.created_at) && (
                         <span className="attention-age">
-                          first seen <span className="attention-age-strong">{fmtAge(item.first_seen_at || item.created_at)}</span>
+                          source <span className="attention-age-strong">{fmtAge(item.source_first_seen_at || item.first_seen_at || item.created_at)}</span>
                         </span>
                       )}
-                      {item.last_seen_at && item.last_seen_at !== (item.first_seen_at || item.created_at) && (
-                        <span className="attention-age">updated {fmtAge(item.last_seen_at)}</span>
+                      {(item.source_last_seen_at || item.last_seen_at) && (item.source_last_seen_at || item.last_seen_at) !== (item.source_first_seen_at || item.first_seen_at || item.created_at) && (
+                        <span className="attention-age">source updated {fmtAge(item.source_last_seen_at || item.last_seen_at)}</span>
                       )}
                     </div>
                     <div className="attention-title">{resolveGroupIds(item.title, groupsMap)}</div>
