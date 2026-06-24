@@ -4,6 +4,10 @@ const crypto = require('crypto')
 const fs = require('fs')
 const path = require('path')
 const db = require('@secondbrain/db')
+const { extractSignals } = require('./services/signal-extractor')
+const { backfillOpportunities } = require('./services/backfill')
+const { checkDormancy } = require('./services/dormancy-monitor')
+const { extractOrganizations } = require('./services/organization-extractor')
 
 let schemaReady = false
 
@@ -415,6 +419,91 @@ async function upsertFromGroupOpportunity(groupId, group, opportunity, index = 0
   }
 }
 
+async function runIntelligenceServices(pool) {
+  console.log('[intelligence] Starting intelligence pipeline')
+
+  try {
+    // Step 1: Backfill existing insights into opportunities
+    console.log('[intelligence] Backfilling relationships.insights...')
+    const insightsResult = await pool.query('SELECT * FROM relationships.insights ORDER BY created_at DESC LIMIT 1000')
+    const insightOpps = await backfillOpportunities(insightsResult.rows, 'relationships.insights')
+
+    for (const opp of insightOpps) {
+      await pool.query(
+        `INSERT INTO intelligence.opportunities (contact_id, title, description, source, source_type, source_id, source_id_hash, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+         ON CONFLICT (source_id_hash) DO NOTHING`,
+        [opp.contact_id, opp.title, opp.description, opp.source, opp.source_type, opp.source_id, opp.source_id_hash, opp.created_at]
+      )
+    }
+    console.log(`[intelligence] Backfilled ${insightOpps.length} insights`)
+
+    // Step 2: Extract organizations
+    console.log('[intelligence] Extracting organizations...')
+    const contactsResult = await pool.query('SELECT * FROM relationships.contacts')
+    const { organizations, contactLinks } = await extractOrganizations(contactsResult.rows, 'contacts')
+
+    for (const org of organizations) {
+      await pool.query(
+        `INSERT INTO intelligence.organizations (name, domain, source, org_id_hash, created_at)
+         VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT (org_id_hash) DO NOTHING`,
+        [org.name, org.domain, org.source, org.org_id_hash, org.created_at]
+      )
+    }
+
+    for (const link of contactLinks) {
+      await pool.query(
+        `INSERT INTO intelligence.contact_organizations (contact_id, org_id_hash, role, start_date, created_at)
+         VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT (contact_id, org_id_hash) DO NOTHING`,
+        [link.contact_id, link.org_id_hash, link.role, link.start_date, link.created_at]
+      )
+    }
+    console.log(`[intelligence] Extracted ${organizations.length} organizations`)
+
+    // Step 3: Extract signals from emails
+    console.log('[intelligence] Extracting signals from emails...')
+    const emailsResult = await pool.query('SELECT * FROM email.emails WHERE created_at > NOW() - INTERVAL \'30 days\' LIMIT 5000')
+    const emailSignals = await extractSignals(emailsResult.rows, 'email')
+
+    for (const signal of emailSignals) {
+      const contactId = signal.contact_id || (await resolveContactFromEmail(pool, signal.source_id))
+      await pool.query(
+        `INSERT INTO intelligence.signals (contact_id, signal_type, content, metadata, source_table, source_id, source_id_hash, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+         ON CONFLICT (source_id_hash) DO NOTHING`,
+        [contactId, signal.signal_type, signal.content, JSON.stringify(signal.metadata), signal.source_table, signal.source_id, signal.source_id_hash, signal.created_at]
+      )
+    }
+    console.log(`[intelligence] Extracted ${emailSignals.length} email signals`)
+
+    // Step 4: Check dormancy
+    console.log('[intelligence] Checking dormancy...')
+    const dormantResult = await checkDormancy(contactsResult.rows)
+
+    for (const opp of dormantResult) {
+      await pool.query(
+        `INSERT INTO intelligence.opportunities (contact_id, title, description, source, why_now, source_id, source_id_hash, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+         ON CONFLICT (source_id_hash) DO NOTHING`,
+        [opp.contact_id, opp.title, opp.description, opp.source, opp.why_now, opp.source_id, opp.source_id_hash, opp.created_at]
+      )
+    }
+    console.log(`[intelligence] Dormancy check complete`)
+
+    console.log('[intelligence] Pipeline complete')
+  } catch (error) {
+    console.error('[intelligence] Pipeline error:', error.message)
+    throw error
+  }
+}
+
+async function resolveContactFromEmail(pool, emailId) {
+  const result = await pool.query('SELECT from_addr FROM email.emails WHERE id = $1', [emailId])
+  return result.rows[0]?.from_addr || null
+}
+
 module.exports = {
   ensureSchema,
   upsertOpportunity,
@@ -425,4 +514,5 @@ module.exports = {
   relationshipOpportunityType,
   projectOpportunityType,
   deriveRecommendedNextAction,
+  runIntelligenceServices,
 }
