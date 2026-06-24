@@ -226,7 +226,7 @@ async function upsertInsight(contactId, insightData) {
         LIMIT 1
       `, [insightData.source_ref])
       if (exists.length > 0) {
-        await intelligence.upsertFromRelationshipInsight(exists[0].id, contactId, insightData)
+        if (!insightData.skip_intelligence) await intelligence.upsertFromRelationshipInsight(exists[0].id, contactId, insightData)
         return exists[0].id
       }
     }
@@ -248,7 +248,7 @@ async function upsertInsight(contactId, insightData) {
       contactIds,
     ])
     const insightId = rows[0]?.id || null
-    if (insightId) await intelligence.upsertFromRelationshipInsight(insightId, contactId, insightData)
+    if (insightId && !insightData.skip_intelligence) await intelligence.upsertFromRelationshipInsight(insightId, contactId, insightData)
     return insightId
   } catch (err) {
     console.error('[index] upsertInsight error:', err.message)
@@ -598,8 +598,9 @@ async function runAnalysis() {
 
         // Deep analysis: run if group has never been analyzed OR has new activity since last analysis
         const { rows: existing } = await db.query(`
-          SELECT analyzed_at FROM relationships.groups WHERE wa_chat_id = $1
+          SELECT id, analyzed_at, group_type, my_role FROM relationships.groups WHERE wa_chat_id = $1
         `, [group.chat_id])
+        const groupId = existing[0]?.id
         const analyzedAt = existing[0]?.analyzed_at
 
         const hasNewActivity = !analyzedAt ||
@@ -641,14 +642,27 @@ async function runAnalysis() {
             group.chat_id,
           ])
 
-          // Surface group opportunities as insights
-          for (const opp of (analysis.opportunities || []).slice(0, 3)) {
+          // Surface group opportunities as legacy insights and first-class intelligence opportunities
+          for (const [idx, opp] of (analysis.opportunities || []).slice(0, 3).entries()) {
+            const sourceRef = `group:opportunity:${group.chat_id}:${idx}`
             await upsertInsight(null, {
               insight_type: 'opportunity',
               title:        opp.title || 'Group opportunity',
               description:  `[${groupName || group.chat_id}] ${opp.description || ''}`,
               priority:     opp.priority || 'medium',
+              source_ref:   sourceRef,
+              skip_intelligence: true,
             })
+            if (groupId) {
+              await intelligence.upsertFromGroupOpportunity(groupId, {
+                id: groupId,
+                wa_chat_id: group.chat_id,
+                name: groupName || group.chat_id,
+                group_type: analysis.group_type,
+                my_role: analysis.my_role,
+                last_activity_at: group.last_msg_at,
+              }, opp, idx)
+            }
             insightsGenerated++
           }
 

@@ -78,6 +78,12 @@ function sourceRefFromProjectInsight(projectId, insight) {
   return `projects.project_insights:${projectId}:${insight.insight_type || 'unknown'}:${stableHash(insight.content || '')}`
 }
 
+function sourceRefFromGroupOpportunity(groupId, opportunity, index = 0) {
+  const title = opportunity?.title || 'Group opportunity'
+  const description = opportunity?.description || ''
+  return `relationships.groups:${groupId}:opportunity:${index}:${stableHash(`${title}:${description}`)}`
+}
+
 function dedupeKeyFor(sourceSystem, sourceRef, title) {
   return `${sourceSystem}:${sourceRef || stableHash(title)}`
 }
@@ -317,12 +323,58 @@ async function upsertFromProjectInsight(projectInsightId, projectId, insight) {
   }
 }
 
+async function upsertFromGroupOpportunity(groupId, group, opportunity, index = 0) {
+  if (!groupId || !opportunity) return null
+  try {
+    const sourceRef = sourceRefFromGroupOpportunity(groupId, opportunity, index)
+    const title = opportunity.title || 'Group opportunity'
+    const description = opportunity.description || null
+    const opportunityId = await upsertOpportunity({
+      opportunity_type: 'group_opportunity',
+      title,
+      description,
+      priority: opportunity.priority || 'medium',
+      source_system: 'groups',
+      source_ref: sourceRef,
+      dedupe_key: dedupeKeyFor('groups', sourceRef, title),
+      why_now: group?.last_activity_at ? `Group activity last seen at ${group.last_activity_at}` : null,
+      metadata: {
+        group_id: groupId,
+        group_name: group?.name || null,
+        wa_chat_id: group?.wa_chat_id || null,
+        group_type: group?.group_type || null,
+        my_role: group?.my_role || null,
+        source: 'relationships.groups.opportunities',
+        index,
+      },
+    })
+    await addEvidence(opportunityId, {
+      source_table: 'relationships.groups',
+      source_id: groupId,
+      source_ref: sourceRef,
+      occurred_at: group?.last_activity_at || group?.analyzed_at || null,
+      quote: description || title,
+      relevance: 1,
+      metadata: {
+        group_name: group?.name || null,
+        wa_chat_id: group?.wa_chat_id || null,
+        opportunity,
+      },
+    })
+    return opportunityId
+  } catch (err) {
+    console.error('[intelligence] group opportunity upsert failed:', err.message)
+    return null
+  }
+}
+
 module.exports = {
   ensureSchema,
   upsertOpportunity,
   recordSignalForOpportunity,
   upsertFromRelationshipInsight,
   upsertFromProjectInsight,
+  upsertFromGroupOpportunity,
   relationshipOpportunityType,
   projectOpportunityType,
 }
