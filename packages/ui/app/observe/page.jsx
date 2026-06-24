@@ -9,7 +9,8 @@ function ago(iso) {
   const s = Math.floor((Date.now() - new Date(iso)) / 1000)
   if (s < 60) return `${s}s ago`
   if (s < 3600) return `${Math.floor(s / 60)}m ago`
-  return `${Math.floor(s / 3600)}h ago`
+  if (s < 86400) return `${Math.floor(s / 3600)}h ago`
+  return `${Math.floor(s / 86400)}d ago`
 }
 
 function mw(val) {
@@ -26,6 +27,7 @@ const PILL_CLASS = {
   error:    'pillFailed',
   critical: 'pillCritical',
   warning:  'pillWarning',
+  stale_running: 'pillWarning',
   info:     'pillInfo',
 }
 
@@ -66,11 +68,26 @@ async function apiFetch(path) {
 
 function Overview({ sys, agents, alerts }) {
   const s = sys?.sample || {}
+  const health = sys?.health || {}
   const activeRuns = (agents?.runs || []).filter(r => !r.ended_at)
+  const staleRuns = activeRuns.filter(r => r.stale_running)
   const activeAlerts = (alerts?.alerts || []).filter(a => !a.resolved_at).slice(0, 5)
 
   return (
     <>
+      {health.sampler_status && health.sampler_status !== 'ok' && (
+        <div className={styles.warnBanner}>
+          System sampler is <strong>{health.sampler_status}</strong>
+          {health.sampler_sampled_at ? <> — latest sample {ago(health.sampler_sampled_at)}</> : null}.
+          Run <code>npm run sampler</code> on the host to restore live CPU/GPU/memory metrics.
+        </div>
+      )}
+      {staleRuns.length > 0 && (
+        <div className={styles.warnBanner}>
+          {staleRuns.length} telemetry run{staleRuns.length === 1 ? '' : 's'} appear stuck as <code>running</code> for over 6h.
+          They are flagged as stale so they do not look like active work.
+        </div>
+      )}
       <div className={styles.grid2}>
         <div className={styles.card}>
           <div className={styles.cardTitle}>GPU</div>
@@ -112,7 +129,7 @@ function Overview({ sys, agents, alerts }) {
                 {activeRuns.map(r => (
                   <tr key={r.run_id}>
                     <td>{r.agent_name}</td>
-                    <td><Pill status="running" /></td>
+                    <td><Pill status={r.display_status || 'running'} /></td>
                     <td>{ago(r.started_at)}</td>
                   </tr>
                 ))}
@@ -158,7 +175,7 @@ function Agents({ data }) {
           ) : runs.map(r => {
             const stages = byRun[r.run_id] || []
             const latest = stages[stages.length - 1]
-            const status = r.ended_at ? (r.status || 'done') : 'running'
+            const status = r.display_status || (r.ended_at ? (r.status || 'done') : 'running')
             return (
               <tr key={r.run_id}>
                 <td>{r.agent_name}</td>

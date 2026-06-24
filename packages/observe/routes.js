@@ -17,6 +17,43 @@ function parsePositiveInt(value, fallback, max = 1000) {
   return parsed
 }
 
+function sampleAgeSeconds(sample) {
+  if (!sample?.sampled_at) return null
+  const ms = Date.now() - new Date(sample.sampled_at).getTime()
+  if (!Number.isFinite(ms)) return null
+  return Math.max(0, Math.floor(ms / 1000))
+}
+
+function decorateSystemHealth(sample) {
+  const ageSeconds = sampleAgeSeconds(sample)
+  const staleAfterSeconds = 5 * 60
+  const samplerStatus = !sample
+    ? 'missing'
+    : ageSeconds > staleAfterSeconds
+      ? 'stale'
+      : 'ok'
+  return {
+    sampler_status: samplerStatus,
+    sampler_age_seconds: ageSeconds,
+    sampler_stale_after_seconds: staleAfterSeconds,
+    sampler_sampled_at: sample?.sampled_at || null,
+  }
+}
+
+function decorateRun(row) {
+  const staleAfterSeconds = 6 * 60 * 60
+  const ageSeconds = row?.started_at
+    ? Math.max(0, Math.floor((Date.now() - new Date(row.started_at).getTime()) / 1000))
+    : null
+  const staleRunning = !row?.ended_at && ageSeconds != null && ageSeconds > staleAfterSeconds
+  return {
+    ...row,
+    display_status: staleRunning ? 'stale_running' : (row?.ended_at ? (row.status || 'completed') : 'running'),
+    stale_running: staleRunning,
+    age_seconds: ageSeconds,
+  }
+}
+
 function createObserveRouter(db) {
   const router = express.Router()
 
@@ -37,7 +74,7 @@ function createObserveRouter(db) {
       const { rows: counters } = await db.query(`
         SELECT agent_name, counter_name, value FROM telemetry.counters ORDER BY last_updated_at DESC LIMIT 100
       `)
-      res.json({ sample: latest || null, models, counters })
+      res.json({ sample: latest || null, models, counters, health: decorateSystemHealth(latest || null) })
     } catch (err) {
       res.status(500).json({ error: err.message })
     }
@@ -52,8 +89,11 @@ function createObserveRouter(db) {
           (SELECT COUNT(*) FROM telemetry.llm_requests lr WHERE lr.run_id = r.run_id AND lr.success = false) AS error_count
         FROM telemetry.agent_runs r
         WHERE r.ended_at IS NULL OR r.started_at > NOW() - INTERVAL '24 hours'
-        ORDER BY r.started_at DESC
-        LIMIT 50
+        ORDER BY
+          CASE WHEN r.ended_at IS NULL THEN 0 ELSE 1 END,
+          CASE WHEN r.ended_at IS NULL AND r.started_at < NOW() - INTERVAL '6 hours' THEN 0 ELSE 1 END,
+          r.started_at DESC
+        LIMIT 75
       `)
       const { rows: progress } = await db.query(`
         SELECT wp.*, ar.agent_name FROM telemetry.work_progress wp
@@ -61,7 +101,7 @@ function createObserveRouter(db) {
         WHERE ar.ended_at IS NULL OR ar.started_at > NOW() - INTERVAL '24 hours'
         ORDER BY wp.last_updated_at DESC
       `)
-      res.json({ runs, progress })
+      res.json({ runs: runs.map(decorateRun), progress })
     } catch (err) {
       res.status(500).json({ error: err.message })
     }
@@ -161,6 +201,31 @@ function createObserveRouter(db) {
     }
   })
 
+
+
+  // ── Health: explicit observability freshness/status ─────────────────────────
+  router.get('/health', async (req, res) => {
+    try {
+      const { rows: [latest] } = await db.query(`
+        SELECT * FROM telemetry.system_samples ORDER BY sampled_at DESC LIMIT 1
+      `)
+      const { rows: staleRuns } = await db.query(`
+        SELECT run_id, agent_name, status, started_at, ended_at
+        FROM telemetry.agent_runs
+        WHERE ended_at IS NULL
+          AND started_at < NOW() - INTERVAL '6 hours'
+        ORDER BY started_at ASC
+        LIMIT 25
+      `)
+      res.json({
+        ...decorateSystemHealth(latest || null),
+        stale_running_runs: staleRuns.map(decorateRun),
+      })
+    } catch (err) {
+      res.status(500).json({ error: err.message })
+    }
+  })
+
   // ── Alerts ──────────────────────────────────────────────────────────────────
   router.get('/alerts', async (req, res) => {
     try {
@@ -183,8 +248,8 @@ function createObserveRouter(db) {
     const interval = setInterval(async () => {
       try {
         const { rows: [sys] } = await db.query(`SELECT * FROM telemetry.system_samples ORDER BY sampled_at DESC LIMIT 1`)
-        const { rows: runs }  = await db.query(`SELECT run_id, agent_name, status, started_at FROM telemetry.agent_runs WHERE ended_at IS NULL LIMIT 20`)
-        res.write(`data: ${JSON.stringify({ system: sys || null, runs })}\n\n`)
+        const { rows: runs }  = await db.query(`SELECT run_id, agent_name, status, started_at, ended_at FROM telemetry.agent_runs WHERE ended_at IS NULL ORDER BY started_at DESC LIMIT 20`)
+        res.write(`data: ${JSON.stringify({ system: sys || null, health: decorateSystemHealth(sys || null), runs: runs.map(decorateRun) })}\n\n`)
       } catch (_) {}
     }, 2000)
 

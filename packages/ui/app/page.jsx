@@ -248,6 +248,8 @@ export default function DashboardPage() {
         .attention-meta { display:flex; align-items:center; gap:.4rem; flex-wrap:wrap; margin-bottom:.2rem; }
         .attention-type { font-size:.65rem; color:var(--text-3); background:var(--surface-2); border:1px solid var(--border); border-radius:100px; padding:.08rem .4rem; text-transform:capitalize; }
         .attention-score { font-size:.68rem; color:var(--text-3); }
+        .attention-quality { font-size:.65rem; color:var(--amber); background:var(--amber-bg); border:1px solid var(--amber-border); border-radius:100px; padding:.08rem .4rem; }
+        .attention-evidence { font-size:.68rem; color:var(--text-3); }
         .attention-age { font-size:.68rem; color:var(--text-3); }
         .attention-age-strong { color:var(--text); font-weight:600; }
         .attention-title { font-size:.875rem; font-weight:600; color:var(--text); line-height:1.35; }
@@ -348,7 +350,13 @@ export default function DashboardPage() {
                       <span className="attention-type">{String(item.opportunity_type || item.item_type || 'opportunity').replace(/_/g, ' ')}</span>
                       {item.primary_contact_name && <span className="ic-label">{item.primary_contact_name}</span>}
                       {item.primary_project_name && <span className="ic-label">{item.primary_project_name}</span>}
-                      {item.expected_value_score != null && <span className="attention-score">score {Number(item.expected_value_score).toFixed(0)}</span>}
+                      {item.attention_score != null
+                        ? <span className="attention-score">attention {Number(item.attention_score).toFixed(0)}</span>
+                        : item.expected_value_score != null && <span className="attention-score">score {Number(item.expected_value_score).toFixed(0)}</span>}
+                      {item.evidence_count != null && <span className="attention-evidence">{Number(item.evidence_count)} evidence</span>}
+                      {(item.quality_flags || []).slice(0, 2).map(flag => (
+                        <span className="attention-quality" key={flag}>{String(flag).replace(/_/g, ' ')}</span>
+                      ))}
                       {(item.first_seen_at || item.created_at) && (
                         <span className="attention-age">
                           first seen <span className="attention-age-strong">{fmtAge(item.first_seen_at || item.created_at)}</span>
