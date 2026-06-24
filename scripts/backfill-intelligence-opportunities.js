@@ -77,6 +77,31 @@ async function backfillProjectInsights() {
   return { scanned: rows.length, would_upsert: rows.length, written }
 }
 
+async function backfillGroupOpportunities() {
+  const { rows } = await db.query(`
+    SELECT id, wa_chat_id, name, group_type, my_role, opportunities, last_activity_at, analyzed_at
+    FROM relationships.groups
+    WHERE jsonb_typeof(opportunities) = 'array'
+      AND jsonb_array_length(opportunities) > 0
+    ORDER BY COALESCE(analyzed_at, last_activity_at) DESC NULLS LAST
+    LIMIT $1
+  `, [LIMIT])
+
+  let scannedItems = 0
+  let written = 0
+  for (const group of rows) {
+    const opportunities = Array.isArray(group.opportunities) ? group.opportunities : []
+    for (const [idx, opp] of opportunities.entries()) {
+      scannedItems++
+      if (WRITE) {
+        const id = await intelligence.upsertFromGroupOpportunity(group.id, group, opp, idx)
+        if (id) written++
+      }
+    }
+  }
+  return { scanned_groups: rows.length, scanned: scannedItems, would_upsert: scannedItems, written }
+}
+
 async function main() {
   console.log(`SecondBrain intelligence opportunity backfill (${WRITE ? 'WRITE' : 'dry-run'})`)
   console.log(`Limit per source: ${LIMIT}`)
@@ -87,8 +112,9 @@ async function main() {
 
   const relationships = await backfillRelationshipInsights()
   const projects = await backfillProjectInsights()
+  const groups = await backfillGroupOpportunities()
 
-  console.log(JSON.stringify({ mode: WRITE ? 'write' : 'dry-run', relationships, projects }, null, 2))
+  console.log(JSON.stringify({ mode: WRITE ? 'write' : 'dry-run', relationships, projects, groups }, null, 2))
   if (!WRITE) console.log('Dry run only. Re-run with --write to insert/update intelligence.opportunities.')
 }
 
