@@ -25,7 +25,7 @@ async function extractOrganizations(records, sourceType) {
       }
 
       // Extract from email domain
-      if (record.email_domain && !record.company) {
+      if (record.email_domain) {
         orgs.push({
           name: record.email_domain.split('.')[0].toUpperCase(),
           domain: record.email_domain,

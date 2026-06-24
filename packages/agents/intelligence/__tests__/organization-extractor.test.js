@@ -46,3 +46,16 @@ test('organization-extractor: extracts org-like WhatsApp group names', async () 
   const { organizations } = await extractOrganizations([mockGroup], 'groups');
   assert.ok(organizations.length > 0, 'should extract org-like group names');
 });
+
+test('organization-extractor: extracts both company and email domain when both exist', async () => {
+  const mockContact = {
+    id: 'alice@example.com',
+    company: 'Acme Corporation',
+    email_domain: 'acme.com'
+  };
+
+  const { organizations } = await extractOrganizations([mockContact], 'contacts');
+  assert.ok(organizations.some(o => o.name === 'Acme Corporation' && o.domain === 'acme.com'), 'should extract company with domain');
+  assert.ok(organizations.some(o => o.name === 'ACME' && o.domain === 'acme.com'), 'should extract email domain independently');
+  assert.strictEqual(organizations.length, 2, 'should extract both company and email domain (different names create separate orgs)');
+});
