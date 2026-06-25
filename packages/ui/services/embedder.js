@@ -185,8 +185,9 @@ async function embedBatchWithFallback(texts, taskType = 'RETRIEVAL_DOCUMENT') {
   // Always try the configured provider first
   providersToTry.push(config.providerType);
 
-  // Then try others in priority order (cheapest / most reliable first)
-  const fallbackOrder = ['openai', 'jina', 'gemini', 'ollama'];
+  // Then try cloud providers in priority order. Do not use Ollama here: local embeddings
+  // make Prateek's Mac unusable during large indexing jobs.
+  const fallbackOrder = ['jina', 'openai', 'gemini'];
   for (const p of fallbackOrder) {
     if (!providersToTry.includes(p)) providersToTry.push(p);
   }
