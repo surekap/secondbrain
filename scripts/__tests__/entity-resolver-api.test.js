@@ -22,14 +22,20 @@ test('organization search uses entity_aliases for q matching', () => {
   const routeSource = source.slice(routeStart, routeStart + 2500)
   assert.match(routeSource, /entity_aliases/)
   assert.match(routeSource, /normalized_alias/)
+  assert.match(routeSource, /duplicate_decisions/)
+  assert.match(routeSource, /canonical_entity_id/)
+  assert.match(routeSource, /matched_entity_id/)
 })
 
 test('contact tier q search uses entity_aliases for alias matching', () => {
-  const routeStart = source.indexOf("/api/intelligence/contact-tiers")
+  const routeStart = source.indexOf("// GET /api/intelligence/contact-tiers — inspect contacts by tier/overdue state")
   assert.ok(routeStart > 0)
-  const routeSource = source.slice(routeStart, routeStart + 4000)
+  const routeSource = source.slice(routeStart, routeStart + 5000)
   assert.match(routeSource, /entity_aliases/)
   assert.match(routeSource, /normalized_alias/)
+  assert.match(routeSource, /duplicate_decisions/)
+  assert.match(routeSource, /canonical_entity_id/)
+  assert.match(routeSource, /matched_entity_id/)
 })
 
 test('server exposes read-only duplicate audit endpoints', () => {

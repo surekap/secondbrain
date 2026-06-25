@@ -1230,43 +1230,67 @@ app.get('/api/intelligence/contact-tiers', async (req, res) => {
     const limit = parsePositiveIntQuery(req.query.limit, 50, 200);
     if (limit === null) return res.status(400).json({ error: 'Invalid limit' });
     const params = [];
-    const conditions = [];
+    const matchConditions = [];
+    const canonicalConditions = [];
     const tier = String(req.query.tier || '').trim();
     if (tier && tier !== 'all') {
       params.push(tier);
-      conditions.push(`relationship_tier = $${params.length}`);
+      canonicalConditions.push(`cc.relationship_tier = $${params.length}`);
     }
     if (String(req.query.overdue || '').toLowerCase() === 'true') {
-      conditions.push(`next_suggested_touch_at < NOW()`);
+      canonicalConditions.push(`cc.next_suggested_touch_at < NOW()`);
     }
     if (req.query.q) {
       params.push(`%${String(req.query.q).trim().toLowerCase()}%`);
-      conditions.push(`(
-        LOWER(display_name) LIKE $${params.length}
-        OR LOWER(COALESCE(company, '')) LIKE $${params.length}
+      matchConditions.push(`(
+        LOWER(c.display_name) LIKE $${params.length}
+        OR LOWER(COALESCE(c.company, '')) LIKE $${params.length}
         OR EXISTS (
           SELECT 1 FROM intelligence.entity_aliases a
           WHERE a.entity_type = 'contact'
-            AND a.entity_id = relationships.contacts.id::text
+            AND a.entity_id = c.id::text
             AND a.normalized_alias LIKE $${params.length}
         )
       )`);
     }
-    const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+    const matchWhere = matchConditions.length ? `WHERE ${matchConditions.join(' AND ')}` : '';
+    const canonicalWhere = canonicalConditions.length ? `WHERE ${canonicalConditions.join(' AND ')}` : '';
     params.push(limit);
     const { rows } = await db.query(`
-      SELECT id, display_name, company, job_title, relationship_type, relationship_strength,
-             relationship_tier, strategic_importance_score, preferred_cadence_days,
-             dormant_threshold_days, intro_sensitivity, last_interaction_at, next_suggested_touch_at,
-             CASE WHEN next_suggested_touch_at < NOW() THEN EXTRACT(DAYS FROM NOW() - next_suggested_touch_at)::int ELSE 0 END AS days_overdue,
-             COALESCE((SELECT ARRAY_AGG(key) FROM JSONB_OBJECT_KEYS(COALESCE(manual_overrides, '{}'::jsonb)) AS key), '{}') AS manual_override_fields
-      FROM relationships.contacts
-      ${where}
+      WITH matched AS (
+        SELECT c.id::text AS matched_entity_id,
+               COALESCE(d.canonical_id, c.id::text) AS canonical_entity_id,
+               d.id AS duplicate_decision_id,
+               d.duplicate_key,
+               d.duplicate_ids,
+               (d.id IS NOT NULL AND c.id::text <> d.canonical_id) AS is_duplicate_entity
+        FROM relationships.contacts c
+        LEFT JOIN intelligence.duplicate_decisions d
+          ON d.entity_type = 'contact'
+         AND d.action = 'confirmed'
+         AND (c.id::text = d.canonical_id OR c.id::text = ANY(d.duplicate_ids))
+        ${matchWhere}
+      ),
+      canonicalized AS (
+        SELECT DISTINCT ON (canonical_entity_id) *
+        FROM matched
+        ORDER BY canonical_entity_id, is_duplicate_entity ASC, matched_entity_id ASC
+      )
+      SELECT cc.id, cc.display_name, cc.company, cc.job_title, cc.relationship_type, cc.relationship_strength,
+             cc.relationship_tier, cc.strategic_importance_score, cc.preferred_cadence_days,
+             cc.dormant_threshold_days, cc.intro_sensitivity, cc.last_interaction_at, cc.next_suggested_touch_at,
+             czn.matched_entity_id, czn.canonical_entity_id, czn.duplicate_decision_id,
+             czn.duplicate_key, czn.duplicate_ids, czn.is_duplicate_entity,
+             CASE WHEN cc.next_suggested_touch_at < NOW() THEN EXTRACT(DAYS FROM NOW() - cc.next_suggested_touch_at)::int ELSE 0 END AS days_overdue,
+             COALESCE((SELECT ARRAY_AGG(key) FROM JSONB_OBJECT_KEYS(COALESCE(cc.manual_overrides, '{}'::jsonb)) AS key), '{}') AS manual_override_fields
+      FROM canonicalized czn
+      JOIN relationships.contacts cc ON cc.id::text = czn.canonical_entity_id
+      ${canonicalWhere}
       ORDER BY
-        CASE relationship_tier WHEN 'tier_1' THEN 1 WHEN 'tier_2' THEN 2 WHEN 'tier_3' THEN 3 WHEN 'unknown' THEN 4 WHEN 'noise' THEN 5 ELSE 6 END,
-        COALESCE(next_suggested_touch_at, 'infinity'::timestamptz) ASC,
-        strategic_importance_score DESC NULLS LAST,
-        last_interaction_at DESC NULLS LAST
+        CASE cc.relationship_tier WHEN 'tier_1' THEN 1 WHEN 'tier_2' THEN 2 WHEN 'tier_3' THEN 3 WHEN 'unknown' THEN 4 WHEN 'noise' THEN 5 ELSE 6 END,
+        COALESCE(cc.next_suggested_touch_at, 'infinity'::timestamptz) ASC,
+        cc.strategic_importance_score DESC NULLS LAST,
+        cc.last_interaction_at DESC NULLS LAST
       LIMIT $${params.length}
     `, params);
     res.json(rows);
@@ -1297,18 +1321,43 @@ app.get('/api/intelligence/organizations', async (req, res) => {
     const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
     params.push(limit);
     const { rows } = await db.query(`
+      WITH matched AS (
+        SELECT o.id::text AS matched_entity_id,
+               COALESCE(d.canonical_id, o.id::text) AS canonical_entity_id,
+               d.id AS duplicate_decision_id,
+               d.duplicate_key,
+               d.duplicate_ids,
+               (d.id IS NOT NULL AND o.id::text <> d.canonical_id) AS is_duplicate_entity
+        FROM intelligence.organizations o
+        LEFT JOIN intelligence.duplicate_decisions d
+          ON d.entity_type = 'organization'
+         AND d.action = 'confirmed'
+         AND (o.id::text = d.canonical_id OR o.id::text = ANY(d.duplicate_ids))
+        ${where}
+      ),
+      canonicalized AS (
+        SELECT DISTINCT ON (canonical_entity_id) *
+        FROM matched
+        ORDER BY canonical_entity_id, is_duplicate_entity ASC, matched_entity_id ASC
+      )
       SELECT o.*,
+             czn.matched_entity_id,
+             czn.canonical_entity_id,
+             czn.duplicate_decision_id,
+             czn.duplicate_key,
+             czn.duplicate_ids,
+             czn.is_duplicate_entity,
              COALESCE(co.contact_count, 0)::int AS contact_count,
              COALESCE(co.key_contacts, '[]'::json) AS key_contacts
-      FROM intelligence.organizations o
+      FROM canonicalized czn
+      JOIN intelligence.organizations o ON o.id::text = czn.canonical_entity_id
       LEFT JOIN LATERAL (
         SELECT COUNT(*) AS contact_count,
                JSON_AGG(JSON_BUILD_OBJECT('id', c.id, 'name', c.display_name, 'role', x.role) ORDER BY c.display_name) FILTER (WHERE c.id IS NOT NULL) AS key_contacts
         FROM intelligence.contact_organizations x
         LEFT JOIN relationships.contacts c ON c.id = x.contact_id
-        WHERE x.organization_id = o.id
+        WHERE x.organization_id::text = czn.canonical_entity_id
       ) co ON true
-      ${where}
       ORDER BY o.strategic_importance_score DESC NULLS LAST, contact_count DESC, o.name ASC
       LIMIT $${params.length}
     `, params);
