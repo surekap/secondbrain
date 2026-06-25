@@ -5,6 +5,7 @@ require('dotenv').config({ path: require('path').resolve(__dirname, '../../../.e
 
 const cron = require('node-cron')
 const db   = require('@secondbrain/db')
+const { cleanupOrphanedRuns, killDuplicateProcesses } = require('../shared/cleanup')
 
 const extractor     = require('./services/extractor')
 const analyzer      = require('./services/analyzer')
@@ -829,7 +830,9 @@ async function runAnalysis() {
 // ── Schedule & start ──────────────────────────────────────────────────────────
 
 async function main() {
+  killDuplicateProcesses()
   await ensureSchema()
+  await cleanupOrphanedRuns(db, 'relationships')
 
   // Run immediately on startup
   console.log('🏁 Starting initial analysis...\n')

@@ -9,6 +9,7 @@ const path      = require('path')
 const llm       = require('../shared/llm')
 const db        = require('@secondbrain/db')
 const { getConfig } = require('../shared/config')
+const { killDuplicateProcesses } = require('../shared/cleanup')
 
 const tavily        = require('./providers/tavily')
 const openaiProv    = require('./providers/openai')
@@ -214,6 +215,7 @@ async function ensureSchema() {
 }
 
 async function main() {
+  killDuplicateProcesses()
   await ensureSchema()
   // RESEARCH_CONTACT_ID=<id> researches a single contact and exits
   const singleId = process.env.RESEARCH_CONTACT_ID

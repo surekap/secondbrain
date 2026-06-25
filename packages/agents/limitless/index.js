@@ -2,6 +2,7 @@
 require('dotenv').config({ path: require('path').resolve(__dirname, '../../../.env.local') });
 const LifelogAgent = require('./agent');
 const cron = require('node-cron');
+const { cleanupOrphanedRuns, killDuplicateProcesses } = require('../shared/cleanup');
 
 let telemetry = null
 try { telemetry = require('@secondbrain/telemetry') } catch (_) {}
@@ -66,7 +67,11 @@ async function ensureSchema() {
 }
 
 console.log('🏁 Starting initial fetch and process...\n');
-ensureSchema().then(() => fetchLifelogs()).then(() => {
+killDuplicateProcesses();
+ensureSchema()
+  .then(() => cleanupOrphanedRuns(agent.db, 'limitless'))
+  .then(() => fetchLifelogs())
+  .then(() => {
     setTimeout(async () => {
         const processed = await agent.processBatch(10);
         _transcriptsProcessed += (processed || 0)

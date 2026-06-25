@@ -6,6 +6,7 @@ const fs   = require('fs');
 const path = require('path');
 const db   = require('@secondbrain/db');
 const { createLogger } = require('./logger');
+const { cleanupOrphanedRuns, killDuplicateProcesses } = require('../shared/cleanup');
 
 let telemetry = null
 try { telemetry = require('@secondbrain/telemetry') } catch (_) {}
@@ -55,7 +56,10 @@ log.info('Scheduling email fetch every 15 minutes');
 cron.schedule('*/15 * * * *', fetchEmails);
 
 log.info('Starting initial fetch...');
-ensureSchema().then(() => fetchEmails());
+killDuplicateProcesses(undefined, log);
+ensureSchema()
+  .then(() => cleanupOrphanedRuns(db, 'email', log))
+  .then(() => fetchEmails());
 
 process.on('SIGINT', async () => {
   log.info('Shutting down...');

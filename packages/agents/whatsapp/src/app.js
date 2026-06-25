@@ -10,6 +10,7 @@ const PostgresStore = require('./lib/PostgresStore');
 const dispatcher = require('./lib/dispatcher');
 const { startHistoricalSync } = require('./lib/sync');
 const pool = require('./lib/db');
+const { cleanupOrphanedRuns, killDuplicateProcesses } = require('../../shared/cleanup');
 
 let telemetry = null;
 try { telemetry = require('@secondbrain/telemetry'); } catch (_) {}
@@ -194,6 +195,8 @@ Object.keys(Events).forEach(eventKey => {
 // ── Boot sequence ─────────────────────────────────────────────────────────────
 (async () => {
     try {
+        killDuplicateProcesses();
+        await cleanupOrphanedRuns(pool, 'whatsapp');
         await runMigrations();
         app.listen(PORT, () => console.log(`[http] listening on http://localhost:${PORT}/admin/`));
         client.initialize();

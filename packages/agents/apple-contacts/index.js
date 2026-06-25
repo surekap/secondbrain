@@ -11,6 +11,7 @@ dotenv.config({ path: path.resolve(__dirname, '../../../.env.local') });
 
 const db = require('@secondbrain/db');
 const { syncContacts } = require('./services/syncer');
+const { killDuplicateProcesses } = require('../shared/cleanup');
 
 async function ensureSchema() {
   try {
@@ -56,6 +57,7 @@ async function main() {
     process.exit(0);
   }
 
+  killDuplicateProcesses();
   await ensureSchema();
 
   // Run immediately on start
