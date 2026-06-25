@@ -9,7 +9,7 @@ const { extractOrganizations } = require('./services/organization-extractor')
 const { checkDormancy } = require('./services/dormancy-monitor')
 const { buildSignalClusters, shouldPromoteCluster, opportunityFromCluster, clusterPromotionPlan } = require('./services/signal-clusterer')
 const { recommendContactTiers } = require('./services/contact-tierer')
-const { extractAliases } = require('./services/alias-extractor')
+const { extractAliases, normalized: normalizeAlias } = require('./services/alias-extractor')
 
 let schemaReady = false
 
@@ -427,24 +427,35 @@ async function upsertOrganizationGraph(pool, extracted) {
 }
 
 async function upsertAliases(pool, contacts, organizations) {
-  const aliases = extractAliases(contacts || [], organizations || [])
-  let count = 0
-  for (const alias of aliases) {
-    try {
-      await pool.query(`
-        INSERT INTO intelligence.entity_aliases (entity_type, entity_id, alias, source, confidence)
-        VALUES ($1, $2, $3, $4, $5)
-        ON CONFLICT (entity_type, entity_id, normalized_alias) DO UPDATE SET
-          source = COALESCE(EXCLUDED.source, intelligence.entity_aliases.source),
-          confidence = COALESCE(EXCLUDED.confidence, intelligence.entity_aliases.confidence),
-          updated_at = NOW()
-      `, [alias.entity_type, alias.entity_id, alias.alias, alias.source, alias.confidence])
-      count++
-    } catch (error) {
-      // Skip duplicates or missing entity_id gracefully
-    }
+  const deduped = []
+  const seen = new Set()
+  for (const alias of extractAliases(contacts || [], organizations || [])) {
+    if (!alias.entity_type || alias.entity_id == null || !alias.alias) continue
+    const key = `${alias.entity_type}:${alias.entity_id}:${normalizeAlias(alias.alias)}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    deduped.push(alias)
   }
-  return { aliasCount: count }
+
+  if (!deduped.length) return { aliasCount: 0 }
+
+  const result = await pool.query(`
+    INSERT INTO intelligence.entity_aliases (entity_type, entity_id, alias, source, confidence)
+    SELECT *
+    FROM UNNEST($1::text[], $2::text[], $3::text[], $4::text[], $5::numeric[])
+      AS incoming(entity_type, entity_id, alias, source, confidence)
+    ON CONFLICT (entity_type, entity_id, normalized_alias) DO UPDATE SET
+      source = COALESCE(EXCLUDED.source, intelligence.entity_aliases.source),
+      confidence = COALESCE(EXCLUDED.confidence, intelligence.entity_aliases.confidence)
+  `, [
+    deduped.map(alias => alias.entity_type),
+    deduped.map(alias => String(alias.entity_id)),
+    deduped.map(alias => alias.alias),
+    deduped.map(alias => alias.source || null),
+    deduped.map(alias => alias.confidence ?? null),
+  ])
+
+  return { aliasCount: result.rowCount || 0 }
 }
 
 function computeExpectedValue(input = {}) {

@@ -1,6 +1,7 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
 const { contactAliases, organizationAliases, extractAliases, normalized } = require('../services/alias-extractor')
+const { upsertAliases } = require('../index')
 
 test('alias-extractor: derives first-name and last-name aliases from contact display name', () => {
   const aliases = contactAliases({ id: 1, display_name: 'Rahul Kayan' })
@@ -43,4 +44,37 @@ test('alias-extractor: batch extraction combines contacts and organizations', ()
   )
   assert.ok(aliases.some(a => a.entity_type === 'contact' && a.alias === 'Rahul'))
   assert.ok(aliases.some(a => a.entity_type === 'organization' && a.alias === 'Eden Realty Ventures'))
+})
+
+test('alias-upsert: uses one batched insert without nonexistent updated_at column', async () => {
+  const calls = []
+  const pool = {
+    async query(sql, params) {
+      calls.push({ sql, params })
+      return { rowCount: 5 }
+    }
+  }
+
+  const result = await upsertAliases(pool, [
+    { id: 1, display_name: 'Rahul Kayan' },
+    { id: 2, display_name: 'Dr. Anupama Sureka' },
+  ], [])
+
+  assert.equal(result.aliasCount, 5)
+  assert.equal(calls.length, 1)
+  assert.match(calls[0].sql, /UNNEST/i)
+  assert.doesNotMatch(calls[0].sql, /updated_at/i)
+})
+
+test('alias-upsert: reports database errors instead of silently swallowing total failure', async () => {
+  const pool = {
+    async query() {
+      throw new Error('column "updated_at" of relation "entity_aliases" does not exist')
+    }
+  }
+
+  await assert.rejects(
+    () => upsertAliases(pool, [{ id: 1, display_name: 'Rahul Kayan' }], []),
+    /updated_at/
+  )
 })
