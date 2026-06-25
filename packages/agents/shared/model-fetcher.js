@@ -3,22 +3,7 @@
 const https = require('https')
 const { getConfig } = require('./config')
 const { getStaticModels } = require('./model-catalog')
-
-/**
- * Static models fallback when APIs fail or are not configured.
- * These are used as the default list for all providers.
- */
-const STATIC_MODELS = [
-  { label: 'Claude Sonnet 4.6', value: 'claude-sonnet-4-6', provider_type: 'anthropic', capabilities: ['chat'] },
-  { label: 'Claude Opus 4.6', value: 'claude-opus-4-6', provider_type: 'anthropic', capabilities: ['chat'] },
-  { label: 'Claude Haiku 4.5', value: 'claude-haiku-4-5', provider_type: 'anthropic', capabilities: ['chat'] },
-  { label: 'GPT-5.4 Mini', value: 'gpt-5.4-mini', provider_type: 'openai', capabilities: ['chat'] },
-  { label: 'GPT-4o', value: 'gpt-4o', provider_type: 'openai', capabilities: ['chat'] },
-  { label: 'GPT-4o Mini', value: 'gpt-4o-mini', provider_type: 'openai', capabilities: ['chat'] },
-  { label: 'Gemini 2.5 Flash', value: 'gemini-2.5-flash', provider_type: 'gemini', capabilities: ['chat'] },
-  { label: 'Gemini 2.0 Flash', value: 'gemini-2.0-flash', provider_type: 'gemini', capabilities: ['chat'] },
-  { label: 'Gemini Embedding 2', value: 'gemini-embedding-2-preview', provider_type: 'gemini', capabilities: ['embeddings'] },
-]
+const { getOpenRouterModels } = require('./openrouter-catalog')
 
 /**
  * Fetch available models from the Anthropic API.
@@ -131,6 +116,74 @@ async function fetchOpenAIModels(apiKey) {
   }
 }
 
+const FALLBACK_GEMINI_EMBEDDING_MODEL = {
+  label: 'Gemini Embedding 2',
+  value: 'gemini-embedding-2-preview',
+  provider_type: 'gemini',
+  capabilities: ['embeddings'],
+}
+
+/**
+ * Fetch available embedding models from the Gemini API.
+ * Gemini API endpoint: GET https://generativelanguage.googleapis.com/v1beta/models
+ *
+ * @param {string} apiKey - The Gemini API key
+ * @returns {Promise<Array>} Array of model objects with { label, value, provider_type, capabilities }
+ */
+async function fetchGeminiModels(apiKey) {
+  if (!apiKey) {
+    console.warn('[model-fetcher] Gemini API key not configured, using fallback model')
+    return [FALLBACK_GEMINI_EMBEDDING_MODEL]
+  }
+
+  try {
+    return await new Promise((resolve, reject) => {
+      const options = {
+        hostname: 'generativelanguage.googleapis.com',
+        path: `/v1beta/models?key=${encodeURIComponent(apiKey)}`,
+        method: 'GET',
+      }
+
+      const req = https.request(options, (res) => {
+        let data = ''
+        res.on('data', chunk => { data += chunk })
+        res.on('end', () => {
+          try {
+            if (res.statusCode < 200 || res.statusCode >= 300) {
+              throw new Error(`Gemini API returned ${res.statusCode}`)
+            }
+            const json = JSON.parse(data)
+            const models = Array.isArray(json.models) ? json.models : []
+            const embeddingModels = models.filter(model =>
+              Array.isArray(model.supportedGenerationMethods) &&
+              model.supportedGenerationMethods.includes('embedContent')
+            )
+            const formatted = embeddingModels.map(model => ({
+              label: model.displayName || model.name,
+              value: String(model.name || '').replace(/^models\//, ''),
+              provider_type: 'gemini',
+              capabilities: ['embeddings'],
+            }))
+            resolve(formatted.length > 0 ? formatted : [FALLBACK_GEMINI_EMBEDDING_MODEL])
+          } catch (error) {
+            reject(error)
+          }
+        })
+      })
+
+      req.on('error', reject)
+      req.setTimeout(5000, () => {
+        req.destroy()
+        reject(new Error('Gemini API request timeout'))
+      })
+      req.end()
+    })
+  } catch (error) {
+    console.warn(`[model-fetcher] Failed to fetch Gemini models: ${error.message}, using fallback model`)
+    return [FALLBACK_GEMINI_EMBEDDING_MODEL]
+  }
+}
+
 /**
  * Match a requested capability against a list of model capabilities.
  * Normalizes common variations (e.g., 'completion' matches 'chat').
@@ -166,24 +219,23 @@ async function getAvailableModels({ providerType, apiKey, capability, baseUrl } 
       models = await fetchAnthropicModels(apiKey)
     } else if (providerType === 'openai') {
       models = await fetchOpenAIModels(apiKey)
-    } else {
-      // For other providers (ollama, gemini, etc.), use static models
-      console.log(`[model-fetcher] Using static models for provider: ${providerType}`)
-      models = getStaticModels({ providerType })
+    } else if (providerType === 'gemini' && capability === 'embeddings') {
+      models = await fetchGeminiModels(apiKey)
+    } else if (providerType === 'jina') {
+      models = getStaticModels({ providerType: 'jina' })
+    } else if (providerType) {
+      // Chat models for gemini, kimi, and any other OpenRouter-listed provider.
+      console.log(`[model-fetcher] Fetching OpenRouter catalog for provider: ${providerType}`)
+      models = await getOpenRouterModels({ providerType })
     }
   } catch (error) {
     console.error(`[model-fetcher] Unexpected error fetching models for ${providerType}: ${error.message}`)
-    models = getStaticModels({ providerType })
+    models = []
   }
 
   // Filter by capability if requested
   if (capability) {
     models = models.filter(model => matchesCapability(capability, model.capabilities))
-  }
-
-  // Ensure we always return at least the static models for the provider
-  if (models.length === 0) {
-    models = getStaticModels({ providerType, capability })
   }
 
   return models
@@ -192,7 +244,7 @@ async function getAvailableModels({ providerType, apiKey, capability, baseUrl } 
 module.exports = {
   fetchAnthropicModels,
   fetchOpenAIModels,
+  fetchGeminiModels,
   getAvailableModels,
   matchesCapability,
-  STATIC_MODELS,
 }
