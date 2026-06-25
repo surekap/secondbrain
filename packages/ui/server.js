@@ -15,6 +15,7 @@ const { listOllamaModelOptions } = require('../agents/shared/ollama');
 const { getAvailableModels } = require('../agents/shared/model-fetcher');
 const { createObserveRouter } = require('../observe/routes');
 const observeAlerts = require('../observe/alerts');
+const { resolveEntityAlias } = require('../agents/intelligence/services/entity-resolver');
 
 // ── Bootstrap ─────────────────────────────────────────────────────────────────
 
@@ -1100,6 +1101,23 @@ app.get('/api/intelligence/graph/summary', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// GET /api/intelligence/resolve-entity?q=...&types=contact,organization — alias-aware canonical resolver
+app.get('/api/intelligence/resolve-entity', async (req, res) => {
+  if (!db) return res.status(503).json({ error: 'No database' });
+  try {
+    const q = String(req.query.q || '').trim();
+    if (!q) return res.json([]);
+    const limit = parsePositiveIntQuery(req.query.limit, 20, 50);
+    if (limit === null) return res.status(400).json({ error: 'Invalid limit' });
+    const types = String(req.query.types || 'contact,organization')
+      .split(',')
+      .map(s => s.trim())
+      .filter(Boolean);
+    const rows = await resolveEntityAlias(db, q, { limit, types });
+    res.json(rows);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // GET /api/intelligence/contact-tiers/summary — audit relationship tiering quality
 app.get('/api/intelligence/contact-tiers/summary', async (req, res) => {
   if (!db) return res.status(503).json({ error: 'No database' });
@@ -1160,7 +1178,16 @@ app.get('/api/intelligence/contact-tiers', async (req, res) => {
     }
     if (req.query.q) {
       params.push(`%${String(req.query.q).trim().toLowerCase()}%`);
-      conditions.push(`(LOWER(display_name) LIKE $${params.length} OR LOWER(COALESCE(company, '')) LIKE $${params.length})`);
+      conditions.push(`(
+        LOWER(display_name) LIKE $${params.length}
+        OR LOWER(COALESCE(company, '')) LIKE $${params.length}
+        OR EXISTS (
+          SELECT 1 FROM intelligence.entity_aliases a
+          WHERE a.entity_type = 'contact'
+            AND a.entity_id = relationships.contacts.id::text
+            AND a.normalized_alias LIKE $${params.length}
+        )
+      )`);
     }
     const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
     params.push(limit);
@@ -1193,7 +1220,16 @@ app.get('/api/intelligence/organizations', async (req, res) => {
     const conditions = [];
     if (req.query.q) {
       params.push(`%${String(req.query.q).trim().toLowerCase()}%`);
-      conditions.push(`(LOWER(o.name) LIKE $${params.length} OR LOWER(COALESCE(o.domain, '')) LIKE $${params.length})`);
+      conditions.push(`(
+        LOWER(o.name) LIKE $${params.length}
+        OR LOWER(COALESCE(o.domain, '')) LIKE $${params.length}
+        OR EXISTS (
+          SELECT 1 FROM intelligence.entity_aliases a
+          WHERE a.entity_type = 'organization'
+            AND a.entity_id = o.id::text
+            AND a.normalized_alias LIKE $${params.length}
+        )
+      )`);
     }
     const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
     params.push(limit);

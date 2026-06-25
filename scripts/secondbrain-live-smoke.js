@@ -52,6 +52,7 @@ async function collectSnapshot() {
     endpoint('search_stats', `${API_BASE}/api/search/stats`),
     endpoint('observe_health', `${API_BASE}/api/observe/health`),
     endpoint('intelligence_graph', `${API_BASE}/api/intelligence/graph/summary`),
+    endpoint('entity_resolver', `${API_BASE}/api/intelligence/resolve-entity?q=rahul&limit=5`),
     endpoint('contact_tiers_summary', `${API_BASE}/api/intelligence/contact-tiers/summary`),
     endpoint('signals_summary', `${API_BASE}/api/intelligence/signals/summary`),
     endpoint('signals_recent', `${API_BASE}/api/intelligence/signals/recent?limit=5`),

@@ -28,3 +28,10 @@ test('live smoke includes contact tier endpoint', () => {
   assert.match(smoke, /contact_tiers_summary/, 'smoke should fetch contact tier summary')
   assert.match(smoke, /\/api\/intelligence\/contact-tiers\/summary/, 'smoke should call contact tier summary API')
 })
+
+test('live smoke includes alias-aware entity resolver endpoint', () => {
+  const smoke = read(smokePath)
+
+  assert.match(smoke, /entity_resolver/, 'smoke should fetch resolver endpoint')
+  assert.match(smoke, /\/api\/intelligence\/resolve-entity\?q=rahul/, 'smoke should call resolver API')
+})
