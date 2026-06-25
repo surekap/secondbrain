@@ -1,7 +1,7 @@
 'use strict'
 
 const STOPWORDS = new Set([
-  'the','and','for','with','from','this','that','into','your','you','are','was','were','has','have','had','not','but','can','will','may','should','could','again','still','issue','issues','problem','need','needs','help','message','messages','session','group','project','opportunity','risk','failed','failure',
+  'the','and','for','with','from','this','that','into','your','you','are','was','were','has','have','had','not','but','can','will','may','should','could','again','still','issue','issues','problem','need','needs','needed','help','message','messages','session','group','project','opportunity','risk','failed','failure','blocked','execution','calls','follow',
   'https','http','www','com','logo','blog','utm','click','view','open','tracking','footer','image','png','jpg'
 ])
 
@@ -49,7 +49,9 @@ function buildSignalClusters(signals = []) {
         cluster_key: key,
         signal_type: signal.signal_type || 'other',
         project_id: signal.project_id || null,
+        project_name: signal.project_name || null,
         contact_id: signal.contact_id || null,
+        contact_name: signal.contact_name || null,
         cluster_terms: terms,
         signals: [],
         source_tables: new Set(),
@@ -61,6 +63,8 @@ function buildSignalClusters(signals = []) {
     }
     const cluster = byKey.get(key)
     cluster.signals.push(signal)
+    if (!cluster.project_name && signal.project_name) cluster.project_name = signal.project_name
+    if (!cluster.contact_name && signal.contact_name) cluster.contact_name = signal.contact_name
     if (signal.source_table) cluster.source_tables.add(signal.source_table)
     for (const term of terms) if (!cluster.cluster_terms.includes(term) && cluster.cluster_terms.length < 5) cluster.cluster_terms.push(term)
     const occurred = asDate(signal.occurred_at) || asDate(signal.created_at)
@@ -123,15 +127,57 @@ function clusterPromotionPlan(clusters = [], existingSourceRefs = []) {
   return { promotableClusters, staleSourceRefs }
 }
 
-function opportunityFromCluster(cluster) {
-  const type = opportunityTypeForSignal(cluster.signal_type, cluster)
+function humanTerms(cluster, limit = 3) {
+  return (cluster.cluster_terms || [])
+    .filter(term => !isNoisyTerm(term))
+    .slice(0, limit)
+}
+
+function clusterSubject(cluster) {
+  if (cluster.project_name) return cluster.project_name
+  if (cluster.contact_name) return cluster.contact_name
+  const terms = humanTerms(cluster)
+  return terms.length ? terms.join(' / ') : cluster.signal_type || 'signal cluster'
+}
+
+function actionVerb(signalType) {
+  if (signalType === 'risk') return 'confirm the risk, owner, and mitigation date for'
+  if (signalType === 'need') return 'confirm the ask, owner, and next commitment for'
+  if (signalType === 'intent') return 'confirm whether to act on'
+  if (signalType === 'offer' || signalType === 'capability') return 'test whether there is a useful introduction around'
+  return 'decide the next action for'
+}
+
+function synthesizeOpportunityText(cluster) {
+  const terms = humanTerms(cluster)
+  const termPhrase = terms.join(', ')
+  const subject = clusterSubject(cluster)
   const count = cluster.signal_count
   const sourcePhrase = cluster.source_count === 1 ? 'one source' : `${cluster.source_count} sources`
   const when = cluster.last_seen_at ? new Date(cluster.last_seen_at).toISOString().slice(0, 10) : 'recently'
-  const whyNow = `${count} corroborating ${cluster.signal_type} signals across ${sourcePhrase}; latest signal ${when}. Promote only if it maps to a concrete owner/action, otherwise dismiss or keep monitoring.`
+  const scope = cluster.project_name ? `project ${cluster.project_name}` : cluster.contact_name ? `contact ${cluster.contact_name}` : `topic ${subject}`
+  const title = `${subject}: ${cluster.signal_type} signals on ${termPhrase || cluster.signal_type}`.slice(0, 140)
+  const whyNow = `${count} corroborating ${cluster.signal_type} signals tied to ${scope} across ${sourcePhrase}; latest signal ${when}. Evidence terms: ${termPhrase || 'none'}.`
+
+  let action
+  if (cluster.contact_name) {
+    action = `Ask ${cluster.contact_name} to ${actionVerb(cluster.signal_type)} ${termPhrase || subject}; request one concrete owner/date or dismiss it.`
+  } else if (cluster.project_name) {
+    action = `Ask the ${cluster.project_name} owner to ${actionVerb(cluster.signal_type)} ${termPhrase || subject}; get one owner/date or mark it non-actionable.`
+  } else {
+    action = `Check ${subject} against current priorities; act only if ${termPhrase || subject} maps to a named owner and deadline.`
+  }
+
+  return { title, why_now: whyNow, recommended_next_action: action.slice(0, 260) }
+}
+
+function opportunityFromCluster(cluster) {
+  const type = opportunityTypeForSignal(cluster.signal_type, cluster)
+  const count = cluster.signal_count
+  const synthesized = synthesizeOpportunityText(cluster)
   return {
     opportunity_type: type,
-    title: `Cluster: ${cluster.title}`.slice(0, 140),
+    title: synthesized.title,
     description: cluster.summary,
     priority: cluster.signal_type === 'risk' ? 'high' : 'medium',
     confidence: Math.min(0.9, Math.max(0.55, Number(cluster.max_confidence || 0.55))),
@@ -140,10 +186,8 @@ function opportunityFromCluster(cluster) {
     source_system: 'signals',
     source_ref: `signal_cluster:${cluster.cluster_key}`,
     dedupe_key: `signals:cluster:${cluster.cluster_key}`,
-    why_now: whyNow,
-    recommended_next_action: cluster.signal_type === 'risk'
-      ? `Assign an owner to validate the clustered risk, then mitigate, dismiss, or set a review date.`
-      : `Review the clustered signals, identify the owner/contact, and either convert to one concrete action or dismiss.`,
+    why_now: synthesized.why_now,
+    recommended_next_action: synthesized.recommended_next_action,
     metadata: {
       source: 'signal_cluster',
       cluster_key: cluster.cluster_key,

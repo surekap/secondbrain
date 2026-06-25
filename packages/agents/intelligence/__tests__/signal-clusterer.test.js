@@ -77,12 +77,40 @@ test('signal-clusterer: promotion plan identifies stale previously-promoted clus
 
 test('signal-clusterer: promoted opportunity has why_now and multiple evidence records', () => {
   const [cluster] = buildSignalClusters([
-    { id: 1, signal_type: 'risk', title: 'MT940 missing statement', description: 'bank statement missing', project_id: 7, occurred_at: '2026-06-24T00:00:00Z', source_table: 'email', source_id: 'a' },
-    { id: 2, signal_type: 'risk', title: 'MT940 statement still missing', description: 'axis bank mt940 missing', project_id: 7, occurred_at: '2026-06-25T00:00:00Z', source_table: 'projects', source_id: 'b' },
+    { id: 1, signal_type: 'risk', title: 'MT940 missing statement', description: 'bank statement missing', project_id: 7, project_name: 'Allied Finance Ops', occurred_at: '2026-06-24T00:00:00Z', source_table: 'email', source_id: 'a' },
+    { id: 2, signal_type: 'risk', title: 'MT940 statement still missing', description: 'axis bank mt940 missing', project_id: 7, project_name: 'Allied Finance Ops', occurred_at: '2026-06-25T00:00:00Z', source_table: 'projects', source_id: 'b' },
   ]);
   const opportunity = opportunityFromCluster(cluster);
 
   assert.match(opportunity.why_now, /2 corroborating risk signals/);
+  assert.match(opportunity.why_now, /latest signal 2026-06-25/);
   assert.equal(opportunity.evidence.length, 2);
   assert.equal(opportunity.primary_project_id, 7);
+});
+
+test('signal-clusterer: synthesizes project-linked risk into a concrete non-generic action', () => {
+  const [cluster] = buildSignalClusters([
+    { id: 1, signal_type: 'risk', title: 'ERP implementation execution blocked', description: 'Hartex ERP implementation has blocked execution calls', project_id: 9, project_name: 'Hartex Grapevine ERP Implementation', occurred_at: '2026-06-24T00:00:00Z', source_table: 'projects', source_id: 'a' },
+    { id: 2, signal_type: 'risk', title: 'Hartex ERP implementation deadline risk', description: 'ERP execution needs owner and date', project_id: 9, project_name: 'Hartex Grapevine ERP Implementation', occurred_at: '2026-06-25T00:00:00Z', source_table: 'email', source_id: 'b' },
+  ]);
+  const opportunity = opportunityFromCluster(cluster);
+
+  assert.equal(opportunity.title.startsWith('Cluster:'), false);
+  assert.match(opportunity.title, /Hartex Grapevine ERP Implementation/);
+  assert.match(opportunity.recommended_next_action, /Hartex Grapevine ERP Implementation/);
+  assert.match(opportunity.recommended_next_action, /erp, implementation, hartex/i);
+  assert.doesNotMatch(opportunity.recommended_next_action, /Assign an owner to validate the clustered risk|Review the clustered signals|convert to one concrete action/i);
+});
+
+test('signal-clusterer: synthesizes contact-linked need into a named outreach action', () => {
+  const [cluster] = buildSignalClusters([
+    { id: 1, signal_type: 'need', title: 'Rubix partnership help needed', description: 'Rubix partnership with Siddharth needs follow up', contact_id: 55, contact_name: 'Siddharth Agarwal', occurred_at: '2026-06-24T00:00:00Z', source_table: 'whatsapp', source_id: 'a' },
+    { id: 2, signal_type: 'need', title: 'Siddharth Agarwal partnership need', description: 'partnership rubix siddharth action', contact_id: 55, contact_name: 'Siddharth Agarwal', occurred_at: '2026-06-25T00:00:00Z', source_table: 'email', source_id: 'b' },
+  ]);
+  const opportunity = opportunityFromCluster(cluster);
+
+  assert.match(opportunity.title, /Siddharth Agarwal/);
+  assert.match(opportunity.recommended_next_action, /^Ask Siddharth Agarwal/);
+  assert.match(opportunity.recommended_next_action, /partnership, rubix, siddharth/i);
+  assert.doesNotMatch(opportunity.recommended_next_action, /Review the clustered signals|owner\/contact|convert to one concrete action/i);
 });

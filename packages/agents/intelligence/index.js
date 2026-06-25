@@ -690,12 +690,16 @@ async function runIntelligenceServices(pool, options = {}) {
 
 async function promoteSignalClusters(pool) {
   const { rows } = await pool.query(`
-    SELECT *
-    FROM intelligence.signals
-    WHERE occurred_at > NOW() - INTERVAL '45 days'
-      AND COALESCE((metadata->>'source') <> 'signal_cluster', true)
-      AND source_table IS DISTINCT FROM 'intelligence.opportunities'
-    ORDER BY occurred_at DESC NULLS LAST, updated_at DESC
+    SELECT s.*,
+           c.display_name AS contact_name,
+           p.name AS project_name
+    FROM intelligence.signals s
+    LEFT JOIN relationships.contacts c ON c.id = s.contact_id
+    LEFT JOIN projects.projects p ON p.id = s.project_id
+    WHERE s.occurred_at > NOW() - INTERVAL '45 days'
+      AND COALESCE((s.metadata->>'source') <> 'signal_cluster', true)
+      AND s.source_table IS DISTINCT FROM 'intelligence.opportunities'
+    ORDER BY s.occurred_at DESC NULLS LAST, s.updated_at DESC
     LIMIT 10000
   `)
 
