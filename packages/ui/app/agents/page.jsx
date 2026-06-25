@@ -987,6 +987,14 @@ export default function AgentsPage() {
   })
   const [providerModelOptions, setProviderModelOptions] = useState([])
   const [providerModelError, setProviderModelError] = useState('')
+  const [chatProviderOptions, setChatProviderOptions] = useState([
+    { value: 'anthropic', label: 'Anthropic' },
+    { value: 'claude_cli', label: 'Claude CLI' },
+    { value: 'openai', label: 'OpenAI' },
+    { value: 'gemini', label: 'Gemini' },
+    { value: 'kimi', label: 'Kimi' },
+    { value: 'ollama', label: 'Ollama' },
+  ])
 
   // Per-agent LLM priority + config state
   const [agentLlm, setAgentLlm] = useState({})      // { agentId: [rows] }
@@ -1066,6 +1074,23 @@ export default function AgentsPage() {
     const interval = setInterval(refresh, 5000)
     return () => clearInterval(interval)
   }, [])
+
+  useEffect(() => {
+    if (!showAddProvider) return
+    let cancelled = false
+    ;(async () => {
+      try {
+        const data = await fetchModelCatalog({ capability: 'chat' })
+        if (cancelled) return
+        if (Array.isArray(data.providers) && data.providers.length > 0) {
+          setChatProviderOptions(data.providers.map(p => ({ value: p.value, label: p.label })))
+        }
+      } catch (_) {
+        // Keep the existing chatProviderOptions (initial hardcoded list) on failure.
+      }
+    })()
+    return () => { cancelled = true }
+  }, [showAddProvider])
 
   useEffect(() => {
     if (!showAddProvider) return
@@ -1247,12 +1272,9 @@ export default function AgentsPage() {
               <select value={providerForm.provider_type}
                 onChange={e => setProviderForm(f => ({ ...f, provider_type: e.target.value, model: '' }))}
                 style={{ flex: 1, minWidth: '160px' }}>
-                <option value="anthropic">Anthropic</option>
-                <option value="claude_cli">Claude CLI</option>
-                <option value="openai">OpenAI</option>
-                <option value="gemini">Gemini</option>
-                <option value="kimi">Kimi</option>
-                <option value="ollama">Ollama</option>
+                {chatProviderOptions.map(option => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
               </select>
               {providerForm.provider_type === 'ollama' && (
                 <input placeholder={DEFAULT_OLLAMA_BASE_URL} value={providerForm.base_url}
