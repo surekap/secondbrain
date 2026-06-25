@@ -763,7 +763,19 @@ Output should be selective. Most groups should produce no alert.
 
 ---
 
-## 8. Prioritized Roadmap
+## 8. Prioritized Roadmap — Current Status
+
+This roadmap remains directionally correct, but its status changed after the 2026-06-24/25 implementation work. Treat phases 1, 2, and 4 as **v1 shipped**, not complete. The next bottleneck is not schema creation; it is live verification, signal promotion, scoring quality, feedback learning, and identity/tier operations.
+
+| Phase | Current status | What changed |
+|---|---|---|
+| Phase 0 — audit/operability | **Partially done** | Observe health, browser hydration checks, source-date verification, and smoke scripts exist. A single live smoke command and manual quality audit are still missing. |
+| Phase 1 — Opportunity Ledger | **v1 shipped** | `intelligence.opportunities`, evidence, contacts/projects links, group/project/relationship bridges, and status/feedback fields exist. |
+| Phase 2 — Evidence/scoring | **v1.5 shipped** | Evidence aggregation, source dates, quality flags, next actions, and basic expected-value scoring exist. Strategic fit, effort cost, silence risk, and feedback-learned scoring remain. |
+| Phase 3 — Weak signals | **foundation shipped** | `intelligence.signals` exists and source-aware extraction now covers email, WhatsApp, Limitless, groups, and opportunities. Clustering/promotion and semantic retrieval are not done. |
+| Phase 4 — Attention Queue | **v1 shipped** | `intelligence.attention_queue` and dashboard cards exist. It is still opportunity-ledger centric and coexists with the old Priority Matrix. |
+| Phase 5 — Relationship graph | **schema + extractor shipped; live data not verified** | Org/topic graph tables and extractor are in code. Live graph counts are still zero until deploy/refresh/root-cause. |
+| Phase 6 — High-level intelligence functions | **not started** | No clean product-level function layer yet. Do not build this before the quality gates above are green. |
 
 ### Phase 0 — Ground truth and baseline audit
 
@@ -893,25 +905,96 @@ Do not:
 
 ---
 
-## 10. Immediate Next Steps
+## 10. Immediate Next Steps — Updated 2026-06-25
 
-Recommended next deliverable before code implementation:
+The original first implementation slice is now substantially shipped in code. The immediate work is no longer to draft the `intelligence` schema or Attention Queue spec; it is to deploy, verify, and harden the new backend judgment layer.
 
-1. Run a live Postgres audit with a read-only credential.
-2. Produce a table-by-table quality/freshness report.
-3. Sample current opportunity outputs and score them manually.
-4. Draft the `intelligence` schema migration.
-5. Draft a minimal Attention Queue API/UI spec.
+### 10.1 What is done in code
 
-If implementing immediately, start with the least disruptive change:
+Verified on repo `main` at `f48a939`:
 
-```text
-Add intelligence.opportunities + opportunity_evidence,
-then adapt the existing opportunities.js swarm to write structured opportunity records
-while preserving current relationships.insights behavior.
+1. `intelligence` schema exists.
+2. `intelligence.opportunities` exists as the first-class opportunity ledger.
+3. `intelligence.opportunity_evidence` exists and feeds source-date aggregation.
+4. `intelligence.opportunity_contacts` and `intelligence.opportunity_projects` exist as link tables.
+5. `intelligence.signals` exists as the weak-signal accumulator.
+6. `intelligence.organizations`, `intelligence.entity_aliases`, `intelligence.contact_organizations`, `intelligence.topics`, and `intelligence.object_topics` exist as the relationship graph foundation.
+7. Existing relationship, project, and WhatsApp group opportunities are bridged into the ledger.
+8. `intelligence.attention_queue` exists as a ranked view.
+9. Dashboard Attention Queue consumes `/api/intelligence/attention`.
+10. Attention cards show `source_first_seen_at` / `source_last_seen_at` instead of misleading backfill ages.
+11. Quality flags exist for thin/no evidence, generic re-engage, missing next action, stale items, and thin/unlinked group opportunities.
+12. Group opportunity spam is penalized.
+13. `POST /api/intelligence/refresh` exists and calls `runIntelligenceServices()`.
+14. `runIntelligenceServices()` now extracts organizations/topics and source-aware weak signals instead of skipping graph extraction.
+15. `upsertOpportunity()` now computes a v1.5 expected-value score from impact, urgency, relationship leverage, actionability, confidence, and evidence/group penalties.
+16. `node --test packages/agents/intelligence/__tests__/*.test.js` passes.
+
+### 10.2 What is verified live
+
+Verified from Hermes against `100.105.11.84`:
+
+- UI/API are reachable on `4000` / `4001`.
+- `/api/observe/health` is fresh.
+- `/api/intelligence/attention` returns source-date fields, evidence counts, quality flags, attention scores, and recommended next actions.
+- `/api/intelligence/opportunities` returns ledger records with evidence-date aggregation.
+- Browser dashboard hydrates and shows source-age labels.
+
+### 10.3 What is not yet verified live
+
+The latest graph/signal pipeline commit may not yet be deployed/refreshed on the runtime host. Current live graph summary still shows zero rows:
+
+```json
+{
+  "organizations": 0,
+  "entity_aliases": 0,
+  "contact_organizations": 0,
+  "topics": 0,
+  "object_topics": 0,
+  "tiered_contacts": 0,
+  "contacts_with_next_touch": 0
+}
 ```
 
-This uses the existing system rather than replacing it.
+This means either:
+
+1. the runtime host has not pulled/restarted `f48a939`,
+2. `/api/intelligence/refresh` has not been run after deployment,
+3. extraction ran but source fields are too sparse/noisy to populate useful graph records, or
+4. a runtime DB/query mismatch remains.
+
+Do not build graph UI until this is resolved.
+
+### 10.4 Immediate runbook
+
+On the runtime host:
+
+```bash
+cd /Users/prateeksureka/Sites/secondbrain
+git pull --ff-only
+npm run build --workspace=packages/ui
+# restart npm run ui / the active supervisor
+curl -sS -X POST http://localhost:4001/api/intelligence/refresh | jq .
+curl -sS http://localhost:4001/api/intelligence/graph/summary | jq .
+```
+
+From Hermes, re-check:
+
+```bash
+curl -sS http://100.105.11.84:4001/api/observe/health | jq .
+curl -sS 'http://100.105.11.84:4001/api/intelligence/attention?limit=5' | jq .
+curl -sS http://100.105.11.84:4001/api/intelligence/graph/summary | jq .
+```
+
+### 10.5 Next implementation sequence
+
+1. Add `scripts/secondbrain-live-smoke.js` so live verification is one command.
+2. Expose signal counts and recent signal samples via API or smoke output.
+3. Add signal clustering/promotion: `signals → clusters → threshold crossing → opportunity`.
+4. Add feedback-aware scoring penalties.
+5. Add relationship tier suggestion and manual confirmation flow.
+6. Add evidence drawer/UI for attention cards.
+7. Collapse the old Priority Matrix into the Attention Queue once scoring is credible.
 
 ---
 
@@ -1074,14 +1157,42 @@ Do not rely only on a 30-day digest. Add durable signal extraction and retrieve 
 
 ---
 
-## 12. Updated Bottom Line
+## 12. Updated Bottom Line — 2026-06-25
 
-The parallel inspection reinforces the original conclusion:
+The original strategic diagnosis still holds, but the implementation frontier moved.
 
-SecondBrain already has the primitives for relationship intelligence. The next step is not another agent or another dashboard; it is making the existing intelligence **more trustworthy, structured, ranked, and evidence-backed**.
+SecondBrain now has the backend primitives for relationship intelligence:
 
-The highest-leverage sequencing is:
+- first-class opportunity ledger,
+- evidence table and source-date aggregation,
+- Attention Queue v1,
+- quality flags and next-action derivation,
+- source-aware weak-signal table/extractor,
+- organization/topic graph schema and extractor,
+- on-demand intelligence refresh endpoint.
+
+The strategic gap is no longer “create the ledger.” The gap is now **quality of judgment and operational trust**:
 
 ```text
-quality papercuts → live data audit → opportunity ledger → evidence/scoring → weak-signal memory → attention queue
+live verification → graph/signal population → signal clustering → promotion thresholds → feedback-aware scoring → evidence UI → one attention surface
+```
+
+The next work should be backend-heavy. Do not add more product surface until the system proves that graph rows, signal rows, and opportunity promotions are populated, auditable, and not noisy.
+
+The highest-leverage next build is:
+
+1. deploy/pull `f48a939` on the runtime host,
+2. run `/api/intelligence/refresh`,
+3. add a durable live smoke script,
+4. expose signal counts/samples,
+5. implement signal clustering and threshold-based promotion,
+6. make feedback alter scoring,
+7. only then improve UI around evidence and relationship graph views.
+
+The north star remains:
+
+```text
+Surface the few actions, introductions, risks, events, and opportunities
+that most improve Prateek’s decisions this week — with evidence, timing,
+and enough confidence metadata to trust or reject the recommendation quickly.
 ```
