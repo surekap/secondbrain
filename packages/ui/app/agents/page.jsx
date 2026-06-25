@@ -580,6 +580,7 @@ function AiImporterConfigForm({ agentId, config, onSave }) {
 function EmbeddingsConfig({ config, onSave }) {
   const [providerType, setProviderType] = useState(config.EMBEDDING_PROVIDER || 'gemini')
   const [geminiKey, setGeminiKey]   = useState(config.GEMINI_API_KEY || '')
+  const [jinaKey, setJinaKey]       = useState(config.JINA_API_KEY || '')
   const [ollamaBaseUrl, setOllamaBaseUrl] = useState(config.OLLAMA_BASE_URL || DEFAULT_OLLAMA_BASE_URL)
   const [model, setModel]           = useState(config.EMBEDDING_MODEL || '')
   const [modelOptions, setModelOptions] = useState([])
@@ -592,6 +593,7 @@ function EmbeddingsConfig({ config, onSave }) {
   useEffect(() => {
     setProviderType(config.EMBEDDING_PROVIDER || 'gemini')
     setGeminiKey(config.GEMINI_API_KEY || '')
+    setJinaKey(config.JINA_API_KEY || '')
     setOllamaBaseUrl(config.OLLAMA_BASE_URL || DEFAULT_OLLAMA_BASE_URL)
     setModel(config.EMBEDDING_MODEL || '')
   }, [config])
@@ -640,6 +642,7 @@ function EmbeddingsConfig({ config, onSave }) {
       await onSave({
         EMBEDDING_PROVIDER: providerType,
         GEMINI_API_KEY: geminiKey,
+        JINA_API_KEY: jinaKey,
         OLLAMA_BASE_URL: ollamaBaseUrl || DEFAULT_OLLAMA_BASE_URL,
         EMBEDDING_MODEL: model || null,
       })
@@ -719,16 +722,20 @@ function EmbeddingsConfig({ config, onSave }) {
           <div style={{ fontSize: '0.75rem', color: 'var(--muted,#888)', marginBottom: '0.25rem' }}>Provider</div>
           <select value={providerType} onChange={e => { setProviderType(e.target.value); setModel('') }} style={{ width: '100%' }}>
             <option value="gemini">Gemini</option>
+            <option value="jina">Jina</option>
             <option value="ollama">Ollama</option>
           </select>
         </div>
         <div style={{ flex: 2, minWidth: '200px' }}>
           <div style={{ fontSize: '0.75rem', color: 'var(--muted,#888)', marginBottom: '0.25rem' }}>
-            {providerType === 'ollama' ? 'Ollama Base URL' : 'Gemini API Key'}
+            {providerType === 'ollama' ? 'Ollama Base URL' : providerType === 'jina' ? 'Jina API Key' : 'Gemini API Key'}
           </div>
           {providerType === 'ollama' ? (
             <input type="text" value={ollamaBaseUrl} onChange={e => setOllamaBaseUrl(e.target.value)}
               placeholder={DEFAULT_OLLAMA_BASE_URL} style={{ width: '100%' }} />
+          ) : providerType === 'jina' ? (
+            <input type="password" value={jinaKey} onChange={e => setJinaKey(e.target.value)}
+              placeholder="jina_…" autoComplete="new-password" style={{ width: '100%' }} />
           ) : (
             <input type="password" value={geminiKey} onChange={e => setGeminiKey(e.target.value)}
               placeholder="AIza…" autoComplete="new-password" style={{ width: '100%' }} />

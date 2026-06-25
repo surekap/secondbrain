@@ -9,6 +9,7 @@ const PROVIDER_DEFINITIONS = [
   { value: 'gemini',     label: 'Gemini',     capabilities: ['chat', 'embeddings'], requires_api_key: true },
   { value: 'kimi',       label: 'Kimi',       capabilities: ['chat'], requires_api_key: true },
   { value: 'ollama',     label: 'Ollama',     capabilities: ['chat', 'embeddings'], requires_api_key: false, requires_base_url: true },
+  { value: 'jina',       label: 'Jina',       capabilities: ['embeddings'], requires_api_key: true },
 ]
 
 const STATIC_MODELS = [
@@ -23,6 +24,8 @@ const STATIC_MODELS = [
   { label: 'Gemini 2.0 Flash',        value: 'gemini-2.0-flash',           provider_type: 'gemini',     capabilities: ['chat'] },
   { label: 'Gemini Embedding 2',      value: 'gemini-embedding-2-preview', provider_type: 'gemini',     capabilities: ['embeddings'] },
   { label: 'Kimi K2.5',               value: 'kimi-k2.5',                  provider_type: 'kimi',       capabilities: ['chat'] },
+  { label: 'Jina Embeddings v2 (base, en)', value: 'jina-embeddings-v2-base-en', provider_type: 'jina', capabilities: ['embeddings'] },
+  { label: 'Jina Embeddings v3',      value: 'jina-embeddings-v3',          provider_type: 'jina',       capabilities: ['embeddings'] },
 ]
 
 function getProviderDefinitions(capability) {
