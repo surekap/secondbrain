@@ -21,8 +21,10 @@ test('attention-scoring: boosts recent, better-evidenced, high-confidence items'
 
   assert.match(schema, /scoring_source_at >= NOW\(\) - INTERVAL '3 days' THEN 8/, 'recent source evidence should get a boost');
   assert.match(schema, /confidence >= 0\.80 THEN 5/, 'high-confidence opportunities should get a boost');
-  assert.match(schema, /evidence_count >= 3 THEN 4 WHEN evidence_count = 2 THEN 1/, 'multiple evidence records should get a modest boost');
-  assert.match(schema, /THEN 'recent_source'/, 'recent source items should be flagged');
+  assert.match(schema, /opportunity_type = 'group_opportunity' AND evidence_count < 2 THEN 26/, 'single-evidence group opportunities should be strongly suppressed until corroborated');
+  assert.match(schema, /opportunity_type = 'group_opportunity' AND primary_contact_id IS NULL AND primary_project_id IS NULL THEN 18/, 'unlinked group opportunities should be suppressed');
+  assert.match(schema, /THEN 'group_single_evidence'/, 'weak group opportunities should be flagged');
+  assert.match(schema, /THEN 'unlinked_group_opportunity'/, 'unlinked group opportunities should be flagged');
 });
 
 test('attention-scoring: clamps scores at zero', () => {

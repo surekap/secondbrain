@@ -343,8 +343,8 @@ WITH scored_inputs AS (
       - CASE WHEN LOWER(title) LIKE 're-engage %' THEN 25 ELSE 0 END
       - CASE WHEN evidence_count = 0 THEN 30 WHEN evidence_count = 1 THEN 12 ELSE 0 END
       - CASE WHEN evidence_count = 1 AND scoring_source_at < NOW() - INTERVAL '14 days' THEN 15 ELSE 0 END
-      - CASE WHEN opportunity_type = 'group_opportunity' AND evidence_count < 2 THEN 16 ELSE 0 END
-      - CASE WHEN opportunity_type = 'group_opportunity' AND primary_contact_id IS NULL AND primary_project_id IS NULL THEN 8 ELSE 0 END
+      - CASE WHEN opportunity_type = 'group_opportunity' AND evidence_count < 2 THEN 26 ELSE 0 END
+      - CASE WHEN opportunity_type = 'group_opportunity' AND primary_contact_id IS NULL AND primary_project_id IS NULL THEN 18 ELSE 0 END
       - CASE WHEN NULLIF(TRIM(COALESCE(recommended_next_action, '')), '') IS NULL THEN 8 ELSE 0 END
       - CASE WHEN why_now IS NULL OR NULLIF(TRIM(COALESCE(why_now, '')), '') IS NULL THEN 8 ELSE 0 END
       - CASE WHEN action_text LIKE '%turn %into a concrete task%'
@@ -355,6 +355,9 @@ WITH scored_inputs AS (
       - CASE WHEN (
                attention_text LIKE '%flight%'
                OR attention_text LIKE '%travel plan%'
+               OR attention_text LIKE '%travel/access friction%'
+               OR attention_text LIKE '%access friction%'
+               OR attention_text LIKE '%reservation support%'
                OR attention_text LIKE '%hotel%'
                OR attention_text LIKE '%cab%'
                OR attention_text LIKE '%taxi%'
@@ -396,6 +399,9 @@ WITH scored_inputs AS (
       CASE WHEN (
              attention_text LIKE '%flight%'
              OR attention_text LIKE '%travel plan%'
+             OR attention_text LIKE '%travel/access friction%'
+             OR attention_text LIKE '%access friction%'
+             OR attention_text LIKE '%reservation support%'
              OR attention_text LIKE '%hotel%'
              OR attention_text LIKE '%cab%'
              OR attention_text LIKE '%taxi%'
