@@ -109,3 +109,21 @@ test('contact-tierer: service providers are not monthly relationship obligations
   assert.equal(rec.next_suggested_touch_at, null);
   assert.equal(rec.obligation_reason, 'service_or_vendor');
 });
+
+test('contact-tierer: zero-score suppressed contacts become noise, not unknown', () => {
+  const rec = recommendContactTier({
+    id: 745,
+    display_name: 'V Sudhakar',
+    company: 'Hartex Electrical',
+    job_title: 'electrician',
+    relationship_type: 'service_provider',
+    relationship_strength: 'moderate',
+    comm_count: 2,
+    insight_count: 0,
+    last_interaction_at: '2026-03-18T18:17:04Z',
+  });
+
+  assert.equal(rec.strategic_importance_score, 0);
+  assert.equal(rec.relationship_tier, 'noise');
+  assert.equal(rec.next_suggested_touch_at, null);
+});

@@ -123,6 +123,10 @@ function evaluateSmoke(snapshot, opts = {}) {
   if (numberValue(graph.tiered_contacts) === 0) warnings.push('no tiered contacts yet')
   if (numberValue(graph.contacts_with_next_touch) === 0) warnings.push('no contacts with next touch date yet')
 
+  const tierRows = Array.isArray(snapshot.contactTiersSummary?.by_tier) ? snapshot.contactTiersSummary.by_tier : []
+  const unknownTier = tierRows.find(row => row.relationship_tier === 'unknown')
+  if (unknownTier && numberValue(unknownTier.count) > 0) failures.push(`unknown contact tier bucket has ${unknownTier.count} contacts`)
+
   const signals = snapshot.signalsSummary || {}
   if (Object.keys(signals).length && numberValue(signals.total) === 0) warnings.push('weak signal table is empty')
 

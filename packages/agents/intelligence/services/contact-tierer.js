@@ -72,7 +72,7 @@ function tierForScore(score, contact = {}) {
   if (score >= 75) return 'tier_1'
   if (score >= 45) return 'tier_2'
   if (score > 0) return 'tier_3'
-  return 'unknown'
+  return 'noise'
 }
 
 function nextTouchAt(lastInteractionAt, cadenceDays) {
