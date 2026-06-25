@@ -2,6 +2,7 @@
 
 const express    = require('express');
 const { spawn }  = require('child_process');
+const { randomUUID } = require('crypto');
 const fs         = require('fs');
 const path       = require('path');
 const dotenv     = require('dotenv');
@@ -34,6 +35,55 @@ try {
   db = new Pool({ connectionString: process.env.DATABASE_URL });
 } catch (e) {
   console.warn('[ui] DB pool creation failed:', e.message);
+}
+
+const intelligenceRefreshState = {
+  current: null,
+  last: null,
+  history: [],
+};
+
+function createIntelligenceRefreshRun(trigger = 'api') {
+  return {
+    id: randomUUID(),
+    trigger,
+    status: 'running',
+    started_at: new Date().toISOString(),
+    finished_at: null,
+    duration_ms: null,
+    error: null,
+    result: null,
+    logs: [],
+  };
+}
+
+function appendIntelligenceRefreshLog(run, level, message, meta = null) {
+  if (!run) return;
+  const entry = {
+    ts: new Date().toISOString(),
+    level,
+    message: String(message || ''),
+    ...(meta ? { meta } : {}),
+  };
+  run.logs.push(entry);
+  if (run.logs.length > 500) run.logs.splice(0, run.logs.length - 500);
+  const line = `[intelligence-refresh:${run.id}] ${entry.message}`;
+  if (level === 'error') console.error(line, meta || '');
+  else if (level === 'warn') console.warn(line, meta || '');
+  else console.log(line, meta || '');
+}
+
+function finishIntelligenceRefreshRun(run, status, result = null, error = null) {
+  if (!run) return;
+  run.status = status;
+  run.finished_at = new Date().toISOString();
+  run.duration_ms = new Date(run.finished_at).getTime() - new Date(run.started_at).getTime();
+  run.result = result;
+  run.error = error ? String(error.message || error) : null;
+  intelligenceRefreshState.last = run;
+  intelligenceRefreshState.history.unshift(run);
+  intelligenceRefreshState.history = intelligenceRefreshState.history.slice(0, 10);
+  if (intelligenceRefreshState.current?.id === run.id) intelligenceRefreshState.current = null;
 }
 
 // ── Schema + Config Migration ──────────────────────────────────────────────────
@@ -1290,23 +1340,51 @@ app.post('/api/intelligence/opportunities/:id/feedback', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// GET /api/intelligence/refresh/status — inspect latest on-demand intelligence refresh
+app.get('/api/intelligence/refresh/status', (req, res) => {
+  res.json({
+    current: intelligenceRefreshState.current,
+    last: intelligenceRefreshState.last,
+    history: intelligenceRefreshState.history,
+  });
+});
+
 // POST /api/intelligence/refresh — trigger intelligence pipeline on-demand
 app.post('/api/intelligence/refresh', async (req, res) => {
   try {
-    const { runIntelligenceServices } = require('../agents/intelligence/index.js');
+    if (!db) return res.status(503).json({ error: 'Database unavailable' });
+    if (intelligenceRefreshState.current) {
+      return res.status(409).json({
+        status: 'already_running',
+        run_id: intelligenceRefreshState.current.id,
+        current: intelligenceRefreshState.current,
+      });
+    }
 
-    // Run in background
+    const { runIntelligenceServices } = require('../agents/intelligence/index.js');
+    const run = createIntelligenceRefreshRun(req.body?.trigger || 'api');
+    intelligenceRefreshState.current = run;
+    appendIntelligenceRefreshLog(run, 'info', 'Refresh queued');
+
+    // Run in background, but expose all logs/status through /api/intelligence/refresh/status.
     setImmediate(async () => {
       try {
-        await runIntelligenceServices(db);
-        console.log('[API] Intelligence refresh completed');
+        appendIntelligenceRefreshLog(run, 'info', 'Refresh started');
+        const result = await runIntelligenceServices(db, {
+          log: (level, message, meta) => appendIntelligenceRefreshLog(run, level, message, meta),
+        });
+        appendIntelligenceRefreshLog(run, 'info', 'Refresh completed', result);
+        finishIntelligenceRefreshRun(run, 'completed', result);
       } catch (error) {
-        console.error('[API] Intelligence refresh failed:', error.message);
+        appendIntelligenceRefreshLog(run, 'error', 'Refresh failed', { error: error.message, stack: error.stack });
+        finishIntelligenceRefreshRun(run, 'failed', null, error);
       }
     });
 
     res.json({
       status: 'queued',
+      run_id: run.id,
+      status_url: '/api/intelligence/refresh/status',
       message: 'Intelligence pipeline queued for execution'
     });
   } catch (error) {

@@ -553,44 +553,74 @@ async function upsertFromGroupOpportunity(groupId, group, opportunity, index = 0
   }
 }
 
-async function runIntelligenceServices(pool) {
-  console.log('[intelligence] Starting intelligence pipeline')
+async function runIntelligenceServices(pool, options = {}) {
+  const log = typeof options.log === 'function'
+    ? options.log
+    : (level, message, meta) => {
+        const line = `[intelligence] ${message}`
+        if (level === 'error') console.error(line, meta || '')
+        else if (level === 'warn') console.warn(line, meta || '')
+        else console.log(line, meta || '')
+      }
+  const stats = {
+    relationship_insights_backfilled: 0,
+    organizations_upserted: 0,
+    contact_organization_links: 0,
+    topic_links: 0,
+    signals_recorded: 0,
+    dormancy_opportunities: 0,
+  }
+  log('info', 'Starting intelligence pipeline')
 
   try {
     // Step 1: Backfill existing insights into opportunities
-    console.log('[intelligence] Backfilling relationships.insights...')
+    log('info', 'Backfilling relationships.insights')
     const insightsResult = await pool.query('SELECT * FROM relationships.insights ORDER BY created_at DESC LIMIT 1000')
+    log('info', 'Loaded relationship insights', { count: insightsResult.rows.length })
     let backfillCount = 0
     for (const insight of insightsResult.rows) {
       try {
         await upsertFromRelationshipInsight(insight.id, insight.contact_id, insight)
         backfillCount++
       } catch (error) {
-        console.error(`[intelligence] Failed to backfill insight ${insight.id}:`, error.message)
+        log('error', `Failed to backfill insight ${insight.id}`, { error: error.message })
       }
     }
-    console.log(`[intelligence] Backfilled ${backfillCount} insights`)
+    stats.relationship_insights_backfilled = backfillCount
+    log('info', 'Backfilled relationship insights', { count: backfillCount })
 
     // Step 2: Populate organization/topic graph from contacts, groups, and opportunities.
-    console.log('[intelligence] Extracting organizations/topics...')
+    log('info', 'Extracting organizations/topics')
     const contactsResult = await pool.query('SELECT * FROM relationships.contacts')
     const groupsResult = await pool.query('SELECT * FROM relationships.groups ORDER BY updated_at DESC NULLS LAST LIMIT 1000')
     const opportunitiesResult = await pool.query('SELECT * FROM intelligence.opportunities ORDER BY updated_at DESC LIMIT 2000')
+    log('info', 'Loaded graph inputs', { contacts: contactsResult.rows.length, groups: groupsResult.rows.length, opportunities: opportunitiesResult.rows.length })
     const contactGraph = await extractOrganizations(contactsResult.rows, 'contacts')
     const groupGraph = await extractOrganizations(groupsResult.rows, 'groups')
     const opportunityGraph = await extractOrganizations(opportunitiesResult.rows, 'opportunities')
+    log('info', 'Extracted graph candidates', {
+      contact_orgs: contactGraph.organizations.length,
+      group_orgs: groupGraph.organizations.length,
+      opportunity_orgs: opportunityGraph.organizations.length,
+      contact_links: contactGraph.contactLinks.length,
+      topics: contactGraph.topics.length + groupGraph.topics.length + opportunityGraph.topics.length,
+    })
     const graphStats = await upsertOrganizationGraph(pool, {
       organizations: [...contactGraph.organizations, ...groupGraph.organizations, ...opportunityGraph.organizations],
       contactLinks: contactGraph.contactLinks,
       topics: [...contactGraph.topics, ...groupGraph.topics, ...opportunityGraph.topics],
     })
-    console.log(`[intelligence] Graph extraction complete (${graphStats.organizationCount} org upserts, ${graphStats.contactLinkCount} contact-org links, ${graphStats.topicCount} topic links)`)
+    stats.organizations_upserted = graphStats.organizationCount
+    stats.contact_organization_links = graphStats.contactLinkCount
+    stats.topic_links = graphStats.topicCount
+    log('info', 'Graph extraction complete', graphStats)
 
     // Step 3: Extract durable weak signals from multiple sources.
-    console.log('[intelligence] Extracting weak signals...')
+    log('info', 'Extracting weak signals')
     const emailsResult = await pool.query('SELECT * FROM email.emails WHERE COALESCE(date, received_at, created_at) > NOW() - INTERVAL \'45 days\' ORDER BY COALESCE(date, received_at, created_at) DESC LIMIT 5000')
     const whatsappResult = await pool.query('SELECT * FROM public.messages WHERE ts > NOW() - INTERVAL \'45 days\' ORDER BY ts DESC LIMIT 5000')
     const lifelogResult = await pool.query('SELECT * FROM limitless.lifelogs WHERE COALESCE(start_time, created_at) > NOW() - INTERVAL \'45 days\' ORDER BY COALESCE(start_time, created_at) DESC LIMIT 2000')
+    log('info', 'Loaded signal inputs', { emails: emailsResult.rows.length, whatsapp: whatsappResult.rows.length, lifelogs: lifelogResult.rows.length, groups: groupsResult.rows.length, opportunities: opportunitiesResult.rows.length })
     const signalInputs = [
       ...(await extractSignals(emailsResult.rows, 'email')),
       ...(await extractSignals(whatsappResult.rows, 'whatsapp')),
@@ -598,6 +628,7 @@ async function runIntelligenceServices(pool) {
       ...(await extractSignals(groupsResult.rows, 'groups')),
       ...(await extractSignals(opportunitiesResult.rows, 'opportunities')),
     ]
+    log('info', 'Extracted weak signal candidates', { count: signalInputs.length })
     let signalCount = 0
     for (const signal of signalInputs) {
       try {
@@ -607,14 +638,16 @@ async function runIntelligenceServices(pool) {
         await upsertSignal(pool, signal)
         signalCount++
       } catch (error) {
-        console.error(`[intelligence] Failed to record signal:`, error.message)
+        log('error', 'Failed to record signal', { source_table: signal.source_table, source_id: signal.source_id, signal_type: signal.signal_type, error: error.message })
       }
     }
-    console.log(`[intelligence] Recorded/updated ${signalCount} weak signals`)
+    stats.signals_recorded = signalCount
+    log('info', 'Recorded/updated weak signals', { count: signalCount })
 
     // Step 4: Check relationship dormancy using tier-aware thresholds.
-    console.log('[intelligence] Checking dormancy...')
+    log('info', 'Checking dormancy')
     const dormantResult = await checkDormancy(contactsResult.rows)
+    log('info', 'Detected dormancy candidates', { count: dormantResult.length })
     let dormancyCount = 0
     for (const opp of dormantResult) {
       try {
@@ -632,14 +665,16 @@ async function runIntelligenceServices(pool) {
         await upsertOpportunity(oppInput)
         dormancyCount++
       } catch (error) {
-        console.error(`[intelligence] Failed to create dormancy check-in:`, error.message)
+        log('error', 'Failed to create dormancy check-in', { contact_id: opp.contact_id, error: error.message })
       }
     }
-    console.log(`[intelligence] Dormancy check complete (${dormancyCount} check-ins)`)
+    stats.dormancy_opportunities = dormancyCount
+    log('info', 'Dormancy check complete', { count: dormancyCount })
 
-    console.log('[intelligence] Pipeline complete')
+    log('info', 'Pipeline complete', stats)
+    return stats
   } catch (error) {
-    console.error('[intelligence] Pipeline error:', error.message)
+    log('error', 'Pipeline error', { error: error.message, stack: error.stack })
     throw error
   }
 }
