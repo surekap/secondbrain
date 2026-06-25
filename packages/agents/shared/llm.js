@@ -32,6 +32,11 @@ const RATES = {
   kimi: {
     'kimi-k2.5': { in: 0.00042, out: 0.0022 },
   },
+  groq: {
+    // Approximate public pricing; update when changing models.
+    'llama-3.3-70b-versatile': { in: 0.00059, out: 0.00079 },
+    'openai/gpt-oss-120b':      { in: 0.00015, out: 0.00060 },
+  },
 }
 
 function calcCost(providerType, model, tokensIn, tokensOut) {
@@ -375,11 +380,8 @@ async function callOllama(provider, { system, messages, tools, max_tokens }) {
   }
 }
 
-async function callKimi(provider, { system, messages, tools, max_tokens }) {
-  const OpenAI = require('openai')
-  if (!provider.api_key) throw Object.assign(new Error('Kimi API key not configured'), { status: 402 })
-  const kimi = new OpenAI.default({ apiKey: provider.api_key, baseURL: 'https://api.moonshot.ai/v1' })
-  const oaiMessages = messages.map(m => {
+function toOpenAICompatibleMessages(messages) {
+  return messages.map(m => {
     if (m.role === 'tool') return { role: 'tool', tool_call_id: m.tool_call_id, content: m.content }
     if (m.role === 'assistant' && m.tool_calls?.length > 0) {
       return {
@@ -392,13 +394,9 @@ async function callKimi(provider, { system, messages, tools, max_tokens }) {
     }
     return { role: m.role, content: m.content || '' }
   })
-  const hasSystem = oaiMessages.some(m => m.role === 'system')
-  if (system && !hasSystem) oaiMessages.unshift({ role: 'system', content: system })
-  const params = { model: provider.model || 'kimi-k2.5', max_tokens: max_tokens || 4096, messages: oaiMessages }
-  if (tools?.length) {
-    params.tools = tools.map(t => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.input_schema } }))
-  }
-  const response = await kimi.chat.completions.create(params)
+}
+
+function parseOpenAICompatibleResponse(response) {
   const choice = response.choices[0]
   const msg = choice.message
   const tool_calls = (msg.tool_calls || []).map(tc => ({ id: tc.id, name: tc.function.name, input: JSON.parse(tc.function.arguments) }))
@@ -406,6 +404,34 @@ async function callKimi(provider, { system, messages, tools, max_tokens }) {
   if (choice.finish_reason === 'tool_calls') stop_reason = 'tool_use'
   else if (choice.finish_reason === 'length') stop_reason = 'max_tokens'
   return { text: msg.content || null, tool_calls, stop_reason, tokensIn: response.usage?.prompt_tokens, tokensOut: response.usage?.completion_tokens }
+}
+
+async function callKimi(provider, { system, messages, tools, max_tokens }) {
+  const OpenAI = require('openai')
+  if (!provider.api_key) throw Object.assign(new Error('Kimi API key not configured'), { status: 402 })
+  const kimi = new OpenAI.default({ apiKey: provider.api_key, baseURL: 'https://api.moonshot.ai/v1' })
+  const oaiMessages = toOpenAICompatibleMessages(messages)
+  const hasSystem = oaiMessages.some(m => m.role === 'system')
+  if (system && !hasSystem) oaiMessages.unshift({ role: 'system', content: system })
+  const params = { model: provider.model || 'kimi-k2.5', max_tokens: max_tokens || 4096, messages: oaiMessages }
+  if (tools?.length) {
+    params.tools = tools.map(t => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.input_schema } }))
+  }
+  return parseOpenAICompatibleResponse(await kimi.chat.completions.create(params))
+}
+
+async function callGroq(provider, { system, messages, tools, max_tokens }) {
+  const OpenAI = require('openai')
+  if (!provider.api_key) throw Object.assign(new Error('Groq API key not configured'), { status: 402 })
+  const groq = new OpenAI.default({ apiKey: provider.api_key, baseURL: provider.base_url || 'https://api.groq.com/openai/v1' })
+  const oaiMessages = toOpenAICompatibleMessages(messages)
+  const hasSystem = oaiMessages.some(m => m.role === 'system')
+  if (system && !hasSystem) oaiMessages.unshift({ role: 'system', content: system })
+  const params = { model: provider.model || 'llama-3.3-70b-versatile', max_tokens: max_tokens || 4096, messages: oaiMessages }
+  if (tools?.length) {
+    params.tools = tools.map(t => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.input_schema } }))
+  }
+  return parseOpenAICompatibleResponse(await groq.chat.completions.create(params))
 }
 
 // ── Provider dispatch table ───────────────────────────────────────────────────
@@ -416,6 +442,7 @@ const CALL_FNS = {
   claude_cli: callClaudeCLI,
   gemini:     callGemini,
   kimi:       callKimi,
+  groq:       callGroq,
   ollama:     callOllama,
 }
 
