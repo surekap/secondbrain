@@ -28,8 +28,14 @@ async function ensureSchema() {
 
 let _emailsDiscovered = 0
 let _emailsDownloaded = 0
+let _fetchInProgress = false
 
 async function fetchEmails() {
+  if (_fetchInProgress) {
+    log.warn('Email fetch already in progress; skipping overlapping run')
+    return
+  }
+  _fetchInProgress = true
   if (telemetry && !_runId) {
     _runId = await telemetry.startRun({ agentId: 'email', workflowName: 'email_sync' })
   }
@@ -48,6 +54,8 @@ async function fetchEmails() {
     }
   } catch (err) {
     log.error(`Email fetch failed: ${err.message}`);
+  } finally {
+    _fetchInProgress = false
   }
 }
 
