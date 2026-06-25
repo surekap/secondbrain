@@ -7,7 +7,7 @@ const db = require('@secondbrain/db')
 const { extractSignals } = require('./services/signal-extractor')
 const { extractOrganizations } = require('./services/organization-extractor')
 const { checkDormancy } = require('./services/dormancy-monitor')
-const { buildSignalClusters, shouldPromoteCluster, opportunityFromCluster } = require('./services/signal-clusterer')
+const { buildSignalClusters, shouldPromoteCluster, opportunityFromCluster, clusterPromotionPlan } = require('./services/signal-clusterer')
 
 let schemaReady = false
 
@@ -650,6 +650,7 @@ async function runIntelligenceServices(pool, options = {}) {
     const clusterStats = await promoteSignalClusters(pool)
     stats.signal_clusters_evaluated = clusterStats.evaluated
     stats.signal_clusters_promoted = clusterStats.promoted
+    stats.signal_clusters_pruned = clusterStats.pruned
     log('info', 'Signal cluster promotion complete', clusterStats)
 
     // Step 4: Check relationship dormancy using tier-aware thresholds.
@@ -699,8 +700,33 @@ async function promoteSignalClusters(pool) {
   `)
 
   const clusters = buildSignalClusters(rows)
+  const existing = await pool.query(`
+    SELECT source_ref
+    FROM intelligence.opportunities
+    WHERE status = 'open'
+      AND source_system = 'signals'
+      AND source_ref LIKE 'signal_cluster:%'
+  `)
+  const { promotableClusters, staleSourceRefs } = clusterPromotionPlan(clusters, existing.rows.map(row => row.source_ref))
+
+  let pruned = 0
+  if (staleSourceRefs.length) {
+    const result = await pool.query(`
+      UPDATE intelligence.opportunities
+      SET status = 'dismissed',
+          feedback = COALESCE(feedback, 'false_positive'),
+          feedback_note = COALESCE(feedback_note, 'Auto-dismissed: cluster no longer meets promotion threshold'),
+          dismissed_at = COALESCE(dismissed_at, NOW()),
+          updated_at = NOW()
+      WHERE status = 'open'
+        AND source_system = 'signals'
+        AND source_ref = ANY($1::text[])
+    `, [staleSourceRefs])
+    pruned = result.rowCount || 0
+  }
+
   let promoted = 0
-  for (const cluster of clusters.filter(shouldPromoteCluster).slice(0, 50)) {
+  for (const cluster of promotableClusters.slice(0, 50)) {
     try {
       const opportunity = opportunityFromCluster(cluster)
       const opportunityId = await upsertOpportunity(opportunity)
@@ -714,7 +740,7 @@ async function promoteSignalClusters(pool) {
     }
   }
 
-  return { evaluated: clusters.length, promoted }
+  return { evaluated: clusters.length, promoted, pruned }
 }
 
 async function resolveContactFromEmail(pool, emailId) {

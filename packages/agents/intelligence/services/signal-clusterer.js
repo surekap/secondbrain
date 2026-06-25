@@ -116,6 +116,13 @@ function opportunityTypeForSignal(signalType, cluster) {
   return 'other'
 }
 
+function clusterPromotionPlan(clusters = [], existingSourceRefs = []) {
+  const promotableClusters = clusters.filter(shouldPromoteCluster)
+  const validRefs = new Set(promotableClusters.map(cluster => `signal_cluster:${cluster.cluster_key}`))
+  const staleSourceRefs = (existingSourceRefs || []).filter(ref => !validRefs.has(ref))
+  return { promotableClusters, staleSourceRefs }
+}
+
 function opportunityFromCluster(cluster) {
   const type = opportunityTypeForSignal(cluster.signal_type, cluster)
   const count = cluster.signal_count
@@ -160,5 +167,6 @@ module.exports = {
   buildSignalClusters,
   shouldPromoteCluster,
   opportunityFromCluster,
+  clusterPromotionPlan,
   termsFor,
 }

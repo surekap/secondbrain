@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { buildSignalClusters, shouldPromoteCluster, opportunityFromCluster } = require('../services/signal-clusterer');
+const { buildSignalClusters, shouldPromoteCluster, opportunityFromCluster, clusterPromotionPlan } = require('../services/signal-clusterer');
 
 test('signal-clusterer: clusters corroborated signals by project and meaningful topic terms', () => {
   const signals = [
@@ -61,6 +61,18 @@ test('signal-clusterer: rejects noisy URL/numeric clusters', () => {
   const [cluster] = buildSignalClusters(signals);
 
   assert.equal(shouldPromoteCluster(cluster), false);
+});
+
+test('signal-clusterer: promotion plan identifies stale previously-promoted clusters', () => {
+  const clusters = buildSignalClusters([
+    { id: 1, signal_type: 'risk', title: 'MT940 missing statement', description: 'bank statement missing', project_id: 7, occurred_at: '2026-06-24T00:00:00Z', source_table: 'email', source_id: 'a' },
+    { id: 2, signal_type: 'risk', title: 'MT940 statement still missing', description: 'axis bank mt940 missing', project_id: 7, occurred_at: '2026-06-25T00:00:00Z', source_table: 'projects', source_id: 'b' },
+  ]);
+  const validKey = clusters[0].cluster_key;
+  const plan = clusterPromotionPlan(clusters, [`signal_cluster:${validKey}`, 'signal_cluster:risk:source:email:blog-com']);
+
+  assert.deepEqual(plan.staleSourceRefs, ['signal_cluster:risk:source:email:blog-com']);
+  assert.equal(plan.promotableClusters.length, 1);
 });
 
 test('signal-clusterer: promoted opportunity has why_now and multiple evidence records', () => {
