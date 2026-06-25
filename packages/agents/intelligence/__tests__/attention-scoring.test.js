@@ -29,3 +29,13 @@ test('attention-scoring: clamps scores at zero', () => {
   const schema = readSchema();
   assert.match(schema, /GREATEST\(0,/, 'attention scores should not become negative after penalties');
 });
+
+test('attention-scoring: penalizes low-value admin, generic next actions, and missing why-now', () => {
+  const schema = readSchema();
+
+  assert.match(schema, /THEN 35 ELSE 0 END/, 'low-value admin items should receive a large penalty');
+  assert.match(schema, /THEN 'low_value_admin'/, 'low-value admin items should be flagged');
+  assert.match(schema, /THEN 18 ELSE 0 END/, 'generic next actions should receive a penalty');
+  assert.match(schema, /THEN 'generic_next_action'/, 'generic next actions should be flagged');
+  assert.match(schema, /THEN 'missing_why_now'/, 'items with no why-now should be flagged');
+});

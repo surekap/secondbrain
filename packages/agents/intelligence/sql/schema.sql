@@ -312,6 +312,8 @@ WITH scored_inputs AS (
     ev.last_occurred_at AS source_last_seen_at,
     COALESCE(ev.evidence_count, 0)::int AS evidence_count,
     COALESCE(ev.last_occurred_at, o.first_seen_at, o.created_at, o.last_seen_at) AS scoring_source_at,
+    LOWER(COALESCE(o.title, '') || ' ' || COALESCE(o.description, '')) AS attention_text,
+    LOWER(COALESCE(o.recommended_next_action, '')) AS action_text,
     LOWER(REGEXP_REPLACE(COALESCE(o.title, ''), '[[:space:]]+', ' ', 'g')) AS normalized_title
   FROM intelligence.opportunities o
   LEFT JOIN relationships.contacts c ON c.id = o.primary_contact_id
@@ -343,6 +345,29 @@ WITH scored_inputs AS (
       - CASE WHEN opportunity_type = 'group_opportunity' AND evidence_count < 2 THEN 16 ELSE 0 END
       - CASE WHEN opportunity_type = 'group_opportunity' AND primary_contact_id IS NULL AND primary_project_id IS NULL THEN 8 ELSE 0 END
       - CASE WHEN NULLIF(TRIM(COALESCE(recommended_next_action, '')), '') IS NULL THEN 8 ELSE 0 END
+      - CASE WHEN why_now IS NULL OR NULLIF(TRIM(COALESCE(why_now, '')), '') IS NULL THEN 8 ELSE 0 END
+      - CASE WHEN action_text LIKE '%turn %into a concrete task%'
+               OR action_text LIKE '%identify the best-fit person or project owner%'
+               OR action_text LIKE '%send a short intro note explaining the specific mutual value%'
+               OR action_text LIKE '%save a research task%'
+             THEN 18 ELSE 0 END
+      - CASE WHEN (
+               attention_text LIKE '%flight%'
+               OR attention_text LIKE '%travel plan%'
+               OR attention_text LIKE '%hotel%'
+               OR attention_text LIKE '%cab%'
+               OR attention_text LIKE '%taxi%'
+               OR attention_text LIKE '%certificate/key rotation%'
+               OR attention_text LIKE '%certificate rotation%'
+               OR attention_text LIKE '%client credentials%'
+               OR attention_text LIKE '% csr %'
+             ) AND attention_text NOT LIKE '%investment%'
+               AND attention_text NOT LIKE '%capital%'
+               AND attention_text NOT LIKE '%acquisition%'
+               AND attention_text NOT LIKE '%strategic%'
+               AND attention_text NOT LIKE '%distribution%'
+             THEN 35 ELSE 0 END
+      - CASE WHEN opportunity_type = 'meeting_action' AND evidence_count < 2 THEN 10 ELSE 0 END
       - CASE WHEN scoring_source_at < NOW() - INTERVAL '90 days' THEN 40
              WHEN scoring_source_at < NOW() - INTERVAL '30 days' THEN 25
              WHEN scoring_source_at < NOW() - INTERVAL '14 days' THEN 8
@@ -357,6 +382,29 @@ WITH scored_inputs AS (
       CASE WHEN opportunity_type = 'group_opportunity' AND primary_contact_id IS NULL AND primary_project_id IS NULL THEN 'unlinked_group_opportunity' END,
       CASE WHEN LOWER(title) LIKE 're-engage %' THEN 'generic_reengage' END,
       CASE WHEN NULLIF(TRIM(COALESCE(recommended_next_action, '')), '') IS NULL THEN 'missing_next_action' END,
+      CASE WHEN why_now IS NULL OR NULLIF(TRIM(COALESCE(why_now, '')), '') IS NULL THEN 'missing_why_now' END,
+      CASE WHEN action_text LIKE '%turn %into a concrete task%'
+             OR action_text LIKE '%identify the best-fit person or project owner%'
+             OR action_text LIKE '%send a short intro note explaining the specific mutual value%'
+             OR action_text LIKE '%save a research task%'
+           THEN 'generic_next_action' END,
+      CASE WHEN (
+             attention_text LIKE '%flight%'
+             OR attention_text LIKE '%travel plan%'
+             OR attention_text LIKE '%hotel%'
+             OR attention_text LIKE '%cab%'
+             OR attention_text LIKE '%taxi%'
+             OR attention_text LIKE '%certificate/key rotation%'
+             OR attention_text LIKE '%certificate rotation%'
+             OR attention_text LIKE '%client credentials%'
+             OR attention_text LIKE '% csr %'
+           ) AND attention_text NOT LIKE '%investment%'
+             AND attention_text NOT LIKE '%capital%'
+             AND attention_text NOT LIKE '%acquisition%'
+             AND attention_text NOT LIKE '%strategic%'
+             AND attention_text NOT LIKE '%distribution%'
+           THEN 'low_value_admin' END,
+      CASE WHEN opportunity_type = 'meeting_action' AND evidence_count < 2 THEN 'thin_meeting_action' END,
       CASE WHEN scoring_source_at < NOW() - INTERVAL '90 days' THEN 'very_stale'
            WHEN scoring_source_at < NOW() - INTERVAL '30 days' THEN 'stale'
            WHEN scoring_source_at < NOW() - INTERVAL '14 days' THEN 'aging' END,

@@ -32,7 +32,8 @@
     "init-db": "npm run init-db --workspace=packages/agents/limitless && npm run init-db --workspace=packages/agents/email && npm run init-db --workspace=packages/agents/projects && npm run init-db --workspace=packages/agents/relationships && npm run init-db --workspace=packages/agents/ai && npm run init-db --workspace=packages/agents/research && npm run init-db --workspace=packages/agents/intelligence",
     "collector": "node packages/collector/index.js",
     "sampler": "node packages/sampler/index.js",
-    "observe": "node packages/observe/server.js"
+    "observe": "node packages/observe/server.js",
+    "smoke:live": "node scripts/secondbrain-live-smoke.js"
   },
   "devDependencies": {
     "concurrently": "^9.2.3"

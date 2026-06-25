@@ -1169,6 +1169,61 @@ app.get('/api/intelligence/topics', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// GET /api/intelligence/signals/summary — weak signal readiness counts
+app.get('/api/intelligence/signals/summary', async (req, res) => {
+  if (!db) return res.status(503).json({ error: 'No database' });
+  try {
+    const { rows: scalarRows } = await db.query(`
+      SELECT
+        COUNT(*)::int AS total,
+        COUNT(*) FILTER (WHERE occurred_at >= NOW() - INTERVAL '7 days')::int AS last_7d,
+        COUNT(*) FILTER (WHERE confidence >= 0.70)::int AS high_confidence,
+        COUNT(DISTINCT signal_type)::int AS signal_types,
+        COUNT(DISTINCT contact_id) FILTER (WHERE contact_id IS NOT NULL)::int AS linked_contacts,
+        COUNT(DISTINCT project_id) FILTER (WHERE project_id IS NOT NULL)::int AS linked_projects
+      FROM intelligence.signals
+    `);
+    const { rows: typeRows } = await db.query(`
+      SELECT signal_type, COUNT(*)::int AS count
+      FROM intelligence.signals
+      GROUP BY signal_type
+      ORDER BY count DESC, signal_type ASC
+    `);
+    res.json({ ...scalarRows[0], by_type: typeRows });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// GET /api/intelligence/signals/recent — inspect recent weak signals without promoting them
+app.get('/api/intelligence/signals/recent', async (req, res) => {
+  if (!db) return res.status(503).json({ error: 'No database' });
+  try {
+    const limit = parsePositiveIntQuery(req.query.limit, 25, 100);
+    if (limit === null) return res.status(400).json({ error: 'Invalid limit' });
+    const params = [];
+    const conditions = [];
+    if (req.query.type) {
+      params.push(req.query.type);
+      conditions.push(`s.signal_type = $${params.length}`);
+    }
+    const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+    params.push(limit);
+    const { rows } = await db.query(`
+      SELECT s.id, s.signal_type, s.title, s.description, s.occurred_at,
+             s.confidence, s.strength, s.source_table, s.source_id, s.source_ref,
+             s.contact_id, c.display_name AS contact_name,
+             s.project_id, p.name AS project_name,
+             s.created_at, s.updated_at
+      FROM intelligence.signals s
+      LEFT JOIN relationships.contacts c ON c.id = s.contact_id
+      LEFT JOIN projects.projects p ON p.id = s.project_id
+      ${where}
+      ORDER BY COALESCE(s.occurred_at, s.updated_at, s.created_at) DESC NULLS LAST, s.id DESC
+      LIMIT $${params.length}
+    `, params);
+    res.json(rows);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // GET /api/intelligence/opportunities — first-class opportunity ledger
 app.get('/api/intelligence/opportunities', async (req, res) => {
   if (!db) return res.status(503).json({ error: 'No database' });
@@ -1281,6 +1336,37 @@ app.get('/api/intelligence/attention', async (req, res) => {
     const { rows } = await db.query(`
       SELECT *
       FROM intelligence.attention_queue
+      LIMIT $1
+    `, [limit]);
+    res.json(rows);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// GET /api/intelligence/things-to-ignore — low expected-value items that should not consume attention
+app.get('/api/intelligence/things-to-ignore', async (req, res) => {
+  if (!db) return res.status(503).json({ error: 'No database' });
+  try {
+    const limit = parsePositiveIntQuery(req.query.limit, 10, 50);
+    if (limit === null) return res.status(400).json({ error: 'Invalid limit' });
+    const { rows } = await db.query(`
+      SELECT id, item_type, title, description, recommended_next_action, priority,
+             opportunity_type, attention_score, quality_flags, source_last_seen_at, last_seen_at,
+             CASE
+               WHEN 'low_value_admin' = ANY(quality_flags) THEN 'Operational/admin; delegate or ignore unless escalated.'
+               WHEN 'generic_next_action' = ANY(quality_flags) THEN 'Action is too generic; needs stronger evidence or a concrete owner.'
+               WHEN 'single_evidence' = ANY(quality_flags) THEN 'Only one evidence item; monitor quietly until corroborated.'
+               WHEN 'missing_why_now' = ANY(quality_flags) THEN 'No timing case; not worth interrupting yet.'
+               ELSE 'Below attention threshold.'
+             END AS ignore_reason
+      FROM intelligence.attention_queue
+      WHERE attention_score < 50
+         OR 'low_value_admin' = ANY(quality_flags)
+         OR 'generic_next_action' = ANY(quality_flags)
+         OR ('single_evidence' = ANY(quality_flags) AND 'recent_source' != ALL(quality_flags))
+      ORDER BY
+        CASE WHEN 'low_value_admin' = ANY(quality_flags) THEN 0 ELSE 1 END,
+        attention_score ASC NULLS FIRST,
+        COALESCE(source_last_seen_at, last_seen_at) DESC NULLS LAST
       LIMIT $1
     `, [limit]);
     res.json(rows);
