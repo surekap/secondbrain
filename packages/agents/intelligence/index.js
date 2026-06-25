@@ -10,6 +10,7 @@ const { checkDormancy } = require('./services/dormancy-monitor')
 const { buildSignalClusters, shouldPromoteCluster, opportunityFromCluster, clusterPromotionPlan } = require('./services/signal-clusterer')
 const { recommendContactTiers } = require('./services/contact-tierer')
 const { extractAliases, normalized: normalizeAlias } = require('./services/alias-extractor')
+const { canonicalizeEntityId, canonicalizeEntityIds } = require('./services/canonical-ids')
 
 let schemaReady = false
 
@@ -142,7 +143,8 @@ async function upsertOpportunity(input) {
   const scores = priorityScore(input.priority)
   const dedupeKey = input.dedupe_key || dedupeKeyFor(input.source_system, input.source_ref, input.title)
   const recommendedNextAction = deriveRecommendedNextAction(input)
-  const expectedValueScore = input.expected_value_score ?? computeExpectedValue({ ...input, recommended_next_action: recommendedNextAction })
+  const canonicalPrimaryContactId = await canonicalizeEntityId(db, 'contact', input.primary_contact_id)
+  const expectedValueScore = input.expected_value_score ?? computeExpectedValue({ ...input, primary_contact_id: canonicalPrimaryContactId, recommended_next_action: recommendedNextAction })
 
   const { rows } = await db.query(`
     INSERT INTO intelligence.opportunities (
@@ -195,7 +197,7 @@ async function upsertOpportunity(input) {
     input.source_ref || null,
     input.source_hash || stableHash(`${input.source_system}:${input.source_ref}:${input.title}:${input.description || ''}`),
     dedupeKey,
-    input.primary_contact_id || null,
+    canonicalPrimaryContactId || null,
     input.primary_project_id || null,
     input.surfaced_insight_id || null,
     input.surfaced_project_insight_id || null,
@@ -203,7 +205,7 @@ async function upsertOpportunity(input) {
   ])
 
   const opportunityId = rows[0]?.id || null
-  await recordSignalForOpportunity(opportunityId, input)
+  await recordSignalForOpportunity(opportunityId, { ...input, primary_contact_id: canonicalPrimaryContactId })
   return opportunityId
 }
 
@@ -211,6 +213,7 @@ async function recordSignalForOpportunity(opportunityId, input) {
   if (!opportunityId) return
   try {
     const signalType = signalTypeForOpportunity(input.opportunity_type)
+    const canonicalPrimaryContactId = await canonicalizeEntityId(db, 'contact', input.primary_contact_id)
     const existing = await db.query(`
       UPDATE intelligence.signals
       SET title = $1,
@@ -229,7 +232,7 @@ async function recordSignalForOpportunity(opportunityId, input) {
     `, [
       input.title,
       input.description || null,
-      input.primary_contact_id || null,
+      canonicalPrimaryContactId || null,
       input.primary_project_id || null,
       input.source_ref || null,
       input.confidence ?? null,
@@ -249,7 +252,7 @@ async function recordSignalForOpportunity(opportunityId, input) {
       signalType,
       input.title,
       input.description || null,
-      input.primary_contact_id || null,
+      canonicalPrimaryContactId || null,
       input.primary_project_id || null,
       opportunityId,
       input.source_ref || null,
@@ -263,14 +266,18 @@ async function recordSignalForOpportunity(opportunityId, input) {
 }
 
 async function linkContacts(opportunityId, contactIds, primaryContactId) {
-  const unique = Array.from(new Set((contactIds || []).filter(Boolean).map(id => Number(id)).filter(Number.isFinite)))
-  if (primaryContactId && !unique.includes(Number(primaryContactId))) unique.unshift(Number(primaryContactId))
+  const rawUnique = Array.from(new Set((contactIds || []).filter(Boolean).map(id => Number(id)).filter(Number.isFinite)))
+  const canonicalPrimaryContactId = await canonicalizeEntityId(db, 'contact', primaryContactId)
+  const unique = await canonicalizeEntityIds(db, 'contact', rawUnique)
+  if (canonicalPrimaryContactId && !unique.includes(String(canonicalPrimaryContactId))) unique.unshift(String(canonicalPrimaryContactId))
   for (const contactId of unique) {
+    const numericContactId = Number(contactId)
+    if (!Number.isFinite(numericContactId)) continue
     await db.query(`
       INSERT INTO intelligence.opportunity_contacts (opportunity_id, contact_id, role)
       VALUES ($1, $2, $3)
       ON CONFLICT DO NOTHING
-    `, [opportunityId, contactId, contactId === Number(primaryContactId) ? 'primary' : 'mentioned'])
+    `, [opportunityId, numericContactId, String(contactId) === String(canonicalPrimaryContactId) ? 'primary' : 'mentioned'])
   }
 }
 
@@ -310,6 +317,7 @@ async function addEvidence(opportunityId, evidence) {
 async function upsertSignal(pool, signal) {
   if (!signal?.source_table || !signal?.source_id || !signal?.signal_type) return null
   const sourceId = String(signal.source_id)
+  const canonicalContactId = await canonicalizeEntityId(pool, 'contact', signal.contact_id)
   const existing = await pool.query(`
     UPDATE intelligence.signals
     SET title = $1,
@@ -327,7 +335,7 @@ async function upsertSignal(pool, signal) {
   `, [
     signal.title || signal.signal_type,
     signal.description || signal.content || null,
-    signal.contact_id || null,
+    canonicalContactId || null,
     signal.project_id || null,
     signal.source_ref || null,
     signal.occurred_at || null,
@@ -350,7 +358,7 @@ async function upsertSignal(pool, signal) {
     signal.signal_type,
     signal.title || signal.signal_type,
     signal.description || signal.content || null,
-    signal.contact_id || null,
+    canonicalContactId || null,
     signal.project_id || null,
     signal.source_table,
     sourceId,
@@ -381,7 +389,8 @@ async function upsertOrganizationGraph(pool, extracted) {
     `, [org.name, org.domain || null, JSON.stringify({ source: org.source || 'extracted', source_ref: org.source_ref || null })])
     const orgId = result.rows[0]?.id
     if (orgId) {
-      orgIdByHash.set(org.org_id_hash, orgId)
+      const canonicalOrgId = await canonicalizeEntityId(pool, 'organization', orgId)
+      orgIdByHash.set(org.org_id_hash, canonicalOrgId || orgId)
       organizationCount++
     }
   }
@@ -389,6 +398,10 @@ async function upsertOrganizationGraph(pool, extracted) {
   for (const link of extracted.contactLinks || []) {
     const orgId = orgIdByHash.get(link.org_id_hash)
     if (!orgId || !link.contact_id || !Number.isFinite(Number(link.contact_id))) continue
+    const canonicalContactId = await canonicalizeEntityId(pool, 'contact', link.contact_id)
+    const numericContactId = Number(canonicalContactId)
+    const numericOrgId = Number(orgId)
+    if (!Number.isFinite(numericContactId) || !Number.isFinite(numericOrgId)) continue
     await pool.query(`
       INSERT INTO intelligence.contact_organizations (contact_id, organization_id, role, relationship, confidence, source_ref)
       VALUES ($1, $2, $3, $4, $5, $6)
@@ -397,7 +410,7 @@ async function upsertOrganizationGraph(pool, extracted) {
         confidence = COALESCE(EXCLUDED.confidence, intelligence.contact_organizations.confidence),
         source_ref = COALESCE(EXCLUDED.source_ref, intelligence.contact_organizations.source_ref),
         updated_at = NOW()
-    `, [Number(link.contact_id), orgId, link.role || null, link.relationship || 'employee', link.confidence || null, link.source_ref || null])
+    `, [numericContactId, numericOrgId, link.role || null, link.relationship || 'employee', link.confidence || null, link.source_ref || null])
     contactLinkCount++
   }
 
@@ -855,7 +868,8 @@ async function resolveContactFromEmail(pool, emailId) {
       AND c.id IS NOT NULL
     LIMIT 1
   `, [emailId])
-  return result.rows[0]?.id || null
+  const contactId = result.rows[0]?.id || null
+  return canonicalizeEntityId(pool, 'contact', contactId)
 }
 
 module.exports = {
