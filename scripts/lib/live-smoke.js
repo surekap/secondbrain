@@ -128,8 +128,8 @@ function evaluateSmoke(snapshot, opts = {}) {
   if (attention.low_value_admin_count > 0 || attention.generic_next_action_count > Math.ceil(topN * 0.3)) {
     failures.push(`attention quality below gate (${attention.low_value_admin_count} low-value admin, ${attention.generic_next_action_count} generic next actions in top ${attention.top_count})`)
   }
-  if (attention.weak_evidence_count > Math.ceil(topN * 0.7)) warnings.push(`many top attention items have weak evidence (${attention.weak_evidence_count}/${attention.top_count})`)
-  if (attention.missing_why_now_count > Math.ceil(topN * 0.7)) warnings.push(`many top attention items lack why_now (${attention.missing_why_now_count}/${attention.top_count})`)
+  if (attention.weak_evidence_count > Math.ceil(topN * 0.7)) failures.push(`attention quality below evidence gate (${attention.weak_evidence_count}/${attention.top_count} weak evidence)`) 
+  if (attention.missing_why_now_count > Math.ceil(topN * 0.7)) failures.push(`attention quality below timing gate (${attention.missing_why_now_count}/${attention.top_count} missing why_now)`)
 
   const cronJobs = snapshot.cronJobs || []
   for (const job of cronJobs.filter(j => j.enabled !== false && String(j.name || '').startsWith('secondbrain-'))) {

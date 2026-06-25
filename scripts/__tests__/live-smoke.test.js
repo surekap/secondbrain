@@ -42,9 +42,12 @@ test('evaluateSmoke fails when core services are down or attention quality is be
     agents: { email: { status: 'running', pid: 1 }, whatsapp: { status: 'running', pid: 2 } },
     searchStats: { indexer: { lastRunError: null }, sources: [{ pending: 100 }] },
     graphSummary: { organizations: 0, topics: 0, object_topics: 0 },
-    attentionItems: [
-      { title: 'Book direct India-Munich flight', recommended_next_action: 'Turn this into a concrete task', evidence_count: 1, quality_flags: ['single_evidence'] }
-    ],
+    attentionItems: Array.from({ length: 10 }, (_, i) => ({
+      title: i === 0 ? 'Book direct India-Munich flight' : `Weak single-evidence item ${i}`,
+      recommended_next_action: i === 0 ? 'Turn this into a concrete task' : 'Review the evidence and decide',
+      evidence_count: 1,
+      quality_flags: ['single_evidence']
+    })),
     cronJobs: [{ name: 'secondbrain-group1-supervisor', last_status: 'ok', enabled: true }]
   }
 
@@ -54,4 +57,6 @@ test('evaluateSmoke fails when core services are down or attention quality is be
   assert.ok(result.failures.some(f => f.includes('observe_health')))
   assert.ok(result.failures.some(f => f.includes('graph')))
   assert.ok(result.failures.some(f => f.includes('attention quality')))
+  assert.ok(result.failures.some(f => f.includes('evidence gate')))
+  assert.ok(result.failures.some(f => f.includes('timing gate')))
 })

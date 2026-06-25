@@ -35,7 +35,8 @@ test('attention-scoring: clamps scores at zero', () => {
 test('attention-scoring: penalizes low-value admin, generic next actions, and missing why-now', () => {
   const schema = readSchema();
 
-  assert.match(schema, /THEN 35 ELSE 0 END/, 'low-value admin items should receive a large penalty');
+  assert.match(schema, /evidence_count = 0 THEN 35 WHEN evidence_count = 1 THEN 20/, 'single-evidence items should be penalized enough to avoid dominating attention');
+  assert.match(schema, /why_now IS NULL OR NULLIF\(TRIM\(COALESCE\(why_now, ''\)\), ''\) IS NULL THEN 18/, 'missing why-now should receive a strong penalty');
   assert.match(schema, /THEN 'low_value_admin'/, 'low-value admin items should be flagged');
   assert.match(schema, /THEN 18 ELSE 0 END/, 'generic next actions should receive a penalty');
   assert.match(schema, /THEN 'generic_next_action'/, 'generic next actions should be flagged');
