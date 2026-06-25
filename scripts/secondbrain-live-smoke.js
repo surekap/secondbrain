@@ -52,6 +52,7 @@ async function collectSnapshot() {
     endpoint('search_stats', `${API_BASE}/api/search/stats`),
     endpoint('observe_health', `${API_BASE}/api/observe/health`),
     endpoint('intelligence_graph', `${API_BASE}/api/intelligence/graph/summary`),
+    endpoint('contact_tiers_summary', `${API_BASE}/api/intelligence/contact-tiers/summary`),
     endpoint('signals_summary', `${API_BASE}/api/intelligence/signals/summary`),
     endpoint('signals_recent', `${API_BASE}/api/intelligence/signals/recent?limit=5`),
     endpoint('attention_queue', `${API_BASE}/api/intelligence/attention?limit=${LIMIT}`),
@@ -70,6 +71,7 @@ async function collectSnapshot() {
     searchStats: byName.search_stats?.json || {},
     observeHealth: byName.observe_health?.json || {},
     graphSummary: byName.intelligence_graph?.json || {},
+    contactTiersSummary: byName.contact_tiers_summary?.json || {},
     signalsSummary: byName.signals_summary?.json || {},
     recentSignals: Array.isArray(byName.signals_recent?.json) ? byName.signals_recent.json : [],
     attentionItems: Array.isArray(byName.attention_queue?.json) ? byName.attention_queue.json : [],
@@ -110,6 +112,13 @@ function printHuman(snapshot, result) {
 
   console.log('\nGraph:')
   console.log(`- ${JSON.stringify(m.graph_summary)}`)
+
+  console.log('\nContact tiers:')
+  console.log(`- ${JSON.stringify(snapshot.contactTiersSummary?.by_tier || [])}`)
+  if (snapshot.contactTiersSummary?.overdue?.length) {
+    const overdue = snapshot.contactTiersSummary.overdue[0]
+    console.log(`- top overdue: ${overdue.display_name} ${overdue.relationship_tier} overdue=${overdue.days_overdue}d`)
+  }
 
   console.log('\nSignals:')
   console.log(`- ${JSON.stringify(m.signals_summary || {})}`)

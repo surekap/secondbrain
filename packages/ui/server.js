@@ -1100,6 +1100,89 @@ app.get('/api/intelligence/graph/summary', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// GET /api/intelligence/contact-tiers/summary — audit relationship tiering quality
+app.get('/api/intelligence/contact-tiers/summary', async (req, res) => {
+  if (!db) return res.status(503).json({ error: 'No database' });
+  try {
+    const { rows: byTier } = await db.query(`
+      SELECT COALESCE(relationship_tier, 'unknown') AS relationship_tier,
+             COUNT(*)::int AS count,
+             COUNT(*) FILTER (WHERE next_suggested_touch_at IS NOT NULL)::int AS with_next_touch,
+             COUNT(*) FILTER (WHERE next_suggested_touch_at < NOW())::int AS overdue,
+             ROUND(AVG(strategic_importance_score)::numeric, 2) AS avg_strategic_importance_score
+      FROM relationships.contacts
+      GROUP BY COALESCE(relationship_tier, 'unknown')
+      ORDER BY CASE COALESCE(relationship_tier, 'unknown')
+        WHEN 'tier_1' THEN 1 WHEN 'tier_2' THEN 2 WHEN 'tier_3' THEN 3 WHEN 'unknown' THEN 4 WHEN 'noise' THEN 5 ELSE 6 END
+    `);
+    const { rows: topTier1 } = await db.query(`
+      SELECT id, display_name, company, job_title, relationship_type, relationship_strength,
+             relationship_tier, strategic_importance_score, preferred_cadence_days,
+             dormant_threshold_days, last_interaction_at, next_suggested_touch_at,
+             CASE WHEN next_suggested_touch_at < NOW() THEN EXTRACT(DAYS FROM NOW() - next_suggested_touch_at)::int ELSE 0 END AS days_overdue,
+             COALESCE((SELECT ARRAY_AGG(key) FROM JSONB_OBJECT_KEYS(COALESCE(manual_overrides, '{}'::jsonb)) AS key), '{}') AS manual_override_fields
+      FROM relationships.contacts
+      WHERE relationship_tier = 'tier_1'
+      ORDER BY strategic_importance_score DESC NULLS LAST, last_interaction_at DESC NULLS LAST
+      LIMIT 25
+    `);
+    const { rows: overdue } = await db.query(`
+      SELECT id, display_name, company, job_title, relationship_type, relationship_strength,
+             relationship_tier, strategic_importance_score, preferred_cadence_days,
+             dormant_threshold_days, last_interaction_at, next_suggested_touch_at,
+             EXTRACT(DAYS FROM NOW() - next_suggested_touch_at)::int AS days_overdue,
+             COALESCE((SELECT ARRAY_AGG(key) FROM JSONB_OBJECT_KEYS(COALESCE(manual_overrides, '{}'::jsonb)) AS key), '{}') AS manual_override_fields
+      FROM relationships.contacts
+      WHERE next_suggested_touch_at < NOW()
+        AND relationship_tier IN ('tier_1','tier_2')
+      ORDER BY relationship_tier ASC, days_overdue DESC, strategic_importance_score DESC NULLS LAST
+      LIMIT 25
+    `);
+    res.json({ by_tier: byTier, top_tier_1: topTier1, overdue });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// GET /api/intelligence/contact-tiers — inspect contacts by tier/overdue state
+app.get('/api/intelligence/contact-tiers', async (req, res) => {
+  if (!db) return res.status(503).json({ error: 'No database' });
+  try {
+    const limit = parsePositiveIntQuery(req.query.limit, 50, 200);
+    if (limit === null) return res.status(400).json({ error: 'Invalid limit' });
+    const params = [];
+    const conditions = [];
+    const tier = String(req.query.tier || '').trim();
+    if (tier && tier !== 'all') {
+      params.push(tier);
+      conditions.push(`relationship_tier = $${params.length}`);
+    }
+    if (String(req.query.overdue || '').toLowerCase() === 'true') {
+      conditions.push(`next_suggested_touch_at < NOW()`);
+    }
+    if (req.query.q) {
+      params.push(`%${String(req.query.q).trim().toLowerCase()}%`);
+      conditions.push(`(LOWER(display_name) LIKE $${params.length} OR LOWER(COALESCE(company, '')) LIKE $${params.length})`);
+    }
+    const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+    params.push(limit);
+    const { rows } = await db.query(`
+      SELECT id, display_name, company, job_title, relationship_type, relationship_strength,
+             relationship_tier, strategic_importance_score, preferred_cadence_days,
+             dormant_threshold_days, intro_sensitivity, last_interaction_at, next_suggested_touch_at,
+             CASE WHEN next_suggested_touch_at < NOW() THEN EXTRACT(DAYS FROM NOW() - next_suggested_touch_at)::int ELSE 0 END AS days_overdue,
+             COALESCE((SELECT ARRAY_AGG(key) FROM JSONB_OBJECT_KEYS(COALESCE(manual_overrides, '{}'::jsonb)) AS key), '{}') AS manual_override_fields
+      FROM relationships.contacts
+      ${where}
+      ORDER BY
+        CASE relationship_tier WHEN 'tier_1' THEN 1 WHEN 'tier_2' THEN 2 WHEN 'tier_3' THEN 3 WHEN 'unknown' THEN 4 WHEN 'noise' THEN 5 ELSE 6 END,
+        COALESCE(next_suggested_touch_at, 'infinity'::timestamptz) ASC,
+        strategic_importance_score DESC NULLS LAST,
+        last_interaction_at DESC NULLS LAST
+      LIMIT $${params.length}
+    `, params);
+    res.json(rows);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // GET /api/intelligence/organizations — organization/entity graph surface
 app.get('/api/intelligence/organizations', async (req, res) => {
   if (!db) return res.status(503).json({ error: 'No database' });
