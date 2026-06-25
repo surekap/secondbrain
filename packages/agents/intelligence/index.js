@@ -8,6 +8,7 @@ const { extractSignals } = require('./services/signal-extractor')
 const { extractOrganizations } = require('./services/organization-extractor')
 const { checkDormancy } = require('./services/dormancy-monitor')
 const { buildSignalClusters, shouldPromoteCluster, opportunityFromCluster, clusterPromotionPlan } = require('./services/signal-clusterer')
+const { recommendContactTier } = require('./services/contact-tierer')
 
 let schemaReady = false
 
@@ -569,6 +570,8 @@ async function runIntelligenceServices(pool, options = {}) {
     contact_organization_links: 0,
     topic_links: 0,
     signals_recorded: 0,
+    contacts_tiered: 0,
+    contacts_with_next_touch: 0,
     dormancy_opportunities: 0,
   }
   log('info', 'Starting intelligence pipeline')
@@ -653,9 +656,17 @@ async function runIntelligenceServices(pool, options = {}) {
     stats.signal_clusters_pruned = clusterStats.pruned
     log('info', 'Signal cluster promotion complete', clusterStats)
 
-    // Step 4: Check relationship dormancy using tier-aware thresholds.
+    // Step 4: Tier contacts and compute next-touch dates for dormancy/relationship intelligence.
+    log('info', 'Tiering contacts')
+    const tierStats = await tierContacts(pool)
+    stats.contacts_tiered = tierStats.contacts_tiered
+    stats.contacts_with_next_touch = tierStats.contacts_with_next_touch
+    log('info', 'Contact tiering complete', tierStats)
+
+    // Step 5: Check relationship dormancy using tier-aware thresholds.
     log('info', 'Checking dormancy')
-    const dormantResult = await checkDormancy(contactsResult.rows)
+    const dormantContactsResult = await pool.query('SELECT * FROM relationships.contacts')
+    const dormantResult = await checkDormancy(dormantContactsResult.rows)
     log('info', 'Detected dormancy candidates', { count: dormantResult.length })
     let dormancyCount = 0
     for (const opp of dormantResult) {
@@ -686,6 +697,47 @@ async function runIntelligenceServices(pool, options = {}) {
     log('error', 'Pipeline error', { error: error.message, stack: error.stack })
     throw error
   }
+}
+
+async function tierContacts(pool) {
+  const { rows } = await pool.query(`
+    SELECT c.*,
+           COUNT(DISTINCT comm.id)::int AS comm_count,
+           COUNT(DISTINCT i.id)::int AS insight_count
+    FROM relationships.contacts c
+    LEFT JOIN relationships.communications comm ON comm.contact_id = c.id
+    LEFT JOIN relationships.insights i ON i.contact_id = c.id AND COALESCE(i.is_dismissed, false) = false
+    GROUP BY c.id
+  `)
+
+  let updated = 0
+  let withNextTouch = 0
+  for (const contact of rows) {
+    const rec = recommendContactTier(contact)
+    await pool.query(`
+      UPDATE relationships.contacts
+      SET relationship_tier = CASE WHEN COALESCE(manual_overrides, '{}'::jsonb) ? 'relationship_tier' THEN relationship_tier ELSE $2 END,
+          strategic_importance_score = CASE WHEN COALESCE(manual_overrides, '{}'::jsonb) ? 'strategic_importance_score' THEN strategic_importance_score ELSE $3 END,
+          preferred_cadence_days = CASE WHEN COALESCE(manual_overrides, '{}'::jsonb) ? 'preferred_cadence_days' THEN preferred_cadence_days ELSE $4 END,
+          dormant_threshold_days = CASE WHEN COALESCE(manual_overrides, '{}'::jsonb) ? 'dormant_threshold_days' THEN dormant_threshold_days ELSE $5 END,
+          next_suggested_touch_at = CASE WHEN COALESCE(manual_overrides, '{}'::jsonb) ? 'next_suggested_touch_at' THEN next_suggested_touch_at ELSE $6 END,
+          intro_sensitivity = CASE WHEN COALESCE(manual_overrides, '{}'::jsonb) ? 'intro_sensitivity' THEN intro_sensitivity ELSE $7 END,
+          updated_at = NOW()
+      WHERE id = $1
+    `, [
+      contact.id,
+      rec.relationship_tier,
+      rec.strategic_importance_score,
+      rec.preferred_cadence_days,
+      rec.dormant_threshold_days,
+      rec.next_suggested_touch_at,
+      rec.intro_sensitivity,
+    ])
+    updated++
+    if (rec.next_suggested_touch_at) withNextTouch++
+  }
+
+  return { contacts_tiered: updated, contacts_with_next_touch: withNextTouch }
 }
 
 async function promoteSignalClusters(pool) {
@@ -775,5 +827,6 @@ module.exports = {
   projectOpportunityType,
   deriveRecommendedNextAction,
   promoteSignalClusters,
+  tierContacts,
   runIntelligenceServices,
 }
