@@ -106,7 +106,7 @@ async function auditDuplicateOrganizations(pool, options = {}) {
       SELECT o.id,
              o.name,
              o.domain,
-             o.category,
+             o.sector,
              o.strategic_importance_score,
              TRIM(REGEXP_REPLACE(REGEXP_REPLACE(REGEXP_REPLACE(LOWER(COALESCE(o.name, '')),
                '\\b(pvt\\.?\\s*ltd\\.?|private\\s+limited|pvt\\.?|private|limited|ltd\\.?|llp|inc\\.?|corp\\.?|corporation|gmbh|llc|plc)\\b', '', 'g'),
@@ -122,7 +122,7 @@ async function auditDuplicateOrganizations(pool, options = {}) {
                'id', id,
                'name', name,
                'domain', domain,
-               'category', category,
+               'sector', sector,
                'strategic_importance_score', strategic_importance_score
              ) ORDER BY strategic_importance_score DESC NULLS LAST, id ASC) AS entities
       FROM keyed
