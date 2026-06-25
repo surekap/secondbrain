@@ -39,3 +39,11 @@ test('attention-scoring: penalizes low-value admin, generic next actions, and mi
   assert.match(schema, /THEN 'generic_next_action'/, 'generic next actions should be flagged');
   assert.match(schema, /THEN 'missing_why_now'/, 'items with no why-now should be flagged');
 });
+
+test('attention-scoring: applies feedback-aware scoring penalties', () => {
+  const schema = readSchema();
+
+  assert.match(schema, /feedback = 'useful' THEN 10/, 'useful feedback should modestly boost similar live items');
+  assert.match(schema, /feedback IN \('not_useful','false_positive','too_low_value'\) THEN -60/, 'negative feedback should heavily suppress items');
+  assert.match(schema, /THEN 'negative_feedback'/, 'negative feedback should be visible in quality flags');
+});

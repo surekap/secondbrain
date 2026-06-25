@@ -300,6 +300,7 @@ WITH scored_inputs AS (
     o.opportunity_type,
     o.expected_value_score,
     o.confidence,
+    o.feedback,
     o.primary_contact_id,
     c.display_name AS primary_contact_name,
     o.primary_project_id,
@@ -373,6 +374,10 @@ WITH scored_inputs AS (
              WHEN scoring_source_at < NOW() - INTERVAL '14 days' THEN 8
              ELSE 0 END
       - CASE WHEN opportunity_type = 'risk' AND scoring_source_at < NOW() - INTERVAL '14 days' THEN 12 ELSE 0 END
+      + CASE WHEN feedback = 'useful' THEN 10
+             WHEN feedback = 'too_late' THEN -30
+             WHEN feedback IN ('not_useful','false_positive','too_low_value') THEN -60
+             ELSE 0 END
     )::numeric(8,2) AS attention_score,
     ARRAY_REMOVE(ARRAY[
       CASE WHEN evidence_count = 0 THEN 'no_evidence' END,
@@ -409,6 +414,8 @@ WITH scored_inputs AS (
            WHEN scoring_source_at < NOW() - INTERVAL '30 days' THEN 'stale'
            WHEN scoring_source_at < NOW() - INTERVAL '14 days' THEN 'aging' END,
       CASE WHEN opportunity_type = 'risk' AND scoring_source_at < NOW() - INTERVAL '14 days' THEN 'archival_risk' END,
+      CASE WHEN feedback IN ('not_useful','false_positive','too_low_value') THEN 'negative_feedback' END,
+      CASE WHEN feedback = 'too_late' THEN 'feedback_too_late' END,
       CASE WHEN scoring_source_at >= NOW() - INTERVAL '3 days' THEN 'recent_source' END
     ], NULL)::text[] AS quality_flags
   FROM scored_inputs
