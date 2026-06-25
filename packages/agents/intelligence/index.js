@@ -7,6 +7,7 @@ const db = require('@secondbrain/db')
 const { extractSignals } = require('./services/signal-extractor')
 const { extractOrganizations } = require('./services/organization-extractor')
 const { checkDormancy } = require('./services/dormancy-monitor')
+const { buildSignalClusters, shouldPromoteCluster, opportunityFromCluster } = require('./services/signal-clusterer')
 
 let schemaReady = false
 
@@ -644,6 +645,13 @@ async function runIntelligenceServices(pool, options = {}) {
     stats.signals_recorded = signalCount
     log('info', 'Recorded/updated weak signals', { count: signalCount })
 
+    // Step 3b: Promote only corroborated weak-signal clusters into attention-worthy opportunities.
+    log('info', 'Clustering weak signals for promotion')
+    const clusterStats = await promoteSignalClusters(pool)
+    stats.signal_clusters_evaluated = clusterStats.evaluated
+    stats.signal_clusters_promoted = clusterStats.promoted
+    log('info', 'Signal cluster promotion complete', clusterStats)
+
     // Step 4: Check relationship dormancy using tier-aware thresholds.
     log('info', 'Checking dormancy')
     const dormantResult = await checkDormancy(contactsResult.rows)
@@ -679,6 +687,36 @@ async function runIntelligenceServices(pool, options = {}) {
   }
 }
 
+async function promoteSignalClusters(pool) {
+  const { rows } = await pool.query(`
+    SELECT *
+    FROM intelligence.signals
+    WHERE occurred_at > NOW() - INTERVAL '45 days'
+      AND COALESCE((metadata->>'source') <> 'signal_cluster', true)
+      AND source_table IS DISTINCT FROM 'intelligence.opportunities'
+    ORDER BY occurred_at DESC NULLS LAST, updated_at DESC
+    LIMIT 10000
+  `)
+
+  const clusters = buildSignalClusters(rows)
+  let promoted = 0
+  for (const cluster of clusters.filter(shouldPromoteCluster).slice(0, 50)) {
+    try {
+      const opportunity = opportunityFromCluster(cluster)
+      const opportunityId = await upsertOpportunity(opportunity)
+      if (!opportunityId) continue
+      if (opportunity.primary_contact_id) await linkContacts(opportunityId, [opportunity.primary_contact_id], opportunity.primary_contact_id)
+      if (opportunity.primary_project_id) await linkProject(opportunityId, opportunity.primary_project_id)
+      for (const evidence of opportunity.evidence || []) await addEvidence(opportunityId, evidence)
+      promoted++
+    } catch (error) {
+      console.error('[intelligence] signal cluster promotion failed:', cluster.cluster_key, error.message)
+    }
+  }
+
+  return { evaluated: clusters.length, promoted }
+}
+
 async function resolveContactFromEmail(pool, emailId) {
   const result = await pool.query(`
     SELECT c.id
@@ -706,5 +744,6 @@ module.exports = {
   relationshipOpportunityType,
   projectOpportunityType,
   deriveRecommendedNextAction,
+  promoteSignalClusters,
   runIntelligenceServices,
 }
