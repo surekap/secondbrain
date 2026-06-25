@@ -1216,23 +1216,38 @@ app.get('/api/intelligence/opportunities', async (req, res) => {
              COALESCE(ev.evidence_count, 0)::int AS evidence_count,
              ev.first_occurred_at AS source_first_seen_at,
              ev.last_occurred_at AS source_last_seen_at,
-             (
+             GREATEST(0,
                COALESCE(o.expected_value_score, CASE o.priority WHEN 'high' THEN 80 WHEN 'low' THEN 30 ELSE 55 END)
+               + CASE WHEN COALESCE(ev.last_occurred_at, o.first_seen_at, o.created_at, o.last_seen_at) >= NOW() - INTERVAL '3 days' THEN 8
+                      WHEN COALESCE(ev.last_occurred_at, o.first_seen_at, o.created_at, o.last_seen_at) >= NOW() - INTERVAL '7 days' THEN 4
+                      ELSE 0 END
+               + CASE WHEN o.confidence >= 0.80 THEN 5 WHEN o.confidence <= 0.40 THEN -8 ELSE 0 END
+               + CASE WHEN COALESCE(ev.evidence_count, 0) >= 3 THEN 4 WHEN COALESCE(ev.evidence_count, 0) = 2 THEN 1 ELSE 0 END
                - CASE WHEN LOWER(o.title) LIKE 're-engage %' THEN 25 ELSE 0 END
-               - CASE WHEN COALESCE(ev.evidence_count, 0) = 0 THEN 20 WHEN COALESCE(ev.evidence_count, 0) = 1 THEN 6 ELSE 0 END
+               - CASE WHEN COALESCE(ev.evidence_count, 0) = 0 THEN 30 WHEN COALESCE(ev.evidence_count, 0) = 1 THEN 12 ELSE 0 END
+               - CASE WHEN COALESCE(ev.evidence_count, 0) = 1 AND COALESCE(ev.last_occurred_at, o.first_seen_at, o.created_at, o.last_seen_at) < NOW() - INTERVAL '14 days' THEN 15 ELSE 0 END
                - CASE WHEN o.opportunity_type = 'group_opportunity' AND COALESCE(ev.evidence_count, 0) < 2 THEN 16 ELSE 0 END
                - CASE WHEN o.opportunity_type = 'group_opportunity' AND o.primary_contact_id IS NULL AND o.primary_project_id IS NULL THEN 8 ELSE 0 END
                - CASE WHEN NULLIF(TRIM(COALESCE(o.recommended_next_action, '')), '') IS NULL THEN 8 ELSE 0 END
-               - CASE WHEN COALESCE(ev.last_occurred_at, o.last_seen_at) < NOW() - INTERVAL '30 days' THEN 10 ELSE 0 END
+               - CASE WHEN COALESCE(ev.last_occurred_at, o.first_seen_at, o.created_at, o.last_seen_at) < NOW() - INTERVAL '90 days' THEN 40
+                      WHEN COALESCE(ev.last_occurred_at, o.first_seen_at, o.created_at, o.last_seen_at) < NOW() - INTERVAL '30 days' THEN 25
+                      WHEN COALESCE(ev.last_occurred_at, o.first_seen_at, o.created_at, o.last_seen_at) < NOW() - INTERVAL '14 days' THEN 8
+                      ELSE 0 END
+               - CASE WHEN o.opportunity_type = 'risk' AND COALESCE(ev.last_occurred_at, o.first_seen_at, o.created_at, o.last_seen_at) < NOW() - INTERVAL '14 days' THEN 12 ELSE 0 END
              )::numeric(8,2) AS attention_score,
              ARRAY_REMOVE(ARRAY[
                CASE WHEN COALESCE(ev.evidence_count, 0) = 0 THEN 'no_evidence' END,
                CASE WHEN COALESCE(ev.evidence_count, 0) = 1 THEN 'single_evidence' END,
+               CASE WHEN COALESCE(ev.evidence_count, 0) = 1 AND COALESCE(ev.last_occurred_at, o.first_seen_at, o.created_at, o.last_seen_at) < NOW() - INTERVAL '14 days' THEN 'old_single_evidence' END,
                CASE WHEN o.opportunity_type = 'group_opportunity' AND COALESCE(ev.evidence_count, 0) < 2 THEN 'group_single_evidence' END,
                CASE WHEN o.opportunity_type = 'group_opportunity' AND o.primary_contact_id IS NULL AND o.primary_project_id IS NULL THEN 'unlinked_group_opportunity' END,
                CASE WHEN LOWER(o.title) LIKE 're-engage %' THEN 'generic_reengage' END,
                CASE WHEN NULLIF(TRIM(COALESCE(o.recommended_next_action, '')), '') IS NULL THEN 'missing_next_action' END,
-               CASE WHEN COALESCE(ev.last_occurred_at, o.last_seen_at) < NOW() - INTERVAL '30 days' THEN 'stale' END
+               CASE WHEN COALESCE(ev.last_occurred_at, o.first_seen_at, o.created_at, o.last_seen_at) < NOW() - INTERVAL '90 days' THEN 'very_stale'
+                    WHEN COALESCE(ev.last_occurred_at, o.first_seen_at, o.created_at, o.last_seen_at) < NOW() - INTERVAL '30 days' THEN 'stale'
+                    WHEN COALESCE(ev.last_occurred_at, o.first_seen_at, o.created_at, o.last_seen_at) < NOW() - INTERVAL '14 days' THEN 'aging' END,
+               CASE WHEN o.opportunity_type = 'risk' AND COALESCE(ev.last_occurred_at, o.first_seen_at, o.created_at, o.last_seen_at) < NOW() - INTERVAL '14 days' THEN 'archival_risk' END,
+               CASE WHEN COALESCE(ev.last_occurred_at, o.first_seen_at, o.created_at, o.last_seen_at) >= NOW() - INTERVAL '3 days' THEN 'recent_source' END
              ], NULL)::text[] AS quality_flags
       FROM intelligence.opportunities o
       LEFT JOIN relationships.contacts c ON c.id = o.primary_contact_id
@@ -1249,7 +1264,7 @@ app.get('/api/intelligence/opportunities', async (req, res) => {
         attention_score DESC NULLS LAST,
         o.expected_value_score DESC NULLS LAST,
         CASE o.priority WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END,
-        COALESCE(ev.last_occurred_at, o.last_seen_at) DESC NULLS LAST,
+        COALESCE(ev.last_occurred_at, o.first_seen_at, o.created_at, o.last_seen_at) DESC NULLS LAST,
         o.created_at DESC
       LIMIT $${params.length}
     `, params);

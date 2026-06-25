@@ -287,7 +287,7 @@ CREATE INDEX IF NOT EXISTS opportunity_feedback_opp_idx
 
 DROP VIEW IF EXISTS intelligence.attention_queue;
 CREATE VIEW intelligence.attention_queue AS
-WITH scored AS (
+WITH scored_inputs AS (
   SELECT
     o.id,
     'opportunity'::text AS item_type,
@@ -311,25 +311,8 @@ WITH scored AS (
     ev.first_occurred_at AS source_first_seen_at,
     ev.last_occurred_at AS source_last_seen_at,
     COALESCE(ev.evidence_count, 0)::int AS evidence_count,
-    LOWER(REGEXP_REPLACE(COALESCE(o.title, ''), '[[:space:]]+', ' ', 'g')) AS normalized_title,
-    (
-      COALESCE(o.expected_value_score, CASE o.priority WHEN 'high' THEN 80 WHEN 'low' THEN 30 ELSE 55 END)
-      - CASE WHEN LOWER(o.title) LIKE 're-engage %' THEN 25 ELSE 0 END
-      - CASE WHEN COALESCE(ev.evidence_count, 0) = 0 THEN 20 WHEN COALESCE(ev.evidence_count, 0) = 1 THEN 6 ELSE 0 END
-      - CASE WHEN o.opportunity_type = 'group_opportunity' AND COALESCE(ev.evidence_count, 0) < 2 THEN 16 ELSE 0 END
-      - CASE WHEN o.opportunity_type = 'group_opportunity' AND o.primary_contact_id IS NULL AND o.primary_project_id IS NULL THEN 8 ELSE 0 END
-      - CASE WHEN NULLIF(TRIM(COALESCE(o.recommended_next_action, '')), '') IS NULL THEN 8 ELSE 0 END
-      - CASE WHEN COALESCE(ev.last_occurred_at, o.last_seen_at) < NOW() - INTERVAL '30 days' THEN 10 ELSE 0 END
-    )::numeric(8,2) AS attention_score,
-    ARRAY_REMOVE(ARRAY[
-      CASE WHEN COALESCE(ev.evidence_count, 0) = 0 THEN 'no_evidence' END,
-      CASE WHEN COALESCE(ev.evidence_count, 0) = 1 THEN 'single_evidence' END,
-      CASE WHEN o.opportunity_type = 'group_opportunity' AND COALESCE(ev.evidence_count, 0) < 2 THEN 'group_single_evidence' END,
-      CASE WHEN o.opportunity_type = 'group_opportunity' AND o.primary_contact_id IS NULL AND o.primary_project_id IS NULL THEN 'unlinked_group_opportunity' END,
-      CASE WHEN LOWER(o.title) LIKE 're-engage %' THEN 'generic_reengage' END,
-      CASE WHEN NULLIF(TRIM(COALESCE(o.recommended_next_action, '')), '') IS NULL THEN 'missing_next_action' END,
-      CASE WHEN COALESCE(ev.last_occurred_at, o.last_seen_at) < NOW() - INTERVAL '30 days' THEN 'stale' END
-    ], NULL)::text[] AS quality_flags
+    COALESCE(ev.last_occurred_at, o.first_seen_at, o.created_at, o.last_seen_at) AS scoring_source_at,
+    LOWER(REGEXP_REPLACE(COALESCE(o.title, ''), '[[:space:]]+', ' ', 'g')) AS normalized_title
   FROM intelligence.opportunities o
   LEFT JOIN relationships.contacts c ON c.id = o.primary_contact_id
   LEFT JOIN projects.projects p ON p.id = o.primary_project_id
@@ -343,6 +326,44 @@ WITH scored AS (
   WHERE o.status = 'open'
     AND (o.snoozed_until IS NULL OR o.snoozed_until <= NOW())
     AND (o.expires_at IS NULL OR o.expires_at > NOW())
+), scored AS (
+  SELECT
+    scored_inputs.*,
+    GREATEST(0,
+      COALESCE(expected_value_score, CASE priority WHEN 'high' THEN 80 WHEN 'low' THEN 30 ELSE 55 END)
+      -- Boost genuinely current items; do not let newly backfilled old evidence float to the top.
+      + CASE WHEN scoring_source_at >= NOW() - INTERVAL '3 days' THEN 8
+             WHEN scoring_source_at >= NOW() - INTERVAL '7 days' THEN 4
+             ELSE 0 END
+      + CASE WHEN confidence >= 0.80 THEN 5 WHEN confidence <= 0.40 THEN -8 ELSE 0 END
+      + CASE WHEN evidence_count >= 3 THEN 4 WHEN evidence_count = 2 THEN 1 ELSE 0 END
+      - CASE WHEN LOWER(title) LIKE 're-engage %' THEN 25 ELSE 0 END
+      - CASE WHEN evidence_count = 0 THEN 30 WHEN evidence_count = 1 THEN 12 ELSE 0 END
+      - CASE WHEN evidence_count = 1 AND scoring_source_at < NOW() - INTERVAL '14 days' THEN 15 ELSE 0 END
+      - CASE WHEN opportunity_type = 'group_opportunity' AND evidence_count < 2 THEN 16 ELSE 0 END
+      - CASE WHEN opportunity_type = 'group_opportunity' AND primary_contact_id IS NULL AND primary_project_id IS NULL THEN 8 ELSE 0 END
+      - CASE WHEN NULLIF(TRIM(COALESCE(recommended_next_action, '')), '') IS NULL THEN 8 ELSE 0 END
+      - CASE WHEN scoring_source_at < NOW() - INTERVAL '90 days' THEN 40
+             WHEN scoring_source_at < NOW() - INTERVAL '30 days' THEN 25
+             WHEN scoring_source_at < NOW() - INTERVAL '14 days' THEN 8
+             ELSE 0 END
+      - CASE WHEN opportunity_type = 'risk' AND scoring_source_at < NOW() - INTERVAL '14 days' THEN 12 ELSE 0 END
+    )::numeric(8,2) AS attention_score,
+    ARRAY_REMOVE(ARRAY[
+      CASE WHEN evidence_count = 0 THEN 'no_evidence' END,
+      CASE WHEN evidence_count = 1 THEN 'single_evidence' END,
+      CASE WHEN evidence_count = 1 AND scoring_source_at < NOW() - INTERVAL '14 days' THEN 'old_single_evidence' END,
+      CASE WHEN opportunity_type = 'group_opportunity' AND evidence_count < 2 THEN 'group_single_evidence' END,
+      CASE WHEN opportunity_type = 'group_opportunity' AND primary_contact_id IS NULL AND primary_project_id IS NULL THEN 'unlinked_group_opportunity' END,
+      CASE WHEN LOWER(title) LIKE 're-engage %' THEN 'generic_reengage' END,
+      CASE WHEN NULLIF(TRIM(COALESCE(recommended_next_action, '')), '') IS NULL THEN 'missing_next_action' END,
+      CASE WHEN scoring_source_at < NOW() - INTERVAL '90 days' THEN 'very_stale'
+           WHEN scoring_source_at < NOW() - INTERVAL '30 days' THEN 'stale'
+           WHEN scoring_source_at < NOW() - INTERVAL '14 days' THEN 'aging' END,
+      CASE WHEN opportunity_type = 'risk' AND scoring_source_at < NOW() - INTERVAL '14 days' THEN 'archival_risk' END,
+      CASE WHEN scoring_source_at >= NOW() - INTERVAL '3 days' THEN 'recent_source' END
+    ], NULL)::text[] AS quality_flags
+  FROM scored_inputs
 ), deduped AS (
   SELECT
     scored.*,
