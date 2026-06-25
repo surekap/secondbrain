@@ -10,7 +10,7 @@ const { Pool }   = require('pg');
 const Anthropic  = require('@anthropic-ai/sdk');
 const indexer    = require('./services/indexer');
 const { embed, toSql, getEmbeddingConfig } = require('./services/embedder');
-const { getProviderDefinitions, getStaticModels, DEFAULT_OLLAMA_BASE_URL } = require('../agents/shared/model-catalog');
+const { getProviderDefinitions, DEFAULT_OLLAMA_BASE_URL } = require('../agents/shared/model-catalog');
 const { listOllamaModelOptions } = require('../agents/shared/ollama');
 const { getAvailableModels } = require('../agents/shared/model-fetcher');
 const { createObserveRouter } = require('../observe/routes');
@@ -2063,9 +2063,9 @@ app.get('/api/system/model-catalog', async (req, res) => {
 
   try {
     const { getConfig } = require('../agents/shared/config');
-    const providers = getProviderDefinitions(capability);
+    const providers = await getProviderDefinitions(capability);
 
-    // Handle Ollama provider
+    // Handle Ollama provider (live discovery against the local server)
     if (providerType === 'ollama') {
       const baseUrl = explicitBaseUrl || await getConfig('system.OLLAMA_BASE_URL') || DEFAULT_OLLAMA_BASE_URL;
       try {
@@ -2076,16 +2076,24 @@ app.get('/api/system/model-catalog', async (req, res) => {
       }
     }
 
-    // Handle Anthropic and OpenAI providers with live API discovery
-    if (providerType === 'anthropic' || providerType === 'openai') {
-      const apiKeyConfig = providerType === 'anthropic' ? 'system.ANTHROPIC_API_KEY' : 'system.OPENAI_API_KEY';
-      const apiKey = await getConfig(apiKeyConfig);
-      const models = await getAvailableModels({ providerType, apiKey, capability });
-      return res.json({ providers, models });
+    // No specific provider requested — caller only wants the provider list.
+    if (!providerType) {
+      return res.json({ providers, models: [] });
     }
 
-    // For other providers, use static models
-    res.json({ providers, models: getStaticModels({ providerType, capability }) });
+    // Anthropic, OpenAI, and Gemini (embeddings) use their native API key;
+    // every other provider (gemini chat, kimi, jina, OpenRouter-discovered
+    // providers) needs no app-specific key lookup here.
+    const apiKeyConfigByProvider = {
+      anthropic: 'system.ANTHROPIC_API_KEY',
+      openai: 'system.OPENAI_API_KEY',
+      gemini: 'system.GEMINI_API_KEY',
+    };
+    const apiKeyConfig = apiKeyConfigByProvider[providerType];
+    const apiKey = apiKeyConfig ? await getConfig(apiKeyConfig) : null;
+
+    const models = await getAvailableModels({ providerType, apiKey, capability });
+    res.json({ providers, models });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
