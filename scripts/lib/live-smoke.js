@@ -50,6 +50,9 @@ function isGenericNextAction(item) {
     'identify the best-fit person or project owner',
     'send a short intro note explaining the specific mutual value',
     'save a research task',
+    'assign an owner to validate the clustered risk',
+    'review the clustered signals, identify the owner/contact',
+    'either convert to one concrete action or dismiss',
   ].some(phrase => action.includes(phrase))
 }
 

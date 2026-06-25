@@ -32,6 +32,21 @@ test('summarizeAttentionQuality flags low-value admin and weak evidence in top a
   assert.deepEqual(summary.problem_titles, ['[Meeting] Book direct India-Munich flight'])
 })
 
+test('summarizeAttentionQuality flags generic clustered actions', () => {
+  const summary = summarizeAttentionQuality([
+    {
+      title: 'Cluster: risk: security / github / repositories',
+      recommended_next_action: 'Assign an owner to validate the clustered risk, then mitigate, dismiss, or set a review date.',
+      why_now: '6 corroborating risk signals across one source; latest signal 2026-06-25.',
+      evidence_count: 6,
+      quality_flags: [],
+    }
+  ], { topN: 1 })
+
+  assert.equal(summary.generic_next_action_count, 1)
+  assert.equal(summary.problems[0].problems.includes('generic_next_action'), true)
+})
+
 test('evaluateSmoke fails when core services are down or attention quality is below gate', () => {
   const snapshot = {
     endpoints: [

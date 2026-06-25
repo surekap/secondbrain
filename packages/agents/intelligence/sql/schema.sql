@@ -351,6 +351,9 @@ WITH scored_inputs AS (
                OR action_text LIKE '%identify the best-fit person or project owner%'
                OR action_text LIKE '%send a short intro note explaining the specific mutual value%'
                OR action_text LIKE '%save a research task%'
+               OR action_text LIKE '%assign an owner to validate the clustered risk%'
+               OR action_text LIKE '%review the clustered signals%'
+               OR action_text LIKE '%either convert to one concrete action or dismiss%'
              THEN 18 ELSE 0 END
       - CASE WHEN (
                attention_text LIKE '%flight%'
@@ -395,6 +398,9 @@ WITH scored_inputs AS (
              OR action_text LIKE '%identify the best-fit person or project owner%'
              OR action_text LIKE '%send a short intro note explaining the specific mutual value%'
              OR action_text LIKE '%save a research task%'
+             OR action_text LIKE '%assign an owner to validate the clustered risk%'
+             OR action_text LIKE '%review the clustered signals%'
+             OR action_text LIKE '%either convert to one concrete action or dismiss%'
            THEN 'generic_next_action' END,
       CASE WHEN (
              attention_text LIKE '%flight%'
