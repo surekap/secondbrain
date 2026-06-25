@@ -9,6 +9,7 @@ const { extractOrganizations } = require('./services/organization-extractor')
 const { checkDormancy } = require('./services/dormancy-monitor')
 const { buildSignalClusters, shouldPromoteCluster, opportunityFromCluster, clusterPromotionPlan } = require('./services/signal-clusterer')
 const { recommendContactTiers } = require('./services/contact-tierer')
+const { extractAliases } = require('./services/alias-extractor')
 
 let schemaReady = false
 
@@ -425,6 +426,27 @@ async function upsertOrganizationGraph(pool, extracted) {
   return { organizationCount, contactLinkCount, topicCount }
 }
 
+async function upsertAliases(pool, contacts, organizations) {
+  const aliases = extractAliases(contacts || [], organizations || [])
+  let count = 0
+  for (const alias of aliases) {
+    try {
+      await pool.query(`
+        INSERT INTO intelligence.entity_aliases (entity_type, entity_id, alias, source, confidence)
+        VALUES ($1, $2, $3, $4, $5)
+        ON CONFLICT (entity_type, entity_id, normalized_alias) DO UPDATE SET
+          source = COALESCE(EXCLUDED.source, intelligence.entity_aliases.source),
+          confidence = COALESCE(EXCLUDED.confidence, intelligence.entity_aliases.confidence),
+          updated_at = NOW()
+      `, [alias.entity_type, alias.entity_id, alias.alias, alias.source, alias.confidence])
+      count++
+    } catch (error) {
+      // Skip duplicates or missing entity_id gracefully
+    }
+  }
+  return { aliasCount: count }
+}
+
 function computeExpectedValue(input = {}) {
   const priority = priorityScore(input.priority)
   const impact = Number(input.impact_score ?? priority.impact)
@@ -618,6 +640,13 @@ async function runIntelligenceServices(pool, options = {}) {
     stats.contact_organization_links = graphStats.contactLinkCount
     stats.topic_links = graphStats.topicCount
     log('info', 'Graph extraction complete', graphStats)
+
+    // Step 2b: Extract entity aliases from contacts and organizations.
+    log('info', 'Extracting entity aliases')
+    const orgsForAliases = await pool.query('SELECT id, name FROM intelligence.organizations WHERE updated_at > NOW() - INTERVAL \'1 hour\'')
+    const aliasStats = await upsertAliases(pool, contactsResult.rows, orgsForAliases.rows)
+    stats.aliases_upserted = aliasStats.aliasCount
+    log('info', 'Alias extraction complete', aliasStats)
 
     // Step 3: Extract durable weak signals from multiple sources.
     log('info', 'Extracting weak signals')
@@ -830,5 +859,6 @@ module.exports = {
   deriveRecommendedNextAction,
   promoteSignalClusters,
   tierContacts,
+  upsertAliases,
   runIntelligenceServices,
 }
