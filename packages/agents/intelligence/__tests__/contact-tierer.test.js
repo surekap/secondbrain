@@ -73,3 +73,39 @@ test('contact-tierer: duplicate display names keep only one next-touch obligatio
   assert.equal(suppressed.length, 1);
   assert.equal(suppressed[0].next_suggested_touch_at, null);
 });
+
+test('contact-tierer: operational staff do not create relationship cadence obligations', () => {
+  const rec = recommendContactTier({
+    id: 7,
+    display_name: 'Gourav Choraria',
+    company: 'Saira Viaan Trading LLP',
+    job_title: 'operations / accounts staff',
+    relationship_type: 'family',
+    relationship_strength: 'strong',
+    comm_count: 100,
+    insight_count: 10,
+    last_interaction_at: '2026-03-28T18:02:53Z',
+  });
+
+  assert.notEqual(rec.relationship_tier, 'tier_1');
+  assert.equal(rec.next_suggested_touch_at, null);
+  assert.equal(rec.obligation_reason, 'operational_contact');
+});
+
+test('contact-tierer: service providers are not monthly relationship obligations without manual override', () => {
+  const rec = recommendContactTier({
+    id: 25,
+    display_name: 'Dipak Agarwal',
+    company: 'Stewart Mackertich',
+    job_title: 'Institutional Desk / Portfolio Updates',
+    relationship_type: 'service_provider',
+    relationship_strength: 'strong',
+    comm_count: 100,
+    insight_count: 10,
+    last_interaction_at: '2026-03-30T10:12:22Z',
+  });
+
+  assert.notEqual(rec.relationship_tier, 'tier_1');
+  assert.equal(rec.next_suggested_touch_at, null);
+  assert.equal(rec.obligation_reason, 'service_or_vendor');
+});

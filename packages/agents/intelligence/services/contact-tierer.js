@@ -13,6 +13,26 @@ function isSelfContact(contact = {}) {
   return name === 'prateek sureka'
 }
 
+function contactText(contact = {}) {
+  return [contact.display_name, contact.name, contact.company, contact.job_title, contact.relationship_type]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase()
+}
+
+function isOperationalContact(contact = {}) {
+  const text = contactText(contact)
+  return [
+    'operations', 'operation', 'accounts staff', 'accounting', 'admin staff', 'staff',
+    'executive assistant', 'assistant', 'hr', 'electrician', 'employee', 'branch manager',
+    'bank relationship manager', 'portfolio updates', 'institutional desk'
+  ].some(term => text.includes(term))
+}
+
+function isServiceOrVendor(contact = {}) {
+  return ['service_provider', 'vendor'].includes(contact.relationship_type)
+}
+
 function scoreContact(contact = {}) {
   if (isSelfContact(contact)) return 0
   if (contact.is_noise || contact.relationship_strength === 'noise') return 0
@@ -40,6 +60,9 @@ function scoreContact(contact = {}) {
   if (contact.company) score += 3
   if (contact.job_title) score += 3
 
+  if (isOperationalContact(contact)) score -= 35
+  if (isServiceOrVendor(contact)) score -= 25
+
   return Math.max(0, Math.min(100, score))
 }
 
@@ -63,8 +86,10 @@ function nextTouchAt(lastInteractionAt, cadenceDays) {
 
 function recommendContactTier(contact = {}) {
   const score = scoreContact(contact)
-  const relationship_tier = tierForScore(score, contact)
-  const cadence = CADENCE_BY_TIER[relationship_tier] || null
+  const suppressedReason = isServiceOrVendor(contact) ? 'service_or_vendor' : isOperationalContact(contact) ? 'operational_contact' : null
+  let relationship_tier = tierForScore(score, contact)
+  if (suppressedReason && relationship_tier === 'tier_1') relationship_tier = 'tier_2'
+  const cadence = suppressedReason ? null : (CADENCE_BY_TIER[relationship_tier] || null)
   return {
     contact_id: contact.id || null,
     relationship_tier,
@@ -73,6 +98,7 @@ function recommendContactTier(contact = {}) {
     dormant_threshold_days: cadence,
     next_suggested_touch_at: nextTouchAt(contact.last_interaction_at, cadence),
     intro_sensitivity: relationship_tier === 'tier_1' ? 'high' : relationship_tier === 'noise' ? 'do_not_intro' : 'medium',
+    obligation_reason: suppressedReason || (cadence ? 'cadence' : 'none'),
   }
 }
 
