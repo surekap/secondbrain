@@ -29,6 +29,40 @@ test('signal-clusterer: does not promote single unlinked weak signals', () => {
   assert.equal(shouldPromoteCluster(cluster), false);
 });
 
+test('signal-clusterer: does not promote unlinked one-source clusters even with many hits', () => {
+  const signals = Array.from({ length: 5 }, (_, i) => ({
+    id: i + 1,
+    signal_type: 'risk',
+    title: 'IndusInd bank transaction risk',
+    description: 'Bank transaction risk repeated in one source only',
+    occurred_at: '2026-06-25T00:00:00Z',
+    confidence: 0.8,
+    source_table: 'email',
+    source_id: `e${i}`,
+  }));
+  const [cluster] = buildSignalClusters(signals);
+
+  assert.equal(cluster.signal_count, 5);
+  assert.equal(cluster.source_count, 1);
+  assert.equal(shouldPromoteCluster(cluster), false);
+});
+
+test('signal-clusterer: rejects noisy URL/numeric clusters', () => {
+  const signals = Array.from({ length: 4 }, (_, i) => ({
+    id: i + 1,
+    signal_type: 'risk',
+    title: 'https com 11737503 logo',
+    description: 'https com 11737503 logo repeated tracking footer',
+    occurred_at: '2026-06-25T00:00:00Z',
+    confidence: 0.8,
+    source_table: i % 2 ? 'email' : 'whatsapp',
+    source_id: `n${i}`,
+  }));
+  const [cluster] = buildSignalClusters(signals);
+
+  assert.equal(shouldPromoteCluster(cluster), false);
+});
+
 test('signal-clusterer: promoted opportunity has why_now and multiple evidence records', () => {
   const [cluster] = buildSignalClusters([
     { id: 1, signal_type: 'risk', title: 'MT940 missing statement', description: 'bank statement missing', project_id: 7, occurred_at: '2026-06-24T00:00:00Z', source_table: 'email', source_id: 'a' },

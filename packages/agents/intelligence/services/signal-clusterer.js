@@ -1,8 +1,17 @@
 'use strict'
 
 const STOPWORDS = new Set([
-  'the','and','for','with','from','this','that','into','your','you','are','was','were','has','have','had','not','but','can','will','may','should','could','again','still','issue','issues','problem','need','needs','help','message','messages','session','group','project','opportunity','risk','failed','failure'
+  'the','and','for','with','from','this','that','into','your','you','are','was','were','has','have','had','not','but','can','will','may','should','could','again','still','issue','issues','problem','need','needs','help','message','messages','session','group','project','opportunity','risk','failed','failure',
+  'https','http','www','com','logo','blog','utm','click','view','open','tracking','footer','image','png','jpg'
 ])
+
+function isNoisyTerm(term) {
+  return /^\d+$/.test(String(term || '')) || String(term || '').length < 3 || STOPWORDS.has(String(term || '').toLowerCase())
+}
+
+function hasUsableTerms(cluster) {
+  return (cluster?.cluster_terms || []).filter(term => !isNoisyTerm(term)).length >= 2
+}
 
 function normalizeText(value) {
   return String(value || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').replace(/\s+/g, ' ').trim()
@@ -87,9 +96,15 @@ function summaryForCluster(cluster) {
 
 function shouldPromoteCluster(cluster) {
   if (!cluster) return false
-  if (cluster.signal_count >= 3) return true
-  if (cluster.signal_count >= 2 && (cluster.project_id || cluster.contact_id)) return true
-  if (cluster.signal_count >= 2 && cluster.source_count >= 2 && Number(cluster.max_confidence || 0) >= 0.7) return true
+  if (!hasUsableTerms(cluster)) return false
+
+  const linked = Boolean(cluster.project_id || cluster.contact_id)
+  if (linked && cluster.signal_count >= 2) return true
+
+  // Unlinked clusters need independent corroboration; volume from one inbox/source
+  // is usually repeated boilerplate, notifications, newsletters, or transactional noise.
+  if (!linked && cluster.signal_count >= 3 && cluster.source_count >= 2 && Number(cluster.max_confidence || 0) >= 0.7) return true
+
   return false
 }
 
