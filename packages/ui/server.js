@@ -17,6 +17,7 @@ const { createObserveRouter } = require('../observe/routes');
 const observeAlerts = require('../observe/alerts');
 const { resolveEntityAlias } = require('../agents/intelligence/services/entity-resolver');
 const { auditDuplicateContacts, auditDuplicateOrganizations, auditDuplicateSummary } = require('../agents/intelligence/services/duplicate-auditor');
+const { upsertDuplicateDecision, listDuplicateDecisions } = require('../agents/intelligence/services/duplicate-decisions');
 
 // ── Bootstrap ─────────────────────────────────────────────────────────────────
 
@@ -1147,6 +1148,37 @@ app.get('/api/intelligence/duplicates/organizations', async (req, res) => {
     if (limit === null) return res.status(400).json({ error: 'Invalid limit' });
     res.json(await auditDuplicateOrganizations(db, { limit }));
   } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// GET /api/intelligence/duplicates/decisions — list manual duplicate review decisions
+app.get('/api/intelligence/duplicates/decisions', async (req, res) => {
+  if (!db) return res.status(503).json({ error: 'No database' });
+  try {
+    const limit = parsePositiveIntQuery(req.query.limit, 25, 100);
+    if (limit === null) return res.status(400).json({ error: 'Invalid limit' });
+    res.json(await listDuplicateDecisions(db, {
+      limit,
+      entity_type: req.query.entity_type,
+      action: req.query.action,
+    }));
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+// POST /api/intelligence/duplicates/decide — record confirm/ignore decision; never auto-merges
+app.post('/api/intelligence/duplicates/decide', async (req, res) => {
+  if (!db) return res.status(503).json({ error: 'No database' });
+  try {
+    const row = await upsertDuplicateDecision(db, {
+      entity_type: req.body?.entity_type,
+      duplicate_key: req.body?.duplicate_key,
+      action: req.body?.action,
+      canonical_id: req.body?.canonical_id,
+      duplicate_ids: req.body?.duplicate_ids,
+      decided_by: req.body?.decided_by || 'dashboard',
+      note: req.body?.note,
+    });
+    res.json({ ok: true, decision: row });
+  } catch (e) { res.status(400).json({ error: e.message }); }
 });
 
 // GET /api/intelligence/contact-tiers/summary — audit relationship tiering quality

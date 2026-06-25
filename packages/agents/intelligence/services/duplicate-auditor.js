@@ -91,8 +91,16 @@ async function auditDuplicateContacts(pool, options = {}) {
            END::numeric(4,2) AS confidence,
            tier_variants,
            obligation_count,
-           entities
+           entities,
+           d.action AS decision_action,
+           d.canonical_id AS decided_canonical_id,
+           d.duplicate_ids AS decided_duplicate_ids,
+           JSON_BUILD_OBJECT('decision_action', d.action, 'canonical_id', d.canonical_id, 'duplicate_ids', d.duplicate_ids, 'decided_at', d.decided_at) AS decision,
+           d.decided_at
     FROM grouped
+    LEFT JOIN intelligence.duplicate_decisions d
+      ON d.entity_type = 'contact' AND d.duplicate_key = grouped.duplicate_key
+    WHERE d.action IS DISTINCT FROM 'ignored'
     ORDER BY confidence DESC, duplicate_count DESC, obligation_count DESC, duplicate_key ASC
     LIMIT $1
   `, [limit])
@@ -134,8 +142,16 @@ async function auditDuplicateOrganizations(pool, options = {}) {
            duplicate_count,
            suggested_canonical_id,
            CASE WHEN duplicate_count >= 3 THEN 0.95 ELSE 0.90 END::numeric(4,2) AS confidence,
-           entities
+           entities,
+           d.action AS decision_action,
+           d.canonical_id AS decided_canonical_id,
+           d.duplicate_ids AS decided_duplicate_ids,
+           JSON_BUILD_OBJECT('decision_action', d.action, 'canonical_id', d.canonical_id, 'duplicate_ids', d.duplicate_ids, 'decided_at', d.decided_at) AS decision,
+           d.decided_at
     FROM grouped
+    LEFT JOIN intelligence.duplicate_decisions d
+      ON d.entity_type = 'organization' AND d.duplicate_key = grouped.duplicate_key
+    WHERE d.action IS DISTINCT FROM 'ignored'
     ORDER BY confidence DESC, duplicate_count DESC, duplicate_key ASC
     LIMIT $1
   `, [limit])

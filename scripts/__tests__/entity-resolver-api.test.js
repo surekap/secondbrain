@@ -45,5 +45,14 @@ test('live smoke includes duplicate summary endpoint', () => {
   const smokePath = path.join(__dirname, '..', 'secondbrain-live-smoke.js')
   const smoke = fs.readFileSync(smokePath, 'utf8')
   assert.match(smoke, /duplicate_summary/)
+  assert.match(smoke, /duplicate_decisions/)
   assert.match(smoke, /\/api\/intelligence\/duplicates\/summary\?limit=5/)
+  assert.match(smoke, /\/api\/intelligence\/duplicates\/decisions\?limit=5/)
+})
+
+test('server exposes manual duplicate decision endpoints', () => {
+  assert.match(source, /upsertDuplicateDecision/)
+  assert.match(source, /listDuplicateDecisions/)
+  assert.match(source, /\/api\/intelligence\/duplicates\/decisions/)
+  assert.match(source, /\/api\/intelligence\/duplicates\/decide/)
 })

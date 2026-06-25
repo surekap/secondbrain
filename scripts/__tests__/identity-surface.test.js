@@ -15,4 +15,8 @@ test('dashboard surfaces duplicate identity audit instead of burying it in API o
   assert.match(source, /Identity Resolution/)
   assert.match(source, /duplicate-group/)
   assert.match(source, /suggested_canonical_id/)
+  assert.match(source, /decideDuplicate/)
+  assert.match(source, /\/api\/intelligence\/duplicates\/decide/)
+  assert.match(source, /Confirm duplicate/)
+  assert.match(source, /Ignore/)
 })

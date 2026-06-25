@@ -164,6 +164,23 @@ export default function DashboardPage() {
     setAttentionItems(prev => prev.filter(x => x.id !== id))
   }
 
+  async function decideDuplicate(group, action) {
+    const duplicate_ids = (group.entities || []).map(e => String(e.id)).filter(Boolean)
+    await fetch('/api/intelligence/duplicates/decide', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        entity_type: group._type,
+        duplicate_key: group.duplicate_key,
+        action,
+        canonical_id: group.suggested_canonical_id,
+        duplicate_ids,
+        decided_by: 'dashboard',
+      }),
+    })
+    await load()
+  }
+
   // Build Eisenhower matrix — combine rel + proj insights
   const allInsights = [
     ...relInsights.map(i => ({ ...i, _type: 'relationship' })),
@@ -279,6 +296,9 @@ export default function DashboardPage() {
         .duplicate-key { font-size:.82rem; font-weight:600; color:var(--text); }
         .duplicate-entities { font-size:.7rem; color:var(--text-2); margin-top:.2rem; line-height:1.35; }
         .duplicate-canon { font-size:.68rem; color:var(--text-3); margin-top:.25rem; }
+        .duplicate-actions { display:flex; gap:.35rem; margin-top:.5rem; }
+        .duplicate-action { border:1px solid var(--border); background:var(--surface); color:var(--text-2); border-radius:6px; padding:.22rem .45rem; font-size:.68rem; cursor:pointer; }
+        .duplicate-action:hover { border-color:var(--border-strong); color:var(--text); }
 
         /* Recent activity */
         .activity-list { display:flex; flex-direction:column; gap:.375rem; }
@@ -380,6 +400,10 @@ export default function DashboardPage() {
                     <div className="duplicate-key">{group.duplicate_key}</div>
                     <div className="duplicate-entities">{names.join(' · ')}</div>
                     <div className="duplicate-canon">suggested_canonical_id: {group.suggested_canonical_id || '—'}</div>
+                    <div className="duplicate-actions">
+                      <button className="duplicate-action" onClick={() => decideDuplicate(group, 'confirmed')}>Confirm duplicate</button>
+                      <button className="duplicate-action" onClick={() => decideDuplicate(group, 'ignored')}>Ignore</button>
+                    </div>
                   </div>
                 )
               })}

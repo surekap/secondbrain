@@ -66,6 +66,22 @@ CREATE TABLE IF NOT EXISTS intelligence.entity_aliases (
 CREATE INDEX IF NOT EXISTS entity_aliases_lookup_idx
   ON intelligence.entity_aliases (entity_type, normalized_alias);
 
+CREATE TABLE IF NOT EXISTS intelligence.duplicate_decisions (
+  id             BIGSERIAL PRIMARY KEY,
+  entity_type    TEXT NOT NULL CHECK (entity_type IN ('contact','organization')),
+  duplicate_key  TEXT NOT NULL,
+  action         TEXT NOT NULL CHECK (action IN ('confirmed','ignored')),
+  canonical_id   TEXT,
+  duplicate_ids  TEXT[] DEFAULT '{}',
+  decided_by     TEXT,
+  decided_at     TIMESTAMPTZ DEFAULT NOW(),
+  note           TEXT,
+  metadata       JSONB DEFAULT '{}',
+  UNIQUE (entity_type, duplicate_key)
+);
+CREATE INDEX IF NOT EXISTS duplicate_decisions_action_idx
+  ON intelligence.duplicate_decisions (entity_type, action, decided_at DESC);
+
 CREATE TABLE IF NOT EXISTS intelligence.contact_organizations (
   id                BIGSERIAL PRIMARY KEY,
   contact_id       BIGINT NOT NULL REFERENCES relationships.contacts(id) ON DELETE CASCADE,
