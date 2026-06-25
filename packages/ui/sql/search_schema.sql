@@ -55,6 +55,26 @@ CREATE UNIQUE INDEX IF NOT EXISTS search_embeddings_source_id_model_unique
 
 DROP INDEX IF EXISTS search_embeddings_hnsw_idx;
 
+-- Provider/model changes can mix dimensions (e.g. 384-d local embeddings and
+-- 768-d Jina embeddings). pgvector ANN indexes require one fixed dimension and
+-- will throw "different vector dimensions" during inserts/searches. Keep exact
+-- vector search working without ANN until each model has its own dimension-safe
+-- index.
+DO $$
+DECLARE
+  idx RECORD;
+BEGIN
+  FOR idx IN
+    SELECT schemaname, indexname
+    FROM pg_indexes
+    WHERE schemaname = 'search'
+      AND tablename = 'embeddings'
+      AND (indexdef ILIKE '% USING hnsw %' OR indexdef ILIKE '% USING ivfflat %')
+  LOOP
+    EXECUTE format('DROP INDEX IF EXISTS %I.%I', idx.schemaname, idx.indexname);
+  END LOOP;
+END $$;
+
 CREATE INDEX IF NOT EXISTS search_embeddings_source_idx
   ON search.embeddings (source);
 
