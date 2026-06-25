@@ -73,10 +73,9 @@ async function indexSource(source, rows, toContent, toSourceId, toMeta, embeddin
     await _db.query(`
       INSERT INTO search.embeddings (source, source_id, content, embedding, metadata, embedding_model)
       VALUES ($1, $2, $3, $4::public.vector, $5, $6)
-      ON CONFLICT (source, source_id) DO UPDATE
+      ON CONFLICT (source, source_id, embedding_model) DO UPDATE
         SET content    = EXCLUDED.content,
             embedding  = EXCLUDED.embedding,
-            embedding_model = EXCLUDED.embedding_model,
             metadata   = EXCLUDED.metadata,
             indexed_at = NOW()
     `, [source, String(toSourceId(row)), c, toSql(vecs[j]), JSON.stringify(toMeta(row)), embeddingModel]);

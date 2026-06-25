@@ -15,7 +15,7 @@ CREATE TABLE IF NOT EXISTS search.embeddings (
   embedding_model TEXT NOT NULL DEFAULT 'gemini-embedding-2-preview',
   metadata    JSONB DEFAULT '{}',
   indexed_at  TIMESTAMPTZ DEFAULT NOW(),
-  UNIQUE (source, source_id)
+  UNIQUE (source, source_id, embedding_model)
 );
 
 ALTER TABLE search.embeddings
@@ -33,6 +33,25 @@ ALTER TABLE search.embeddings
 
 ALTER TABLE search.embeddings
   ALTER COLUMN embedding_model SET NOT NULL;
+
+DO $$
+DECLARE
+  constraint_name TEXT;
+BEGIN
+  SELECT conname INTO constraint_name
+  FROM pg_constraint
+  WHERE conrelid = 'search.embeddings'::regclass
+    AND contype = 'u'
+    AND pg_get_constraintdef(oid) = 'UNIQUE (source, source_id)'
+  LIMIT 1;
+
+  IF constraint_name IS NOT NULL THEN
+    EXECUTE format('ALTER TABLE search.embeddings DROP CONSTRAINT %I', constraint_name);
+  END IF;
+END $$;
+
+CREATE UNIQUE INDEX IF NOT EXISTS search_embeddings_source_id_model_unique
+  ON search.embeddings (source, source_id, embedding_model);
 
 DROP INDEX IF EXISTS search_embeddings_hnsw_idx;
 
