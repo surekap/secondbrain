@@ -31,18 +31,22 @@ async function runNativeSync() {
     reader = require('./services/nativeReader');
   } catch (err) {
     console.error('[apple-contacts] Cannot load native reader:', err.message);
-    process.exit(1);
+    return
   }
 
-  const contacts = await reader.readNativeContacts();
-  console.log(`[apple-contacts] Read ${contacts.length} contacts from Apple Contacts`);
+  try {
+    const contacts = await reader.readNativeContacts();
+    console.log(`[apple-contacts] Read ${contacts.length} contacts from Apple Contacts`);
 
-  const result = await syncContacts(contacts);
-  console.log(
-    `[apple-contacts] Sync complete — total: ${result.total}, ` +
-    `matched: ${result.matched}, created: ${result.created}, skipped: ${result.skipped}`
-  );
-  return result;
+    const result = await syncContacts(contacts);
+    console.log(
+      `[apple-contacts] Sync complete — total: ${result.total}, ` +
+      `matched: ${result.matched}, created: ${result.created}, skipped: ${result.skipped}`
+    );
+    return result;
+  } catch (err) {
+    console.error('[apple-contacts] Sync error:', err.message);
+  }
 }
 
 async function main() {

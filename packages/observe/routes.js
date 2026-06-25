@@ -287,7 +287,7 @@ function createObserveRouter(db) {
       const runIds = candidates.map(r => r.run_id)
       const { rows: updated } = await db.query(`
         UPDATE telemetry.agent_runs
-        SET ended_at = NOW(), status = 'stale'
+        SET ended_at = NOW(), status = 'failed'
         WHERE run_id = ANY($1::text[])
           AND ended_at IS NULL
         RETURNING run_id, agent_name, workflow_name, status, started_at, ended_at, host_name, pid

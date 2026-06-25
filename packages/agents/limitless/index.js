@@ -94,5 +94,12 @@ process.on('SIGINT', async () => {
     process.exit(0);
 });
 
-console.log('✨ Limitless Agent v2.0 is running in production mode');
+console.log('\u2728 Limitless Agent v2.0 is running in production mode');
 console.log('   Press Ctrl+C to stop\n');
+
+process.on('uncaughtException', (err) => {
+  console.error('Uncaught exception:', err.message);
+});
+process.on('unhandledRejection', (reason) => {
+  console.error('Unhandled rejection:', reason);
+});

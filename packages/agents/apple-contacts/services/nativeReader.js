@@ -30,11 +30,11 @@ async function readNativeContacts() {
     const newStatus = contacts.getAuthStatus();
     if (newStatus !== 'Authorized') {
       printDeniedInstructions();
-      process.exit(1);
+      throw new Error('Contacts access denied or not determined');
     }
   } else if (authStatus === 'Denied' || authStatus === 'Restricted') {
     printDeniedInstructions();
-    process.exit(1);
+    throw new Error('Contacts access denied or restricted');
   }
 
   const raw = contacts.getAllContacts();

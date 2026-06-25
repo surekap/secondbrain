@@ -116,6 +116,21 @@ async function upsertProject(proj) {
 
 // ── Check if analysis is running ──────────────────────────────────────────────
 
+async function cleanupStaleRuns() {
+  try {
+    const { rows } = await db.query(`
+      UPDATE projects.analysis_runs
+      SET status = 'failed', completed_at = NOW(), error = 'Agent crashed or was restarted'
+      WHERE status = 'running'
+        AND started_at < NOW() - INTERVAL '3 hours'
+      RETURNING id
+    `)
+    if (rows.length > 0) {
+      console.log(`🧹 Cleaned up ${rows.length} stale analysis run(s)`)
+    }
+  } catch { /* ignore */ }
+}
+
 async function isAnalysisRunning() {
   try {
     const { rows } = await db.query(`
@@ -143,6 +158,7 @@ async function getLastRunAt() {
 }
 
 async function runAnalysis() {
+  await cleanupStaleRuns()
   const alreadyRunning = await isAnalysisRunning()
   if (alreadyRunning) {
     console.log('⏭  Analysis already running, skipping')
@@ -343,6 +359,13 @@ async function main() {
 main().catch(err => {
   console.error('❌ Fatal startup error:', err.message)
   process.exit(1)
+})
+
+process.on('uncaughtException', (err) => {
+  console.error('Uncaught exception:', err.message)
+})
+process.on('unhandledRejection', (reason) => {
+  console.error('Unhandled rejection:', reason)
 })
 
 process.on('SIGINT', async () => {

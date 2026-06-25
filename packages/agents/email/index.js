@@ -67,4 +67,11 @@ process.on('SIGINT', async () => {
   pool.end().then(() => process.exit(0));
 });
 
-log.info('Email Agent running — press Ctrl+C to stop');
+log.info('Email Agent running \u2014 press Ctrl+C to stop');
+
+process.on('uncaughtException', (err) => {
+  log.error(`Uncaught exception: ${err.message}`);
+});
+process.on('unhandledRejection', (reason) => {
+  log.error(`Unhandled rejection: ${reason}`);
+});

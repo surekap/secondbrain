@@ -1,12 +1,12 @@
 require("dotenv").config({ path: require("path").resolve(__dirname, "../../../.env.local") });
-const { Pool } = require("pg");
+const db = require('@secondbrain/db');
 const fs = require("fs");
 const path = require("path");
 const llm = require('../shared/llm');
 
 class LifelogAgent {
   constructor() {
-    this.db = new Pool({ connectionString: process.env.DATABASE_URL });
+    this.db = db;
 
     this.initDatabase();
 
