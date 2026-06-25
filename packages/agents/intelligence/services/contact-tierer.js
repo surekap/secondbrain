@@ -8,7 +8,13 @@ const CADENCE_BY_TIER = {
   noise: null,
 }
 
+function isSelfContact(contact = {}) {
+  const name = String(contact.display_name || contact.name || '').trim().toLowerCase()
+  return name === 'prateek sureka'
+}
+
 function scoreContact(contact = {}) {
+  if (isSelfContact(contact)) return 0
   if (contact.is_noise || contact.relationship_strength === 'noise') return 0
 
   let score = 0
@@ -38,6 +44,7 @@ function scoreContact(contact = {}) {
 }
 
 function tierForScore(score, contact = {}) {
+  if (isSelfContact(contact)) return 'noise'
   if (contact.is_noise || contact.relationship_strength === 'noise') return 'noise'
   if (score >= 75) return 'tier_1'
   if (score >= 45) return 'tier_2'
@@ -69,9 +76,52 @@ function recommendContactTier(contact = {}) {
   }
 }
 
+function normalizedName(contact = {}) {
+  return String(contact.display_name || contact.name || '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+}
+
+function recommendContactTiers(contacts = []) {
+  const recs = contacts.map(contact => ({ contact, rec: recommendContactTier(contact) }))
+  const groups = new Map()
+  for (const item of recs) {
+    const name = normalizedName(item.contact)
+    if (!name) continue
+    if (!groups.has(name)) groups.set(name, [])
+    groups.get(name).push(item)
+  }
+
+  for (const group of groups.values()) {
+    if (group.length < 2) continue
+    const eligible = group.filter(item => item.rec.next_suggested_touch_at)
+    if (eligible.length < 2) continue
+    eligible.sort((a, b) => {
+      const scoreDelta = Number(b.rec.strategic_importance_score || 0) - Number(a.rec.strategic_importance_score || 0)
+      if (scoreDelta) return scoreDelta
+      const aLast = new Date(a.contact.last_interaction_at || 0).getTime() || 0
+      const bLast = new Date(b.contact.last_interaction_at || 0).getTime() || 0
+      if (bLast !== aLast) return bLast - aLast
+      return Number(a.contact.id || 0) - Number(b.contact.id || 0)
+    })
+    const canonicalId = eligible[0].contact.id || eligible[0].rec.contact_id
+    for (const duplicate of eligible.slice(1)) {
+      duplicate.rec.next_suggested_touch_at = null
+      duplicate.rec.preferred_cadence_days = null
+      duplicate.rec.dormant_threshold_days = null
+      duplicate.rec.duplicate_of_contact_id = canonicalId
+    }
+  }
+
+  return recs.map(item => item.rec)
+}
+
 module.exports = {
   CADENCE_BY_TIER,
   scoreContact,
   recommendContactTier,
+  recommendContactTiers,
   nextTouchAt,
+  normalizedName,
 }

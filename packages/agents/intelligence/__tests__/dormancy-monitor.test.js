@@ -32,6 +32,21 @@ test('dormancy-monitor: does not flag tier_1 contact within 30 days', async () =
   assert.strictEqual(opportunities.length, 0, 'should not flag recent contacts');
 });
 
+test('dormancy-monitor: skips contacts without next-touch obligation', async () => {
+  const now = new Date();
+  const ninetyDaysAgo = new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000);
+
+  const mockContact = {
+    id: 'duplicate@example.com',
+    relationship_tier: 'tier_1',
+    last_contact_date: ninetyDaysAgo,
+    next_suggested_touch_at: null,
+  };
+
+  const opportunities = await checkDormancy([mockContact]);
+  assert.strictEqual(opportunities.length, 0, 'duplicates/suppressed contacts should not create dormancy obligations');
+});
+
 test('dormancy-monitor: deduplicates on dormancy:{contact_id}:{tier}', async () => {
   const now = new Date();
   const thirtyFiveDaysAgo = new Date(now.getTime() - 35 * 24 * 60 * 60 * 1000);

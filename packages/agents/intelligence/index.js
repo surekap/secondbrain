@@ -8,7 +8,7 @@ const { extractSignals } = require('./services/signal-extractor')
 const { extractOrganizations } = require('./services/organization-extractor')
 const { checkDormancy } = require('./services/dormancy-monitor')
 const { buildSignalClusters, shouldPromoteCluster, opportunityFromCluster, clusterPromotionPlan } = require('./services/signal-clusterer')
-const { recommendContactTier } = require('./services/contact-tierer')
+const { recommendContactTiers } = require('./services/contact-tierer')
 
 let schemaReady = false
 
@@ -710,10 +710,12 @@ async function tierContacts(pool) {
     GROUP BY c.id
   `)
 
+  const recommendations = recommendContactTiers(rows)
   let updated = 0
   let withNextTouch = 0
-  for (const contact of rows) {
-    const rec = recommendContactTier(contact)
+  for (let i = 0; i < rows.length; i++) {
+    const contact = rows[i]
+    const rec = recommendations[i]
     await pool.query(`
       UPDATE relationships.contacts
       SET relationship_tier = CASE WHEN COALESCE(manual_overrides, '{}'::jsonb) ? 'relationship_tier' THEN relationship_tier ELSE $2 END,

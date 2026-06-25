@@ -18,6 +18,7 @@ async function checkDormancy(contacts) {
 
   for (const contact of contacts || []) {
     if (contact.is_noise || contact.relationship_tier === 'noise') continue;
+    if (Object.prototype.hasOwnProperty.call(contact, 'next_suggested_touch_at') && !contact.next_suggested_touch_at) continue;
     const last = lastContactAt(contact);
     if (!last) continue;
 
