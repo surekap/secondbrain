@@ -53,6 +53,7 @@ async function collectSnapshot() {
     endpoint('observe_health', `${API_BASE}/api/observe/health`),
     endpoint('intelligence_graph', `${API_BASE}/api/intelligence/graph/summary`),
     endpoint('entity_resolver', `${API_BASE}/api/intelligence/resolve-entity?q=rahul&limit=5`),
+    endpoint('duplicate_summary', `${API_BASE}/api/intelligence/duplicates/summary?limit=5`),
     endpoint('contact_tiers_summary', `${API_BASE}/api/intelligence/contact-tiers/summary`),
     endpoint('signals_summary', `${API_BASE}/api/intelligence/signals/summary`),
     endpoint('signals_recent', `${API_BASE}/api/intelligence/signals/recent?limit=5`),
@@ -72,6 +73,7 @@ async function collectSnapshot() {
     searchStats: byName.search_stats?.json || {},
     observeHealth: byName.observe_health?.json || {},
     graphSummary: byName.intelligence_graph?.json || {},
+    duplicateSummary: byName.duplicate_summary?.json || {},
     contactTiersSummary: byName.contact_tiers_summary?.json || {},
     signalsSummary: byName.signals_summary?.json || {},
     recentSignals: Array.isArray(byName.signals_recent?.json) ? byName.signals_recent.json : [],
@@ -113,6 +115,9 @@ function printHuman(snapshot, result) {
 
   console.log('\nGraph:')
   console.log(`- ${JSON.stringify(m.graph_summary)}`)
+
+  console.log('\nIdentity duplicates:')
+  console.log(`- contacts=${snapshot.duplicateSummary?.contacts?.candidate_groups || 0} organizations=${snapshot.duplicateSummary?.organizations?.candidate_groups || 0}`)
 
   console.log('\nContact tiers:')
   console.log(`- ${JSON.stringify(snapshot.contactTiersSummary?.by_tier || [])}`)

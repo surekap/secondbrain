@@ -16,6 +16,7 @@ const { getAvailableModels } = require('../agents/shared/model-fetcher');
 const { createObserveRouter } = require('../observe/routes');
 const observeAlerts = require('../observe/alerts');
 const { resolveEntityAlias } = require('../agents/intelligence/services/entity-resolver');
+const { auditDuplicateContacts, auditDuplicateOrganizations, auditDuplicateSummary } = require('../agents/intelligence/services/duplicate-auditor');
 
 // ── Bootstrap ─────────────────────────────────────────────────────────────────
 
@@ -1115,6 +1116,36 @@ app.get('/api/intelligence/resolve-entity', async (req, res) => {
       .filter(Boolean);
     const rows = await resolveEntityAlias(db, q, { limit, types });
     res.json(rows);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// GET /api/intelligence/duplicates/summary — read-only identity-resolution audit rollup
+app.get('/api/intelligence/duplicates/summary', async (req, res) => {
+  if (!db) return res.status(503).json({ error: 'No database' });
+  try {
+    const limit = parsePositiveIntQuery(req.query.limit, 10, 50);
+    if (limit === null) return res.status(400).json({ error: 'Invalid limit' });
+    res.json(await auditDuplicateSummary(db, { limit }));
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// GET /api/intelligence/duplicates/contacts — read-only likely duplicate contact groups
+app.get('/api/intelligence/duplicates/contacts', async (req, res) => {
+  if (!db) return res.status(503).json({ error: 'No database' });
+  try {
+    const limit = parsePositiveIntQuery(req.query.limit, 25, 100);
+    if (limit === null) return res.status(400).json({ error: 'Invalid limit' });
+    res.json(await auditDuplicateContacts(db, { limit }));
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// GET /api/intelligence/duplicates/organizations — read-only likely duplicate organization groups
+app.get('/api/intelligence/duplicates/organizations', async (req, res) => {
+  if (!db) return res.status(503).json({ error: 'No database' });
+  try {
+    const limit = parsePositiveIntQuery(req.query.limit, 25, 100);
+    if (limit === null) return res.status(400).json({ error: 'Invalid limit' });
+    res.json(await auditDuplicateOrganizations(db, { limit }));
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 

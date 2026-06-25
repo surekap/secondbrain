@@ -31,3 +31,19 @@ test('contact tier q search uses entity_aliases for alias matching', () => {
   assert.match(routeSource, /entity_aliases/)
   assert.match(routeSource, /normalized_alias/)
 })
+
+test('server exposes read-only duplicate audit endpoints', () => {
+  assert.match(source, /auditDuplicateContacts/)
+  assert.match(source, /auditDuplicateOrganizations/)
+  assert.match(source, /auditDuplicateSummary/)
+  assert.match(source, /\/api\/intelligence\/duplicates\/contacts/)
+  assert.match(source, /\/api\/intelligence\/duplicates\/organizations/)
+  assert.match(source, /\/api\/intelligence\/duplicates\/summary/)
+})
+
+test('live smoke includes duplicate summary endpoint', () => {
+  const smokePath = path.join(__dirname, '..', 'secondbrain-live-smoke.js')
+  const smoke = fs.readFileSync(smokePath, 'utf8')
+  assert.match(smoke, /duplicate_summary/)
+  assert.match(smoke, /\/api\/intelligence\/duplicates\/summary\?limit=5/)
+})

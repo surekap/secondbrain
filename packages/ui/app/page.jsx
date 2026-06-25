@@ -106,12 +106,13 @@ export default function DashboardPage() {
   const [projStats, setProjStats]         = useState(null)
   const [recentActivity, setRecentActivity] = useState([])
   const [attentionItems, setAttentionItems] = useState([])
+  const [duplicateSummary, setDuplicateSummary] = useState(null)
   const [groupsMap, setGroupsMap]         = useState({})
   const [loading, setLoading]             = useState(true)
 
   async function load() {
     try {
-      const [ri, pi, rs, ps, ra, gr, aq] = await Promise.all([
+      const [ri, pi, rs, ps, ra, gr, aq, ds] = await Promise.all([
         fetch('/api/relationships/insights').then(r => r.json()),
         fetch('/api/projects/insights/open').then(r => r.json()),
         fetch('/api/relationships/stats').then(r => r.json()),
@@ -119,6 +120,7 @@ export default function DashboardPage() {
         fetch('/api/projects/activity/recent').then(r => r.json()),
         fetch('/api/relationships/groups').then(r => r.json()),
         fetch('/api/intelligence/attention?limit=5').then(r => r.ok ? r.json() : []).catch(() => []),
+        fetch('/api/intelligence/duplicates/summary?limit=3').then(r => r.ok ? r.json() : null).catch(() => null),
       ])
       if (Array.isArray(ri)) setRelInsights(ri)
       if (Array.isArray(pi)) setProjInsights(pi)
@@ -126,6 +128,7 @@ export default function DashboardPage() {
       if (ps && !ps.error)  setProjStats(ps)
       if (Array.isArray(ra)) setRecentActivity(ra.slice(0, 8))
       if (Array.isArray(aq)) setAttentionItems(aq)
+      if (ds && !ds.error) setDuplicateSummary(ds)
       if (Array.isArray(gr)) {
         const map = {}
         for (const g of gr) if (g.wa_chat_id && g.name) map[g.wa_chat_id] = g.name
@@ -174,6 +177,11 @@ export default function DashboardPage() {
   }
 
   const totalInsights = allInsights.length
+  const duplicateGroups = Number(duplicateSummary?.contacts?.candidate_groups || 0) + Number(duplicateSummary?.organizations?.candidate_groups || 0)
+  const duplicateTop = [
+    ...(duplicateSummary?.contacts?.top || []).map(g => ({ ...g, _type: 'contact' })),
+    ...(duplicateSummary?.organizations?.top || []).map(g => ({ ...g, _type: 'organization' })),
+  ].slice(0, 4)
 
   return (
     <>
@@ -257,6 +265,21 @@ export default function DashboardPage() {
         .attention-action { font-size:.72rem; color:var(--accent); margin-top:.3rem; }
         .attention-actions { display:flex; gap:.35rem; }
 
+        /* Identity resolution */
+        .identity-panel { background:var(--surface); border:1px solid var(--border); border-radius:10px; padding:.875rem; margin-bottom:2.25rem; }
+        .identity-head { display:flex; align-items:baseline; gap:.75rem; margin-bottom:.75rem; }
+        .identity-title { font-family:'Fraunces',serif; font-size:1rem; font-weight:300; color:var(--text); }
+        .identity-sub { font-size:.72rem; color:var(--text-3); }
+        .duplicate-list { display:grid; grid-template-columns:1fr 1fr; gap:.5rem; }
+        @media(max-width:720px) { .duplicate-list { grid-template-columns:1fr; } }
+        .duplicate-group { border:1px solid var(--border); border-radius:8px; padding:.625rem .75rem; background:var(--surface-2); }
+        .duplicate-meta { display:flex; gap:.4rem; align-items:center; flex-wrap:wrap; margin-bottom:.25rem; }
+        .duplicate-kind { font-size:.62rem; text-transform:uppercase; letter-spacing:.06em; color:var(--text-3); }
+        .duplicate-conf { font-size:.65rem; color:var(--accent); }
+        .duplicate-key { font-size:.82rem; font-weight:600; color:var(--text); }
+        .duplicate-entities { font-size:.7rem; color:var(--text-2); margin-top:.2rem; line-height:1.35; }
+        .duplicate-canon { font-size:.68rem; color:var(--text-3); margin-top:.25rem; }
+
         /* Recent activity */
         .activity-list { display:flex; flex-direction:column; gap:.375rem; }
         .activity-item {
@@ -334,6 +357,35 @@ export default function DashboardPage() {
             </>
           )}
         </div>
+
+        {/* Identity resolution audit */}
+        {duplicateSummary && duplicateGroups > 0 && (
+          <div className="identity-panel">
+            <div className="identity-head">
+              <span className="identity-title">Identity Resolution</span>
+              <span className="section-count">{duplicateGroups} duplicate groups</span>
+              <span className="identity-sub">Audit only — no auto-merge.</span>
+              <a className="section-link" href="/api/intelligence/duplicates/summary?limit=25">API →</a>
+            </div>
+            <div className="duplicate-list">
+              {duplicateTop.map(group => {
+                const names = (group.entities || []).map(e => e.display_name || e.name).filter(Boolean).slice(0, 4)
+                return (
+                  <div className="duplicate-group" key={`${group._type}-${group.duplicate_key}`}>
+                    <div className="duplicate-meta">
+                      <span className="duplicate-kind">{group._type}</span>
+                      <span className="duplicate-conf">{Math.round(Number(group.confidence || 0) * 100)}% confidence</span>
+                      <span className="attention-evidence">{Number(group.duplicate_count || 0)} rows</span>
+                    </div>
+                    <div className="duplicate-key">{group.duplicate_key}</div>
+                    <div className="duplicate-entities">{names.join(' · ')}</div>
+                    <div className="duplicate-canon">suggested_canonical_id: {group.suggested_canonical_id || '—'}</div>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        )}
 
         {/* Attention queue */}
         {attentionItems.length > 0 && (
