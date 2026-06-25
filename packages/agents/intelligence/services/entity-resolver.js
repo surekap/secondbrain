@@ -83,18 +83,53 @@ async function resolveEntityAlias(pool, query, options = {}) {
              m.score
       FROM matches m
       ORDER BY m.entity_type, m.entity_id, m.score DESC, m.match_kind ASC
+    ),
+    resolved AS (
+      SELECT r.entity_type,
+             r.entity_id AS matched_entity_id,
+             COALESCE(d.canonical_id, r.entity_id) AS canonical_entity_id,
+             r.matched_alias,
+             r.match_kind,
+             r.confidence,
+             r.score,
+             d.id AS duplicate_decision_id,
+             d.duplicate_key AS duplicate_key,
+             d.duplicate_ids AS duplicate_ids,
+             (d.id IS NOT NULL AND r.entity_id <> d.canonical_id) AS is_duplicate_entity
+      FROM ranked r
+      LEFT JOIN intelligence.duplicate_decisions d
+        ON d.entity_type = r.entity_type
+       AND d.action = 'confirmed'
+       AND (r.entity_id = d.canonical_id OR r.entity_id = ANY(d.duplicate_ids))
+    ),
+    canonical_ranked AS (
+      SELECT DISTINCT ON (entity_type, canonical_entity_id)
+             entity_type,
+             matched_entity_id,
+             canonical_entity_id,
+             canonical_entity_id AS entity_id,
+             matched_alias,
+             match_kind,
+             confidence,
+             score,
+             duplicate_decision_id,
+             duplicate_key,
+             duplicate_ids,
+             is_duplicate_entity
+      FROM resolved
+      ORDER BY entity_type, canonical_entity_id, score DESC, is_duplicate_entity ASC, matched_entity_id ASC
     )
-    SELECT r.*,
+    SELECT cr.*,
            c.display_name AS contact_name,
            c.company AS contact_company,
            c.job_title AS contact_job_title,
            c.relationship_tier AS contact_tier,
            o.name AS organization_name,
            o.domain AS organization_domain
-    FROM ranked r
-    LEFT JOIN relationships.contacts c ON r.entity_type = 'contact' AND c.id::text = r.entity_id
-    LEFT JOIN intelligence.organizations o ON r.entity_type = 'organization' AND o.id::text = r.entity_id
-    ORDER BY r.score DESC, r.confidence DESC NULLS LAST, COALESCE(c.display_name, o.name, r.matched_alias) ASC
+    FROM canonical_ranked cr
+    LEFT JOIN relationships.contacts c ON cr.entity_type = 'contact' AND c.id::text = cr.canonical_entity_id
+    LEFT JOIN intelligence.organizations o ON cr.entity_type = 'organization' AND o.id::text = cr.canonical_entity_id
+    ORDER BY cr.score DESC, cr.confidence DESC NULLS LAST, COALESCE(c.display_name, o.name, cr.matched_alias) ASC
     LIMIT $4
   `, [q, like, types, limit])
 
