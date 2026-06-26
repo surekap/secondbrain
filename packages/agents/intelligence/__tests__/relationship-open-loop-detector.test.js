@@ -14,7 +14,7 @@ test('surfaces Sivaram remittance open loop', () => {
 
 test('surfaces Nikhil cancelled diving trip / plan loop even for weak friend', () => {
   const out = detectRelationshipOpenLoops({
-    contacts: [{ id: 63, display_name: 'Nikhil Mehra', relationship_tier: 'noise', relationship_type: 'friend' }],
+    contacts: [{ id: 63, display_name: 'Nikhil Mehra', relationship_tier: 'noise', relationship_type: 'friend', is_noise: true }],
     directMessages: [{ contact_id: 63, source_id: 'nikhil-1', ts: '2026-03-06T06:09:54Z', from_me: false, body: 'Am assuming diving trip is cancelled. Now the plan is ?' }]
   })
   assert.equal(out.length, 1)

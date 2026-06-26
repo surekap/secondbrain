@@ -225,6 +225,7 @@ function detectCrossChannelProjectSignals(input = {}) {
             wa_chat_id: group.wa_chat_id || group.chat_id || null,
             project_group_score: pgScore,
             top_direct_score: relevantDms[0].score,
+            candidate_score: pgScore + relevantDms[0].score,
             shared_project_dm_terms: relevantDms[0].shared_terms,
           },
           evidence: [
@@ -252,8 +253,19 @@ function detectCrossChannelProjectSignals(input = {}) {
     }
   }
 
+  const bestByGroupContact = new Map()
+  for (const item of out) {
+    const key = `${item.metadata?.group_id || item.metadata?.wa_chat_id || 'group'}:${item.primary_contact_id || 'contact'}`
+    const current = bestByGroupContact.get(key)
+    const itemScore = Number(item.metadata?.candidate_score || 0)
+    const currentScore = Number(current?.metadata?.candidate_score || 0)
+    if (!current || itemScore > currentScore || (itemScore === currentScore && Number(item.metadata?.project_group_score || 0) > Number(current.metadata?.project_group_score || 0))) {
+      bestByGroupContact.set(key, item)
+    }
+  }
+
   const seen = new Set()
-  return out.filter(item => {
+  return Array.from(bestByGroupContact.values()).filter(item => {
     if (seen.has(item.dedupe_key)) return false
     seen.add(item.dedupe_key)
     return true

@@ -840,7 +840,6 @@ async function runIntelligenceServices(pool, options = {}) {
         AND m.event IN ('message','message_create','message_historical')
         AND m.data->>'body' IS NOT NULL
         AND m.ts > NOW() - INTERVAL '180 days'
-        AND c.is_noise IS NOT TRUE
       ORDER BY m.ts DESC
       LIMIT 20000
     `)

@@ -5,7 +5,7 @@ const ACTION_PATTERNS = [
 ]
 
 const CLOSING_PATTERNS = [
-  /\b(done|closed|completed|resolved|received|paid|sent|shared|sorted|handled|thanks|thank you|ok|okay|yea|yes)\b/i,
+  /\b(done|closed|completed|resolved|paid|sent|shared|sorted|handled|remitted|transferred|received by us|payment received)\b/i,
 ]
 
 const LOW_VALUE_PATTERNS = [
@@ -27,11 +27,12 @@ function contactName(contact = {}) {
 }
 
 function isStrategicContact(contact = {}) {
-  if (!contact || contact.is_noise) return false
+  if (!contact) return false
   const name = String(contactName(contact)).toLowerCase()
   if (/\bprateek\s+sureka\b/.test(name)) return false
   if (['tier_1', 'tier_2'].includes(contact.relationship_tier)) return true
-  if (['friend', 'professional_contact', 'client', 'investor'].includes(contact.relationship_type)) return true
+  if (['friend', 'family', 'professional_contact', 'client', 'investor'].includes(contact.relationship_type)) return true
+  if (contact.is_noise) return false
   return false
 }
 
