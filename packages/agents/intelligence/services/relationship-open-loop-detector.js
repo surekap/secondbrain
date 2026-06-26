@@ -85,7 +85,7 @@ function detectRelationshipOpenLoops(input = {}) {
     const sourceId = open.source_id || open.id || `${open.chat_id || id}:${open.ts || open.occurred_at || ''}`
     const occurredAt = open.ts || open.occurred_at || open.created_at || contact.last_interaction_at || null
     out.push({
-      opportunity_type: 'relationship_open_loop',
+      opportunity_type: 'follow_up',
       title: `${name}: unresolved direct-chat loop`,
       description: `Direct chat with ${name} contains an unresolved ${direction} ask/context: “${compact(text, 300)}”`,
       recommended_next_action: open.from_me
