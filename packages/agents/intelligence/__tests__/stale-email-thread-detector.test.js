@@ -75,6 +75,7 @@ test('stale-email-thread-detector: ignores newsletters, itineraries, and bulk tr
     { id: 13, subject: 'Invitation: Prateek Sir Meeting @ Tue Jun 2, 2026', from_address: 'Avisek <avisek@example.com>', date: '2026-06-01T00:00:00Z', body_text: 'Join with Google Meet Join Zoom Meeting' },
     { id: 14, subject: 'Your pre-sale is live! "Kisi Aur Ka" is on iTunes', from_address: 'DistroKid <mailbot@distrokid.com>', date: '2026-06-01T00:00:00Z', body_text: 'Hi, your single is live on iTunes' },
     { id: 15, subject: 'ACTION: Connect with your South Asia - Members MicroForum Pair!', from_address: 'MicroForum <microforum@ypo.org>', date: '2026-06-01T00:00:00Z', body_text: 'DO NOT REPLY TO THIS EMAIL Please contact your peer' },
+    { id: 16, subject: 'Pending Invoices Awaiting Your Approval', from_address: 'help@grapevine.hartex.in', date: '2026-06-01T00:00:00Z', body_text: 'SPIC - Invoice Approval Required. This is an automated notification from SPIC. Please do not reply to this email.' },
   ]
   const stale = detectStaleEmailThreads(emails, { now: '2026-06-26T00:00:00Z', staleDays: 14 })
   assert.equal(stale.length, 0)

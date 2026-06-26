@@ -483,6 +483,8 @@ SELECT
   quality_flags
 FROM deduped
 WHERE duplicate_rank = 1
+  AND attention_score >= 20
+  AND NOT ('no_evidence' = ANY(quality_flags))
 ORDER BY
   attention_score DESC NULLS LAST,
   CASE priority WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END,

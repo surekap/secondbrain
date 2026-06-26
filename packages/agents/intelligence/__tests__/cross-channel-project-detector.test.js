@@ -34,6 +34,19 @@ test('detects project work spanning WhatsApp group and direct member chat', () =
   assert.ok(opportunities[0].evidence.length >= 2)
 })
 
+test('uses group context to connect direct tasks whose wording differs from project name', () => {
+  const opportunities = detectCrossChannelProjectSignals({
+    projects: [{ id: 8, name: 'Grapevine ERP Implementation', description: 'ERP rollout and operational issue closure' }],
+    groups: [{ id: 9, wa_chat_id: 'erp@g.us', name: 'ERP rollout group', ai_summary: 'Gaurav and team are resolving admin approval and invoice workflow issues for Grapevine ERP' }],
+    contacts: [{ id: 10, display_name: 'Gaurav Partner', wa_jids: ['911222222222@c.us'] }],
+    groupMessages: [{ chat_id: 'erp@g.us', participant: '911222222222@c.us', body: 'Admin approval pending for invoice workflow, Gaurav to coordinate next step' }],
+    directMessages: [{ contact_id: 10, chat_id: '911222222222@c.us', body: 'Please review admin approval pending and confirm next step for invoice issue' }],
+  })
+  assert.equal(opportunities.length, 1)
+  assert.equal(opportunities[0].primary_project_id, 8)
+  assert.equal(opportunities[0].primary_contact_id, 10)
+})
+
 test('does not promote group-only project chatter without direct actionable member evidence', () => {
   const opportunities = detectCrossChannelProjectSignals({
     projects: [{ id: 1, name: 'Dubai Property Review', description: 'Review Dubai property options' }],

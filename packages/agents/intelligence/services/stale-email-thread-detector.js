@@ -119,6 +119,7 @@ function isBulkOrTransactional(email) {
   const body = String(email.body_text || email.body || '')
   if (BULK_SENDER_PATTERNS.some(p => p.test(sender))) return true
   if (BULK_SUBJECT_PATTERNS.some(p => p.test(subject))) return true
+  if (/\b(automated notification|please do not reply|do not reply|system generated email)\b/i.test(body)) return true
   let bulkHits = 0
   for (const p of BULK_BODY_PATTERNS) if (p.test(body)) bulkHits++
   if (bulkHits >= 1 && body.length > 500) return true

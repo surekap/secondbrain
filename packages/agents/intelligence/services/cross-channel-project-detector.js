@@ -119,9 +119,9 @@ function detectCrossChannelProjectSignals(input = {}) {
   const groupMessages = input.groupMessages || []
   const directMessages = input.directMessages || []
   const contacts = input.contacts || []
-  const minProjectGroupScore = input.minProjectGroupScore ?? 0.28
-  const minProjectDmScore = input.minProjectDmScore ?? 0.22
-  const minSharedProjectDmTerms = input.minSharedProjectDmTerms ?? 2
+  const minProjectGroupScore = input.minProjectGroupScore ?? 0.22
+  const minProjectDmScore = input.minProjectDmScore ?? 0.16
+  const minSharedProjectDmTerms = input.minSharedProjectDmTerms ?? 1
   const out = []
   const participantContactMap = buildParticipantContactMap(contacts)
 
@@ -162,10 +162,15 @@ function detectCrossChannelProjectSignals(input = {}) {
       for (const contact of participants.values()) {
         if (isSelfContact(contact)) continue
         const dms = directByContact.get(String(contact.id)) || []
+        const dmContext = `${pText} ${gText}`
         const relevantDms = dms
           .map(dm => {
             const text = messageText(dm)
-            return { dm, text, score: overlapScore(pText, text), shared_terms: sharedTerms(pText, text) }
+            const projectScore = overlapScore(pText, text)
+            const contextScore = overlapScore(dmContext, text)
+            const projectTerms = sharedTerms(pText, text)
+            const contextTerms = sharedTerms(dmContext, text)
+            return { dm, text, score: Math.max(projectScore, contextScore), projectScore, contextScore, shared_terms: Array.from(new Set([...projectTerms, ...contextTerms])) }
           })
           .filter(x => x.score >= minProjectDmScore && x.shared_terms.length >= minSharedProjectDmTerms && isActionable(x.text))
           .sort((a, b) => b.score - a.score)
