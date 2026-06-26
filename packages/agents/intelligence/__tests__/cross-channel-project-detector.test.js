@@ -47,6 +47,19 @@ test('uses group context to connect direct tasks whose wording differs from proj
   assert.equal(opportunities[0].primary_contact_id, 10)
 })
 
+test('maps a named group message to a contact even when WhatsApp participant id is an unmapped LID', () => {
+  const opportunities = detectCrossChannelProjectSignals({
+    projects: [{ id: 16, name: 'YPO Business Corridor', description: 'YPO introductions and business corridor networking' }],
+    groups: [{ id: 17, wa_chat_id: 'ypo@g.us', name: 'YPO India Business Corridor', ai_summary: 'Members request business introductions, owner connects, YPO GIC referrals and project leads' }],
+    contacts: [{ id: 85, display_name: 'Vivek Gupta', wa_jids: ['919820722245@c.us'] }],
+    groupMessages: [{ chat_id: 'ypo@g.us', participant: '39522305876204@lid', body: 'Hi any lead / contact with Mokobara owners / management ? Rgds Vivek Gupta YPO GIC' }],
+    directMessages: [{ contact_id: 85, chat_id: '919820722245@c.us', body: 'Process for a YPO BOM member to join as secondary member of GIC. How to apply' }],
+  })
+  assert.equal(opportunities.length, 1)
+  assert.equal(opportunities[0].primary_contact_id, 85)
+  assert.match(opportunities[0].description, /Vivek Gupta|YPO/i)
+})
+
 test('does not promote group-only project chatter without direct actionable member evidence', () => {
   const opportunities = detectCrossChannelProjectSignals({
     projects: [{ id: 1, name: 'Dubai Property Review', description: 'Review Dubai property options' }],

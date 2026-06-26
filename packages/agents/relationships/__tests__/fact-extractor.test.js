@@ -10,6 +10,12 @@ test('relationship fact extractor catches support context and cancelled plan cas
   assert.ok(facts.every(f => f.source_ref === 'test:vivek-gupta-gic'))
 })
 
+test('relationship fact extractor catches cancelled travel and open plan cases', () => {
+  const text = 'Am assuming diving trip is cancelled. Now the plan is?'
+  const facts = extractRelationshipFactsFromText(text, { source: 'whatsapp', source_ref: 'test:nikhil-diving' })
+  assert.ok(facts.some(f => f.fact_type === 'cancelled_plan'))
+})
+
 test('relationship fact extractor catches milestone birthday gift and preferences', () => {
   const text = 'Nikhil Mehra had a milestone birthday this year. I sent him a gift through Nandita which may have been too generic. He always wanted Wimbledon tickets or something wine related.'
   const facts = extractRelationshipFactsFromText(text, { source: 'hermes', source_ref: 'test:nikhil-mehra-birthday' })

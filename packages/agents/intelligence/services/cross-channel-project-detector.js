@@ -2,7 +2,7 @@
 
 const ACTION_PATTERNS = [
   /\b(need|needs|required|require|pending|stuck|blocked|delay|issue|problem|risk|concern)\b/i,
-  /\b(send|share|review|approve|confirm|coordinate|follow up|follow-up|call|meet|schedule|arrange)\b/i,
+  /\b(send|share|review|approve|confirm|coordinate|follow up|follow-up|call|meet|schedule|arrange|apply|process|lead|contact|connect|intro|introduction)\b/i,
   /\b(waiting|awaiting|not closed|open item|next step|owner|deadline)\b/i,
 ]
 
@@ -113,6 +113,21 @@ function buildParticipantContactMap(contacts = []) {
   return map
 }
 
+function contactNameNeedles(contact = {}) {
+  const names = [contact.display_name, contact.name].filter(Boolean).map(v => String(v).trim()).filter(v => v.length >= 5)
+  return Array.from(new Set(names))
+}
+
+function contactsMentionedInText(text, contacts = []) {
+  const lower = String(text || '').toLowerCase()
+  if (!lower) return []
+  return contacts.filter(contact => contactNameNeedles(contact).some(name => lower.includes(name.toLowerCase())))
+}
+
+function addParticipantContact(participants, contact) {
+  if (contact?.id != null) participants.set(String(contact.id), contact)
+}
+
 function detectCrossChannelProjectSignals(input = {}) {
   const projects = input.projects || []
   const groups = input.groups || []
@@ -154,9 +169,11 @@ function detectCrossChannelProjectSignals(input = {}) {
       for (const gm of groupMessagesByChat.get(group.wa_chat_id || group.chat_id) || []) {
         const raw = gm.participant || gm.author || gm.author_raw || gm.from || gm.from_jid
         const pKey = participantKey(raw)
-        if (!pKey) continue
-        const contact = participantContactMap.get(pKey)
-        if (contact) participants.set(String(contact.id), contact)
+        if (pKey) {
+          const contact = participantContactMap.get(pKey)
+          if (contact) addParticipantContact(participants, contact)
+        }
+        for (const mentioned of contactsMentionedInText(messageText(gm), contacts)) addParticipantContact(participants, mentioned)
       }
 
       for (const contact of participants.values()) {

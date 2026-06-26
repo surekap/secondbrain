@@ -16,7 +16,7 @@ const FACT_PATTERNS = [
     confidence: 0.78,
     patterns: [
       /\b(cancelled|canceled|postponed|had to cancel|called off)\b/i,
-      /\b(meet|meeting|lunch|dinner|coffee|catch up)\b/i,
+      /\b(meet|meeting|lunch|dinner|coffee|catch up|trip|travel|diving|plan)\b/i,
     ],
   },
   {

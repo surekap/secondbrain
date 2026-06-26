@@ -13,6 +13,7 @@ const { extractAliases, normalized: normalizeAlias } = require('./services/alias
 const { canonicalizeEntityId, canonicalizeEntityIds } = require('./services/canonical-ids')
 const { detectStaleEmailThreads } = require('./services/stale-email-thread-detector')
 const { detectCrossChannelProjectSignals } = require('./services/cross-channel-project-detector')
+const { detectRelationshipOpenLoops } = require('./services/relationship-open-loop-detector')
 const { extractRelationshipFactsFromText, inferContactMention } = require('../relationships/services/fact-extractor')
 
 let schemaReady = false
@@ -702,6 +703,7 @@ async function runIntelligenceServices(pool, options = {}) {
     dormancy_opportunities: 0,
     stale_email_threads_promoted: 0,
     cross_channel_project_opportunities: 0,
+    relationship_open_loop_opportunities: 0,
     relationship_facts_extracted: 0,
   }
   log('info', 'Starting intelligence pipeline')
@@ -759,7 +761,7 @@ async function runIntelligenceServices(pool, options = {}) {
     // Step 3: Extract durable weak signals from multiple sources.
     log('info', 'Extracting weak signals')
     const emailsResult = await pool.query('SELECT * FROM email.emails WHERE COALESCE(date, received_at, created_at) > NOW() - INTERVAL \'120 days\' ORDER BY COALESCE(date, received_at, created_at) DESC LIMIT 10000')
-    const whatsappResult = await pool.query('SELECT * FROM public.messages WHERE ts > NOW() - INTERVAL \'45 days\' ORDER BY ts DESC LIMIT 5000')
+    const whatsappResult = await pool.query('SELECT * FROM public.messages WHERE ts > NOW() - INTERVAL \'180 days\' ORDER BY ts DESC LIMIT 15000')
     const lifelogResult = await pool.query('SELECT * FROM limitless.lifelogs WHERE COALESCE(start_time, created_at) > NOW() - INTERVAL \'45 days\' ORDER BY COALESCE(start_time, created_at) DESC LIMIT 2000')
     log('info', 'Loaded signal inputs', { emails: emailsResult.rows.length, whatsapp: whatsappResult.rows.length, lifelogs: lifelogResult.rows.length, groups: groupsResult.rows.length, opportunities: opportunitiesResult.rows.length })
 
@@ -819,9 +821,9 @@ async function runIntelligenceServices(pool, options = {}) {
       WHERE m.chat_id LIKE '%@g.us'
         AND m.event IN ('message','message_create','message_historical')
         AND m.data->>'body' IS NOT NULL
-        AND m.ts > NOW() - INTERVAL '90 days'
+        AND m.ts > NOW() - INTERVAL '180 days'
       ORDER BY m.ts DESC
-      LIMIT 12000
+      LIMIT 20000
     `)
     const directMessagesResult = await pool.query(`
       SELECT
@@ -837,10 +839,10 @@ async function runIntelligenceServices(pool, options = {}) {
       WHERE m.chat_id LIKE '%@c.us'
         AND m.event IN ('message','message_create','message_historical')
         AND m.data->>'body' IS NOT NULL
-        AND m.ts > NOW() - INTERVAL '90 days'
+        AND m.ts > NOW() - INTERVAL '180 days'
         AND c.is_noise IS NOT TRUE
       ORDER BY m.ts DESC
-      LIMIT 12000
+      LIMIT 20000
     `)
     log('info', 'Loaded cross-channel inputs', {
       projects: projectsResult.rows.length,
@@ -893,6 +895,45 @@ async function runIntelligenceServices(pool, options = {}) {
     }
     stats.cross_channel_project_opportunities = crossChannelCount
     log('info', 'Cross-channel project promotion complete', { count: crossChannelCount })
+
+    log('info', 'Detecting direct relationship open loops')
+    const relationshipOpenLoops = detectRelationshipOpenLoops({ contacts: contactsResult.rows, directMessages: directMessagesResult.rows })
+    log('info', 'Detected relationship open loop candidates', { count: relationshipOpenLoops.length })
+    const activeOpenLoopRefs = new Set(relationshipOpenLoops.map(candidate => candidate.source_ref).filter(Boolean))
+    const existingOpenLoops = await pool.query(`
+      SELECT source_ref
+      FROM intelligence.opportunities
+      WHERE status = 'open'
+        AND source_system = 'signals'
+        AND source_ref LIKE 'relationship_open_loop:%'
+    `)
+    const staleOpenLoopRefs = existingOpenLoops.rows
+      .map(row => row.source_ref)
+      .filter(ref => !activeOpenLoopRefs.has(ref))
+    if (staleOpenLoopRefs.length) {
+      await pool.query(`
+        UPDATE intelligence.opportunities
+        SET status = 'dismissed',
+            feedback = COALESCE(feedback, 'closed_or_no_longer_detected'),
+            feedback_note = COALESCE(feedback_note, 'Auto-dismissed: direct relationship open-loop detector no longer validates this item'),
+            dismissed_at = COALESCE(dismissed_at, NOW()),
+            updated_at = NOW()
+        WHERE source_ref = ANY($1::text[])
+      `, [staleOpenLoopRefs])
+    }
+    let relationshipOpenLoopCount = 0
+    for (const candidate of relationshipOpenLoops) {
+      try {
+        const opportunityId = await upsertOpportunity(candidate)
+        await linkContacts(opportunityId, candidate.contact_ids || [], candidate.primary_contact_id)
+        for (const evidence of candidate.evidence || []) await addEvidence(opportunityId, evidence)
+        relationshipOpenLoopCount++
+      } catch (error) {
+        log('error', 'Failed to promote relationship open loop', { source_ref: candidate.source_ref, error: error.message })
+      }
+    }
+    stats.relationship_open_loop_opportunities = relationshipOpenLoopCount
+    log('info', 'Relationship open-loop promotion complete', { count: relationshipOpenLoopCount })
 
     log('info', 'Extracting durable relationship facts')
     let relationshipFactCount = 0
