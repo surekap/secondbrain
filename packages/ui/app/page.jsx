@@ -121,6 +121,7 @@ export default function DashboardPage() {
   const [recentActivity, setRecentActivity] = useState([])
   const [attentionItems, setAttentionItems] = useState([])
   const [duplicateSummary, setDuplicateSummary] = useState(null)
+  const [dupComms, setDupComms]           = useState({})
   const [groupsMap, setGroupsMap]         = useState({})
   const [loading, setLoading]             = useState(true)
 
@@ -201,6 +202,16 @@ export default function DashboardPage() {
       }),
     })
     await load()
+  }
+
+  async function toggleEntityComms(entityId) {
+    if (dupComms[entityId] !== undefined) {
+      setDupComms(prev => { const n = { ...prev }; delete n[entityId]; return n })
+      return
+    }
+    setDupComms(prev => ({ ...prev, [entityId]: 'loading' }))
+    const data = await fetchJson(`/api/relationships/contacts/${entityId}`, { fallback: null, timeoutMs: 6000 })
+    setDupComms(prev => ({ ...prev, [entityId]: data?.communications || [] }))
   }
 
   // Build Eisenhower matrix — combine rel + proj insights
@@ -315,8 +326,16 @@ export default function DashboardPage() {
         .duplicate-meta { display:flex; gap:.4rem; align-items:center; flex-wrap:wrap; margin-bottom:.25rem; }
         .duplicate-kind { font-size:.62rem; text-transform:uppercase; letter-spacing:.06em; color:var(--text-3); }
         .duplicate-conf { font-size:.65rem; color:var(--accent); }
-        .duplicate-key { font-size:.82rem; font-weight:600; color:var(--text); }
-        .duplicate-entities { font-size:.7rem; color:var(--text-2); margin-top:.2rem; line-height:1.35; }
+        .duplicate-key { font-size:.82rem; font-weight:600; color:var(--text); margin-bottom:.4rem; }
+        .duplicate-entity-list { display:flex; flex-direction:column; gap:.35rem; margin-top:.25rem; }
+        .duplicate-entity-row { border:1px solid var(--border); border-radius:6px; padding:.35rem .5rem; background:var(--surface); }
+        .duplicate-entity-name { font-size:.75rem; font-weight:600; color:var(--text); }
+        .duplicate-entity-canonical { font-size:.62rem; color:var(--accent); margin-left:.3rem; }
+        .duplicate-entity-meta { font-size:.68rem; color:var(--text-2); margin-top:.1rem; line-height:1.4; }
+        .duplicate-entity-toggle { font-size:.65rem; color:var(--accent); cursor:pointer; border:none; background:none; padding:0; margin-top:.2rem; text-decoration:underline; }
+        .duplicate-entity-comms { margin-top:.35rem; border-top:1px solid var(--border); padding-top:.3rem; display:flex; flex-direction:column; gap:.25rem; }
+        .dup-comm-item { font-size:.66rem; color:var(--text-2); line-height:1.35; }
+        .dup-comm-source { font-size:.6rem; color:var(--text-3); }
         .duplicate-canon { font-size:.68rem; color:var(--text-3); margin-top:.25rem; }
         .duplicate-actions { display:flex; gap:.35rem; margin-top:.5rem; }
         .duplicate-action { border:1px solid var(--border); background:var(--surface); color:var(--text-2); border-radius:6px; padding:.22rem .45rem; font-size:.68rem; cursor:pointer; }
@@ -411,7 +430,6 @@ export default function DashboardPage() {
             </div>
             <div className="duplicate-list">
               {duplicateTop.map(group => {
-                const names = (group.entities || []).map(e => e.display_name || e.name).filter(Boolean).slice(0, 4)
                 return (
                   <div className="duplicate-group" key={`${group._type}-${group.duplicate_key}`}>
                     <div className="duplicate-meta">
@@ -420,8 +438,47 @@ export default function DashboardPage() {
                       <span className="attention-evidence">{Number(group.duplicate_count || 0)} rows</span>
                     </div>
                     <div className="duplicate-key">{group.duplicate_key}</div>
-                    <div className="duplicate-entities">{names.join(' · ')}</div>
-                    <div className="duplicate-canon">suggested_canonical_id: {group.suggested_canonical_id || '—'}</div>
+                    <div className="duplicate-entity-list">
+                      {(group.entities || []).map(e => {
+                        const eid = String(e.id)
+                        const isSuggested = eid === String(group.suggested_canonical_id)
+                        const commsState = dupComms[eid]
+                        const metaParts = [
+                          e.company || e.name,
+                          e.job_title,
+                          e.relationship_type?.replace(/_/g, ' '),
+                          e.relationship_tier,
+                          e.last_interaction_at ? `last: ${new Date(e.last_interaction_at).toLocaleDateString('en-GB', { day:'numeric', month:'short', year:'numeric' })}` : 'no comms',
+                        ].filter(Boolean)
+                        return (
+                          <div className="duplicate-entity-row" key={eid}>
+                            <div>
+                              <span className="duplicate-entity-name">{e.display_name || e.name || `id:${eid}`}</span>
+                              {isSuggested && <span className="duplicate-entity-canonical">★ suggested canonical</span>}
+                            </div>
+                            <div className="duplicate-entity-meta">{metaParts.join(' · ')}</div>
+                            {group._type === 'contact' && (
+                              <button className="duplicate-entity-toggle" onClick={() => toggleEntityComms(eid)}>
+                                {commsState === undefined ? 'Show recent comms' : commsState === 'loading' ? 'Loading…' : 'Hide comms'}
+                              </button>
+                            )}
+                            {commsState && commsState !== 'loading' && (
+                              <div className="duplicate-entity-comms">
+                                {commsState.length === 0
+                                  ? <span className="dup-comm-source">No communications found</span>
+                                  : commsState.slice(0, 5).map(c => (
+                                    <div className="dup-comm-item" key={c.id}>
+                                      <span className="dup-comm-source">{c.source} · {new Date(c.occurred_at).toLocaleDateString('en-GB', { day:'numeric', month:'short' })} · </span>
+                                      {c.subject ? <strong>{c.subject}</strong> : null}{c.subject && c.content_snippet ? ' — ' : null}{c.content_snippet || '(no snippet)'}
+                                    </div>
+                                  ))
+                                }
+                              </div>
+                            )}
+                          </div>
+                        )
+                      })}
+                    </div>
                     <div className="duplicate-actions">
                       <button className="duplicate-action" onClick={() => decideDuplicate(group, 'confirmed')}>Confirm duplicate</button>
                       <button className="duplicate-action" onClick={() => decideDuplicate(group, 'ignored')}>Ignore</button>
