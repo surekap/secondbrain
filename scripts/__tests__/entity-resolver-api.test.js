@@ -41,6 +41,13 @@ test('contact tier q search uses entity_aliases and canonical recency for alias 
   assert.match(routeSource, /relationships\.contact_touches/)
   assert.match(routeSource, /public\.messages/)
   assert.match(routeSource, /ANY\(cg\.contact_ids\)/)
+  assert.match(routeSource, /cc\.is_noise IS NOT TRUE/)
+})
+
+test('entity resolver suppresses noise contacts by default', () => {
+  const resolverPath = path.join(__dirname, '..', '..', 'packages', 'agents', 'intelligence', 'services', 'entity-resolver.js')
+  const resolverSource = fs.readFileSync(resolverPath, 'utf8')
+  assert.match(resolverSource, /c\.is_noise IS NOT TRUE/)
 })
 
 test('server exposes read-only duplicate audit endpoints', () => {

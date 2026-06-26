@@ -1328,8 +1328,8 @@ app.get('/api/intelligence/contact-tiers', async (req, res) => {
     const limit = parsePositiveIntQuery(req.query.limit, 50, 200);
     if (limit === null) return res.status(400).json({ error: 'Invalid limit' });
     const params = [];
-    const matchConditions = [];
-    const canonicalConditions = [];
+    const matchConditions = ['c.is_noise IS NOT TRUE'];
+    const canonicalConditions = ['cc.is_noise IS NOT TRUE'];
     const tier = String(req.query.tier || '').trim();
     if (tier && tier !== 'all') {
       params.push(tier);

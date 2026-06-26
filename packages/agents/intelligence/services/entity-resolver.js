@@ -45,6 +45,13 @@ async function resolveEntityAlias(pool, query, options = {}) {
       FROM intelligence.entity_aliases a
       WHERE a.entity_type = ANY($3::text[])
         AND a.normalized_alias LIKE $2
+        AND (
+          a.entity_type <> 'contact'
+          OR EXISTS (
+            SELECT 1 FROM relationships.contacts ac
+            WHERE ac.id::text = a.entity_id AND ac.is_noise IS NOT TRUE
+          )
+        )
     ),
     contact_matches AS (
       SELECT 'contact'::text AS entity_type,
@@ -55,6 +62,7 @@ async function resolveEntityAlias(pool, query, options = {}) {
              CASE WHEN LOWER(c.display_name) = $1 THEN 98 ELSE 60 END::numeric AS score
       FROM relationships.contacts c
       WHERE 'contact' = ANY($3::text[])
+        AND c.is_noise IS NOT TRUE
         AND LOWER(c.display_name) LIKE $2
     ),
     organization_matches AS (
