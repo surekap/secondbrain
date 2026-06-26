@@ -49,12 +49,6 @@ const STATIC_MODELS = [
     provider_type: "jina",
     capabilities: ["embeddings"],
   },
-  {
-    label: "Jina Embeddings v5 Text",
-    value: "jina-embeddings-v5-text-small",
-    provider_type: "jina",
-    capabilities: ["embeddings"],
-  },
 ];
 
 async function getProviderDefinitions(capability) {

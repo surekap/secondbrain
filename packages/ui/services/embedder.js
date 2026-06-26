@@ -16,7 +16,7 @@ const PROVIDER_DEFAULTS = {
   gemini: { model: "gemini-embedding-2-preview", dims: 3072 },
   ollama: { model: "nomic-embed-text", dims: 768 },
   openai: { model: "text-embedding-3-small", dims: 1536 },
-  jina: { model: "jina-embeddings-v5-text-small", dims: 1024 },
+  jina: { model: "jina-embeddings-v2-base-en", dims: 768 },
 };
 
 async function getEmbeddingConfig() {
