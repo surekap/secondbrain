@@ -1846,6 +1846,69 @@ app.patch('/api/relationships/contacts/:id', async (req, res) => {
   }
 });
 
+// POST /api/relationships/contacts/:id/touches — metadata-only manual/call/in-person touch log
+app.post('/api/relationships/contacts/:id/touches', async (req, res) => {
+  if (!db) return res.status(503).json({ error: 'DB unavailable' });
+  const id = parseInt(req.params.id, 10);
+  if (isNaN(id)) return res.status(400).json({ error: 'Invalid id' });
+
+  const allowedSources = ['manual','whatsapp','whatsapp_call','ios_call','phone','in_person','email','limitless'];
+  const allowedDirections = ['inbound','outbound','missed','unknown'];
+  const source = String(req.body?.source || 'manual').trim();
+  const direction = String(req.body?.direction || 'unknown').trim();
+  const touchedAt = req.body?.touched_at ? new Date(req.body.touched_at) : new Date();
+  if (!allowedSources.includes(source)) return res.status(400).json({ error: 'Invalid source' });
+  if (!allowedDirections.includes(direction)) return res.status(400).json({ error: 'Invalid direction' });
+  if (Number.isNaN(touchedAt.getTime())) return res.status(400).json({ error: 'Invalid touched_at' });
+
+  const durationSeconds = req.body?.duration_seconds === undefined || req.body?.duration_seconds === null
+    ? null
+    : Number(req.body.duration_seconds);
+  if (durationSeconds !== null && (!Number.isFinite(durationSeconds) || durationSeconds < 0)) {
+    return res.status(400).json({ error: 'Invalid duration_seconds' });
+  }
+
+  const externalId = req.body?.external_id ? String(req.body.external_id) : `${source}:${id}:${touchedAt.toISOString()}`;
+  const note = req.body?.note ? String(req.body.note).slice(0, 1000) : null;
+  const metadata = req.body?.metadata && typeof req.body.metadata === 'object' && !Array.isArray(req.body.metadata)
+    ? req.body.metadata
+    : {};
+
+  try {
+    const { rows: contacts } = await db.query('SELECT id FROM relationships.contacts WHERE id = $1', [id]);
+    if (!contacts.length) return res.status(404).json({ error: 'Not found' });
+
+    const { rows } = await db.query(`
+      INSERT INTO relationships.contact_touches
+        (contact_id, source, direction, touched_at, duration_seconds, external_id, note, metadata)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb)
+      ON CONFLICT (source, external_id, contact_id) DO UPDATE SET
+        direction = EXCLUDED.direction,
+        touched_at = EXCLUDED.touched_at,
+        duration_seconds = EXCLUDED.duration_seconds,
+        note = EXCLUDED.note,
+        metadata = EXCLUDED.metadata
+      RETURNING *
+    `, [id, source, direction, touchedAt.toISOString(), durationSeconds, externalId, note, JSON.stringify(metadata)]);
+
+    const { rows: updated } = await db.query(`
+      UPDATE relationships.contacts
+      SET last_interaction_at = GREATEST(COALESCE(last_interaction_at, '-infinity'::timestamptz), $1::timestamptz),
+          next_suggested_touch_at = CASE
+            WHEN preferred_cadence_days IS NOT NULL THEN $1::timestamptz + (preferred_cadence_days || ' days')::interval
+            ELSE next_suggested_touch_at
+          END,
+          updated_at = NOW()
+      WHERE id = $2
+      RETURNING id, display_name, last_interaction_at, next_suggested_touch_at
+    `, [touchedAt.toISOString(), id]);
+
+    res.json({ ok: true, touch: rows[0], contact: updated[0] });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // POST /api/relationships/contacts/:id/reanalyze — re-run Claude analysis for one contact
 app.post('/api/relationships/contacts/:id/reanalyze', async (req, res) => {
   if (!db) return res.status(503).json({ error: 'DB unavailable' });
