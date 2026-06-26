@@ -63,8 +63,10 @@ app.post('/api/sync/historical', (req, res) => {
     const msgLimit = Math.max(100, Math.min(Number(req.body?.msgLimit || 10000), 50000));
     const chatDelayMs = Math.max(0, Math.min(Number(req.body?.chatDelayMs ?? 300), 10000));
     const downloadMedia = Boolean(req.body?.downloadMedia);
+    const chatOffset = Math.max(0, Number(req.body?.chatOffset || 0));
+    const chatBatchSize = req.body?.chatBatchSize ? Math.max(1, Math.min(Number(req.body.chatBatchSize), 5000)) : null;
     try {
-        const status = startHistoricalSync(client, process.env.CLIENT_ID, _runId, { days, msgLimit, chatDelayMs, downloadMedia });
+        const status = startHistoricalSync(client, process.env.CLIENT_ID, _runId, { days, msgLimit, chatDelayMs, downloadMedia, chatOffset, chatBatchSize });
         res.status(202).json({ ok: true, status });
     } catch (err) {
         if (err.code === 'SYNC_RUNNING') return res.status(409).json({ ok: false, error: err.message, status: getHistoricalSyncStatus() });

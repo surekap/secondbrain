@@ -35,6 +35,15 @@ test('historical sync reports getChats failures instead of silent zero-row succe
   assert.match(syncSource, /throw new Error\(message\)/)
 })
 
+test('manual historical sync supports resumable chat batches', () => {
+  assert.match(syncSource, /chatOffset = Math\.max\(0, Number\(options\.chatOffset \|\| 0\)\)/)
+  assert.match(syncSource, /chatBatchSize = options\.chatBatchSize/)
+  assert.match(syncSource, /syncable\.slice\(chatOffset, batchEnd\)/)
+  assert.match(syncSource, /totalAvailableChats/)
+  assert.match(appSource, /req\.body\?\.chatOffset/)
+  assert.match(appSource, /req\.body\?\.chatBatchSize/)
+})
+
 test('historical sync exposes status and rejects concurrent runs', () => {
   assert.match(syncSource, /const syncState = \{/)
   assert.match(syncSource, /historical sync already running/)
@@ -54,5 +63,5 @@ test('historical sync remains deduplicated by WhatsApp message id and does not r
 test('manual historical sync can disable media downloads to avoid a storm', () => {
   assert.match(syncSource, /downloadMedia = options\.downloadMedia !== false/)
   assert.match(appSource, /const downloadMedia = Boolean\(req\.body\?\.downloadMedia\)/)
-  assert.match(appSource, /\{ days, msgLimit, chatDelayMs, downloadMedia \}/)
+  assert.match(appSource, /\{ days, msgLimit, chatDelayMs, downloadMedia, chatOffset, chatBatchSize \}/)
 })

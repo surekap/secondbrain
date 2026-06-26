@@ -19,6 +19,9 @@ const syncState = {
     completedChats: 0,
     totalSaved: 0,
     totalSkipped: 0,
+    chatOffset: 0,
+    chatBatchSize: null,
+    totalAvailableChats: 0,
     errors: [],
 };
 
@@ -48,6 +51,9 @@ function startHistoricalSync(client, clientId, runId = null, options = {}) {
     syncState.completedChats = 0;
     syncState.totalSaved = 0;
     syncState.totalSkipped = 0;
+    syncState.chatOffset = Math.max(0, Number(options.chatOffset || 0));
+    syncState.chatBatchSize = options.chatBatchSize ? Math.max(1, Number(options.chatBatchSize)) : null;
+    syncState.totalAvailableChats = 0;
     syncState.errors = [];
 
     setImmediate(async () => {
@@ -69,6 +75,8 @@ async function _runSync(client, clientId, runId, options = {}) {
     const msgLimit = Math.max(100, Math.min(Number(options.msgLimit || DEFAULT_MSG_LIMIT), 50000));
     const chatDelayMs = Math.max(0, Math.min(Number(options.chatDelayMs ?? DEFAULT_CHAT_DELAY_MS), 10000));
     const downloadMedia = options.downloadMedia !== false;
+    const chatOffset = Math.max(0, Number(options.chatOffset || 0));
+    const chatBatchSize = options.chatBatchSize ? Math.max(1, Math.min(Number(options.chatBatchSize), 5000)) : null;
     const cutoff = new Date();
     cutoff.setDate(cutoff.getDate() - lookbackDays);
 
@@ -101,13 +109,18 @@ async function _runSync(client, clientId, runId, options = {}) {
         return true;
     });
     const skippedTypes = chats.length - syncable.length;
+    const batchEnd = chatBatchSize ? Math.min(syncable.length, chatOffset + chatBatchSize) : syncable.length;
+    const batch = syncable.slice(chatOffset, batchEnd);
 
-    console.log(`[sync] ${chats.length} chats found (${syncable.length} syncable, ${skippedTypes} skipped — broadcast/status/channels)`);
-    syncState.totalChats = syncable.length;
-    if (telemetry && runId) telemetry.progress(runId, 'chats_scanned', { completed: syncable.length, total: syncable.length });
+    console.log(`[sync] ${chats.length} chats found (${syncable.length} syncable, ${skippedTypes} skipped — broadcast/status/channels); processing ${batch.length} chats at offset ${chatOffset}${chatBatchSize ? `, batchSize ${chatBatchSize}` : ''}`);
+    syncState.totalAvailableChats = syncable.length;
+    syncState.totalChats = batch.length;
+    syncState.chatOffset = chatOffset;
+    syncState.chatBatchSize = chatBatchSize;
+    if (telemetry && runId) telemetry.progress(runId, 'chats_scanned', { completed: batch.length, total: batch.length });
 
     // Persist chat names for group name resolution
-    for (const chat of syncable) {
+    for (const chat of batch) {
         const name = chat.name || null;
         const chatId = chat.id._serialized;
         const isGroup = chat.isGroup || false;
@@ -124,7 +137,7 @@ async function _runSync(client, clientId, runId, options = {}) {
     let totalSaved = 0;
     let totalSkipped = 0;
 
-    for (const chat of syncable) {
+    for (const chat of batch) {
         const name = chat.name || chat.id._serialized;
         try {
             const { saved, skipped } = await _syncChat(chat, cutoff, clientId, { msgLimit, downloadMedia });
