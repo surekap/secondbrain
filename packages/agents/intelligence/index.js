@@ -843,11 +843,29 @@ async function runIntelligenceServices(pool, options = {}) {
       ORDER BY m.ts DESC
       LIMIT 20000
     `)
+    const relationshipDirectMessagesResult = await pool.query(`
+      SELECT
+        rc.contact_id,
+        rc.chat_id,
+        rc.occurred_at AS ts,
+        COALESCE(rc.content_snippet, rc.subject, '') AS body,
+        rc.id::text AS source_id,
+        (rc.direction = 'outbound') AS from_me
+      FROM relationships.communications rc
+      WHERE rc.source = 'whatsapp'
+        AND rc.is_group IS NOT TRUE
+        AND rc.contact_id IS NOT NULL
+        AND COALESCE(rc.content_snippet, rc.subject, '') <> ''
+        AND rc.occurred_at > NOW() - INTERVAL '180 days'
+      ORDER BY rc.occurred_at DESC
+      LIMIT 20000
+    `)
     log('info', 'Loaded cross-channel inputs', {
       projects: projectsResult.rows.length,
       groups: groupsResult.rows.length,
       group_messages: groupMessagesResult.rows.length,
       direct_messages: directMessagesResult.rows.length,
+      relationship_direct_messages: relationshipDirectMessagesResult.rows.length,
       contacts: contactsResult.rows.length,
     })
     const crossChannel = detectCrossChannelProjectSignals({
@@ -896,7 +914,7 @@ async function runIntelligenceServices(pool, options = {}) {
     log('info', 'Cross-channel project promotion complete', { count: crossChannelCount })
 
     log('info', 'Detecting direct relationship open loops')
-    const relationshipOpenLoops = detectRelationshipOpenLoops({ contacts: contactsResult.rows, directMessages: directMessagesResult.rows })
+    const relationshipOpenLoops = detectRelationshipOpenLoops({ contacts: contactsResult.rows, directMessages: relationshipDirectMessagesResult.rows })
     log('info', 'Detected relationship open loop candidates', { count: relationshipOpenLoops.length })
     const activeOpenLoopRefs = new Set(relationshipOpenLoops.map(candidate => candidate.source_ref).filter(Boolean))
     const existingOpenLoops = await pool.query(`

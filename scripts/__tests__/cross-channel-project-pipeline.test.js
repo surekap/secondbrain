@@ -24,6 +24,8 @@ test('intelligence pipeline promotes cross-channel project opportunities', () =>
 
 test('intelligence pipeline promotes direct relationship open loops', () => {
   assert.match(indexSource, /detectRelationshipOpenLoops/)
+  assert.match(indexSource, /relationships\.communications rc/)
+  assert.match(indexSource, /relationshipDirectMessagesResult\.rows/)
   assert.match(indexSource, /relationship_open_loop_opportunities/)
   assert.match(indexSource, /source_ref LIKE 'relationship_open_loop:%'/)
   assert.match(indexSource, /Auto-dismissed: direct relationship open-loop detector no longer validates/)
