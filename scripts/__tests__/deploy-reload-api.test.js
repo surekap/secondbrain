@@ -1,0 +1,30 @@
+#!/usr/bin/env node
+'use strict'
+
+const test = require('node:test')
+const assert = require('node:assert/strict')
+const fs = require('node:fs')
+const path = require('node:path')
+
+const serverSource = fs.readFileSync(path.join(__dirname, '../../packages/ui/server.js'), 'utf8')
+const deployScript = fs.readFileSync(path.join(__dirname, '../../scripts/deploy-pull-reload.sh'), 'utf8')
+
+test('server exposes guarded deploy reload API', () => {
+  assert.match(serverSource, /app\.get\('\/api\/system\/deploy\/status'/)
+  assert.match(serverSource, /app\.post\('\/api\/system\/deploy\/reload'/)
+  assert.match(serverSource, /confirm.*pull-and-reload/s)
+  assert.match(serverSource, /SECOND_BRAIN_DEPLOY_TOKEN/)
+  assert.match(serverSource, /deployAlreadyRunning\(\)/)
+  assert.match(serverSource, /spawn\('\/usr\/bin\/env', \['bash', DEPLOY_SCRIPT\]/)
+})
+
+test('deploy reload script is fast-forward only and restarts UI listeners', () => {
+  assert.match(deployScript, /git fetch origin "\$BRANCH"/)
+  assert.match(deployScript, /git pull --ff-only origin "\$BRANCH"/)
+  assert.match(deployScript, /git status --porcelain/)
+  assert.match(deployScript, /npm run build --workspace=packages\/ui/)
+  assert.match(deployScript, /lsof -ti tcp:4000/)
+  assert.match(deployScript, /lsof -ti tcp:4001/)
+  assert.match(deployScript, /nohup npm run ui/)
+  assert.match(deployScript, /api\/intelligence\/refresh\/status/)
+})

@@ -89,6 +89,25 @@ function finishIntelligenceRefreshRun(run, status, result = null, error = null) 
   if (intelligenceRefreshState.current?.id === run.id) intelligenceRefreshState.current = null;
 }
 
+const DEPLOY_STATUS_FILE = path.resolve(LOGS_DIR, 'deploy-reload-status.json');
+const DEPLOY_SCRIPT = path.resolve(__dirname, '../../scripts/deploy-pull-reload.sh');
+
+function readDeployStatus() {
+  try {
+    if (!fs.existsSync(DEPLOY_STATUS_FILE)) {
+      return { status: 'idle', message: 'No deploy/reload has run yet' };
+    }
+    return JSON.parse(fs.readFileSync(DEPLOY_STATUS_FILE, 'utf8'));
+  } catch (error) {
+    return { status: 'unknown', error: error.message };
+  }
+}
+
+function deployAlreadyRunning() {
+  const status = readDeployStatus();
+  return status?.status === 'running';
+}
+
 // ── Schema + Config Migration ──────────────────────────────────────────────────
 
 async function runSystemSchema() {
@@ -860,6 +879,55 @@ app.get('/api/config', (req, res) => {
     GEMINI_EXPORT_PATH:           env.GEMINI_EXPORT_PATH           || '',
     AI_WATCH_INTERVAL_MINUTES:    env.AI_WATCH_INTERVAL_MINUTES    || '',
   });
+});
+
+// GET /api/system/deploy/status — inspect last git-pull/reload request
+app.get('/api/system/deploy/status', (req, res) => {
+  res.json(readDeployStatus());
+});
+
+// POST /api/system/deploy/reload — fast-forward pull, build, restart UI/API.
+// Guardrails: explicit confirmation, no concurrent deploys, detached script handles
+// git cleanliness/ff-only/build/port restart. Optional env SECOND_BRAIN_DEPLOY_TOKEN
+// can require x-deploy-token or body.deploy_token.
+app.post('/api/system/deploy/reload', (req, res) => {
+  try {
+    const confirmation = req.body?.confirm;
+    if (confirmation !== 'pull-and-reload') {
+      return res.status(400).json({ error: 'confirm must equal pull-and-reload' });
+    }
+    const expectedToken = process.env.SECOND_BRAIN_DEPLOY_TOKEN || '';
+    const suppliedToken = req.get('x-deploy-token') || req.body?.deploy_token || '';
+    if (expectedToken && suppliedToken !== expectedToken) {
+      return res.status(403).json({ error: 'Invalid deploy token' });
+    }
+    if (deployAlreadyRunning()) {
+      return res.status(409).json({ error: 'Deploy/reload already running', status: readDeployStatus() });
+    }
+    if (!fs.existsSync(DEPLOY_SCRIPT)) {
+      return res.status(500).json({ error: `Deploy script missing: ${DEPLOY_SCRIPT}` });
+    }
+    fs.chmodSync(DEPLOY_SCRIPT, 0o755);
+    const child = spawn('/usr/bin/env', ['bash', DEPLOY_SCRIPT], {
+      cwd: path.resolve(__dirname, '../..'),
+      detached: true,
+      stdio: 'ignore',
+      env: {
+        ...process.env,
+        SECOND_BRAIN_DEPLOY_BRANCH: String(req.body?.branch || 'main'),
+        SECOND_BRAIN_DEPLOY_BUILD: req.body?.build === false ? '0' : '1',
+      },
+    });
+    child.unref();
+    res.status(202).json({
+      status: 'queued',
+      pid: child.pid,
+      status_url: '/api/system/deploy/status',
+      message: 'Deploy/reload queued. API may disconnect briefly during restart.',
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
 });
 
 // GET /api/system/config  — read keys from system.config (secrets redacted)
