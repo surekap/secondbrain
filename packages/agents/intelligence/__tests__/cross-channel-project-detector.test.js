@@ -44,3 +44,21 @@ test('does not promote group-only project chatter without direct actionable memb
   })
   assert.equal(opportunities.length, 0)
 })
+
+test('does not promote self-contact or generic project buckets as cross-channel work', () => {
+  const base = {
+    groups: [{ id: 95, wa_chat_id: '120@g.us', name: 'YPO Travel & Dining II', ai_summary: 'Travel dining meeting coordination' }],
+    groupMessages: [{ chat_id: '120@g.us', participant: '919999999999@c.us', body: 'Please coordinate meeting and dining plan' }],
+    directMessages: [{ contact_id: 284, chat_id: '919999999999@c.us', body: 'Please send details and meet tonight for coordination planning' }],
+  }
+  assert.equal(detectCrossChannelProjectSignals({
+    ...base,
+    projects: [{ id: 66, name: 'Company Meetings and Coordination', description: 'Company meetings and coordination' }],
+    contacts: [{ id: 284, display_name: 'Prateek Sureka', wa_jids: ['919999999999@c.us'] }],
+  }).length, 0)
+  assert.equal(detectCrossChannelProjectSignals({
+    ...base,
+    projects: [{ id: 67, name: 'Specific Travel Program', description: 'Travel dining itinerary program' }],
+    contacts: [{ id: 284, display_name: 'Prateek Sureka', wa_jids: ['919999999999@c.us'] }],
+  }).length, 0)
+})

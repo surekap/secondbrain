@@ -835,6 +835,28 @@ async function runIntelligenceServices(pool, options = {}) {
       contacts: contactsResult.rows,
     })
     log('info', 'Detected cross-channel project candidates', { count: crossChannel.length })
+    const activeCrossChannelRefs = new Set(crossChannel.map(candidate => candidate.source_ref).filter(Boolean))
+    const existingCrossChannel = await pool.query(`
+      SELECT source_ref
+      FROM intelligence.opportunities
+      WHERE status = 'open'
+        AND source_system = 'signals'
+        AND source_ref LIKE 'cross_channel_project:%'
+    `)
+    const staleCrossChannelRefs = existingCrossChannel.rows
+      .map(row => row.source_ref)
+      .filter(ref => !activeCrossChannelRefs.has(ref))
+    if (staleCrossChannelRefs.length) {
+      await pool.query(`
+        UPDATE intelligence.opportunities
+        SET status = 'dismissed',
+            feedback = COALESCE(feedback, 'false_positive'),
+            feedback_note = COALESCE(feedback_note, 'Auto-dismissed: cross-channel detector no longer validates this group/direct/project match'),
+            dismissed_at = COALESCE(dismissed_at, NOW()),
+            updated_at = NOW()
+        WHERE source_ref = ANY($1::text[])
+      `, [staleCrossChannelRefs])
+    }
     let crossChannelCount = 0
     for (const candidate of crossChannel) {
       try {

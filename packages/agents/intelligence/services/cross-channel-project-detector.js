@@ -6,6 +6,18 @@ const ACTION_PATTERNS = [
   /\b(waiting|awaiting|not closed|open item|next step|owner|deadline)\b/i,
 ]
 
+const SELF_PATTERNS = [
+  /\bprateek\s+sureka\b/i,
+  /\bsureka\s+prateek\b/i,
+]
+
+const GENERIC_PROJECT_NAMES = [
+  /\bcompany meetings?\b/i,
+  /\bcoordination\b/i,
+  /\bdealer sales planning\b/i,
+  /\bmarket analysis\b/i,
+]
+
 const STOPWORDS = new Set([
   'the','and','for','with','from','this','that','there','their','your','you','are','was','were','have','has','had',
   'project','group','whatsapp','meeting','call','team','update','please','thanks','thank','about','into','will','can',
@@ -33,6 +45,23 @@ function overlapScore(left, right) {
   let shared = 0
   for (const t of a) if (b.has(t)) shared++
   return shared / Math.min(a.size, b.size)
+}
+
+function sharedTerms(left, right) {
+  const a = new Set(tokens(left))
+  const b = new Set(tokens(right))
+  return Array.from(a).filter(t => b.has(t))
+}
+
+function isSelfContact(contact) {
+  const haystack = [contact?.display_name, contact?.name, contact?.email, Array.isArray(contact?.emails) ? contact.emails.join(' ') : '']
+    .filter(Boolean).join(' ')
+  return SELF_PATTERNS.some(pattern => pattern.test(haystack))
+}
+
+function isGenericProject(project) {
+  const name = String(project?.name || '')
+  return GENERIC_PROJECT_NAMES.some(pattern => pattern.test(name))
 }
 
 function projectText(project) {
@@ -90,8 +119,9 @@ function detectCrossChannelProjectSignals(input = {}) {
   const groupMessages = input.groupMessages || []
   const directMessages = input.directMessages || []
   const contacts = input.contacts || []
-  const minProjectGroupScore = input.minProjectGroupScore ?? 0.18
-  const minProjectDmScore = input.minProjectDmScore ?? 0.14
+  const minProjectGroupScore = input.minProjectGroupScore ?? 0.28
+  const minProjectDmScore = input.minProjectDmScore ?? 0.22
+  const minSharedProjectDmTerms = input.minSharedProjectDmTerms ?? 2
   const out = []
   const participantContactMap = buildParticipantContactMap(contacts)
 
@@ -112,6 +142,7 @@ function detectCrossChannelProjectSignals(input = {}) {
   }
 
   for (const project of projects) {
+    if (isGenericProject(project)) continue
     const pText = projectText(project)
     if (!pText) continue
     for (const group of groups) {
@@ -129,10 +160,14 @@ function detectCrossChannelProjectSignals(input = {}) {
       }
 
       for (const contact of participants.values()) {
+        if (isSelfContact(contact)) continue
         const dms = directByContact.get(String(contact.id)) || []
         const relevantDms = dms
-          .map(dm => ({ dm, text: messageText(dm), score: overlapScore(pText, messageText(dm)) }))
-          .filter(x => x.score >= minProjectDmScore && isActionable(x.text))
+          .map(dm => {
+            const text = messageText(dm)
+            return { dm, text, score: overlapScore(pText, text), shared_terms: sharedTerms(pText, text) }
+          })
+          .filter(x => x.score >= minProjectDmScore && x.shared_terms.length >= minSharedProjectDmTerms && isActionable(x.text))
           .sort((a, b) => b.score - a.score)
           .slice(0, 5)
         if (!relevantDms.length) continue
@@ -168,6 +203,7 @@ function detectCrossChannelProjectSignals(input = {}) {
             wa_chat_id: group.wa_chat_id || group.chat_id || null,
             project_group_score: pgScore,
             top_direct_score: relevantDms[0].score,
+            shared_project_dm_terms: relevantDms[0].shared_terms,
           },
           evidence: [
             {
