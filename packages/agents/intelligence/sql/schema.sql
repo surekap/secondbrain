@@ -357,8 +357,10 @@ WITH scored_inputs AS (
       + CASE WHEN confidence >= 0.80 THEN 5 WHEN confidence <= 0.40 THEN -8 ELSE 0 END
       + CASE WHEN evidence_count >= 3 THEN 4 WHEN evidence_count = 2 THEN 1 ELSE 0 END
       - CASE WHEN LOWER(title) LIKE 're-engage %' THEN 25 ELSE 0 END
-      - CASE WHEN evidence_count = 0 THEN 45 WHEN evidence_count = 1 THEN 60 ELSE 0 END
-      - CASE WHEN evidence_count = 1 AND scoring_source_at < NOW() - INTERVAL '14 days' THEN 15 ELSE 0 END
+      - CASE WHEN attention_text LIKE '%unresolved direct-chat loop%' THEN 0
+             WHEN evidence_count = 0 THEN 45 WHEN evidence_count = 1 THEN 60 ELSE 0 END
+      - CASE WHEN attention_text LIKE '%unresolved direct-chat loop%' THEN 0
+             WHEN evidence_count = 1 AND scoring_source_at < NOW() - INTERVAL '14 days' THEN 15 ELSE 0 END
       - CASE WHEN opportunity_type = 'group_opportunity' AND evidence_count < 2 THEN 26 ELSE 0 END
       - CASE WHEN opportunity_type = 'group_opportunity' AND primary_contact_id IS NULL AND primary_project_id IS NULL THEN 18 ELSE 0 END
       - CASE WHEN NULLIF(TRIM(COALESCE(recommended_next_action, '')), '') IS NULL THEN 8 ELSE 0 END
@@ -391,7 +393,12 @@ WITH scored_inputs AS (
                AND attention_text NOT LIKE '%distribution%'
              THEN 35 ELSE 0 END
       - CASE WHEN opportunity_type = 'meeting_action' AND evidence_count < 2 THEN 10 ELSE 0 END
-      - CASE WHEN scoring_source_at < NOW() - INTERVAL '90 days' THEN 40
+      - CASE WHEN attention_text LIKE '%unresolved direct-chat loop%' THEN
+                 CASE WHEN scoring_source_at < NOW() - INTERVAL '90 days' THEN 25
+                      WHEN scoring_source_at < NOW() - INTERVAL '30 days' THEN 12
+                      WHEN scoring_source_at < NOW() - INTERVAL '14 days' THEN 4
+                      ELSE 0 END
+             WHEN scoring_source_at < NOW() - INTERVAL '90 days' THEN 40
              WHEN scoring_source_at < NOW() - INTERVAL '30 days' THEN 25
              WHEN scoring_source_at < NOW() - INTERVAL '14 days' THEN 8
              ELSE 0 END

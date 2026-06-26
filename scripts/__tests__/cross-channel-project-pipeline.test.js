@@ -19,7 +19,8 @@ test('intelligence pipeline promotes cross-channel project opportunities', () =>
   assert.match(indexSource, /source_table IN \('opportunities', 'intelligence\.opportunities'\)/)
   assert.doesNotMatch(indexSource, /extractSignals\(opportunitiesResult\.rows, 'opportunities'\)/)
   const detectorSource = fs.readFileSync(path.join(__dirname, '../../packages/agents/intelligence/services/cross-channel-project-detector.js'), 'utf8')
-  assert.match(detectorSource, /source_ref: `cross_channel_project:/)
+  assert.match(detectorSource, /sourcePrefix = useGroupDerivedProject \? 'cross_channel_group_project' : 'cross_channel_project'/)
+  assert.match(detectorSource, /source_ref: `\$\{sourcePrefix\}:/)
 })
 
 test('intelligence pipeline promotes direct relationship open loops', () => {

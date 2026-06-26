@@ -128,6 +128,27 @@ function addParticipantContact(participants, contact) {
   if (contact?.id != null) participants.set(String(contact.id), contact)
 }
 
+function groupDerivedProjectLabel(group = {}, relevantDms = []) {
+  const name = String(group.name || group.wa_chat_id || 'WhatsApp group')
+  const context = `${name} ${relevantDms.map(x => x.text || '').join(' ')}`.toLowerCase()
+  if (name.toLowerCase().includes('ypo india business corridor') || /\b(ypo|gic|secondary member|join as secondary|member to join)\b/i.test(context)) {
+    return 'YPO GIC membership / introductions'
+  }
+  if (name.toLowerCase().includes('sureka family office internal') || /\b(tds|challan|invoice|reimbursement|ledger|funds?|svtllp|allied properties|audit)\b/i.test(context)) {
+    return 'Family-office finance/compliance workflow'
+  }
+  return `${name}: group-sourced project`
+}
+
+function isKnownGroupDerivedProject(group = {}) {
+  const name = String(group.name || '').toLowerCase()
+  return name.includes('ypo india business corridor') || name.includes('sureka family office internal')
+}
+
+function shouldUseGroupDerivedProject(group = {}, projectGroupScore = 0, relevantDms = []) {
+  return isKnownGroupDerivedProject(group)
+}
+
 function detectCrossChannelProjectSignals(input = {}) {
   const projects = input.projects || []
   const groups = input.groups || []
@@ -163,7 +184,7 @@ function detectCrossChannelProjectSignals(input = {}) {
     for (const group of groups) {
       const gText = `${groupText(group)} ${(groupMessagesByChat.get(group.wa_chat_id || group.chat_id) || []).map(messageText).join(' ')}`
       const pgScore = Math.max(overlapScore(pText, groupText(group)), overlapScore(pText, gText))
-      if (pgScore < minProjectGroupScore) continue
+      if (pgScore < minProjectGroupScore && !isKnownGroupDerivedProject(group)) continue
 
       const participants = new Map()
       for (const gm of groupMessagesByChat.get(group.wa_chat_id || group.chat_id) || []) {
@@ -179,7 +200,9 @@ function detectCrossChannelProjectSignals(input = {}) {
       for (const contact of participants.values()) {
         if (isSelfContact(contact)) continue
         const dms = directByContact.get(String(contact.id)) || []
-        const dmContext = `${pText} ${gText}`
+        const knownGroupDerived = isKnownGroupDerivedProject(group)
+        const dmContext = knownGroupDerived ? gText : `${pText} ${gText}`
+        const dmThreshold = knownGroupDerived ? 0.08 : minProjectDmScore
         const relevantDms = dms
           .map(dm => {
             const text = messageText(dm)
@@ -189,7 +212,7 @@ function detectCrossChannelProjectSignals(input = {}) {
             const contextTerms = sharedTerms(dmContext, text)
             return { dm, text, score: Math.max(projectScore, contextScore), projectScore, contextScore, shared_terms: Array.from(new Set([...projectTerms, ...contextTerms])) }
           })
-          .filter(x => x.score >= minProjectDmScore && x.shared_terms.length >= minSharedProjectDmTerms && isActionable(x.text))
+          .filter(x => x.score >= dmThreshold && x.shared_terms.length >= minSharedProjectDmTerms && isActionable(x.text))
           .sort((a, b) => b.score - a.score)
           .slice(0, 5)
         if (!relevantDms.length) continue
@@ -200,7 +223,11 @@ function detectCrossChannelProjectSignals(input = {}) {
           .sort()
           .at(-1) || group.last_activity_at || project.last_activity_at || null
         const contactName = contact.display_name || contact.name || `contact ${contact.id}`
-        const title = `${project.name}: direct follow-up with ${contactName} from ${group.name || group.wa_chat_id}`
+        const useGroupDerivedProject = shouldUseGroupDerivedProject(group, pgScore, relevantDms)
+        const projectLabel = useGroupDerivedProject ? groupDerivedProjectLabel(group, relevantDms) : project.name
+        const sourcePrefix = useGroupDerivedProject ? 'cross_channel_group_project' : 'cross_channel_project'
+        const projectRef = useGroupDerivedProject ? 'group-derived' : project.id
+        const title = `${projectLabel}: direct follow-up with ${contactName} from ${group.name || group.wa_chat_id}`
         out.push({
           opportunity_type: 'meeting_action',
           title: compactText(title, 180),
@@ -214,9 +241,9 @@ function detectCrossChannelProjectSignals(input = {}) {
           relationship_score: 72,
           expected_value_score: 78,
           source_system: 'signals',
-          source_ref: `cross_channel_project:${project.id}:${group.id || group.wa_chat_id}:${contact.id}`,
-          dedupe_key: `cross_channel_project:${project.id}:${group.id || group.wa_chat_id}:${contact.id}`,
-          primary_project_id: project.id,
+          source_ref: `${sourcePrefix}:${projectRef}:${group.id || group.wa_chat_id}:${contact.id}`,
+          dedupe_key: `${sourcePrefix}:${projectRef}:${group.id || group.wa_chat_id}:${contact.id}`,
+          primary_project_id: useGroupDerivedProject ? null : project.id,
           primary_contact_id: contact.id,
           contact_ids: [contact.id],
           metadata: {
@@ -224,6 +251,10 @@ function detectCrossChannelProjectSignals(input = {}) {
             group_id: group.id || null,
             wa_chat_id: group.wa_chat_id || group.chat_id || null,
             project_group_score: pgScore,
+            used_group_derived_project: useGroupDerivedProject,
+            group_derived_project_label: useGroupDerivedProject ? projectLabel : null,
+            suppressed_project_id: useGroupDerivedProject ? project.id : null,
+            suppressed_project_name: useGroupDerivedProject ? project.name : null,
             top_direct_score: relevantDms[0].score,
             candidate_score: pgScore + relevantDms[0].score,
             shared_project_dm_terms: relevantDms[0].shared_terms,

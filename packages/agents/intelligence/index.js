@@ -881,7 +881,7 @@ async function runIntelligenceServices(pool, options = {}) {
       FROM intelligence.opportunities
       WHERE status = 'open'
         AND source_system = 'signals'
-        AND source_ref LIKE 'cross_channel_project:%'
+        AND (source_ref LIKE 'cross_channel_project:%' OR source_ref LIKE 'cross_channel_group_project:%')
     `)
     const staleCrossChannelRefs = existingCrossChannel.rows
       .map(row => row.source_ref)
