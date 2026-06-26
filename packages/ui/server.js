@@ -1806,11 +1806,26 @@ app.get('/api/intelligence/attention', async (req, res) => {
   try {
     const limit = parsePositiveIntQuery(req.query.limit, 10, 50);
     if (limit === null) return res.status(400).json({ error: 'Invalid limit' });
+    const params = [];
+    const q = String(req.query.q || '').trim();
+    let where = '';
+    if (q) {
+      params.push(`%${q.toLowerCase()}%`);
+      where = `WHERE (
+        LOWER(title) LIKE $${params.length}
+        OR LOWER(COALESCE(description, '')) LIKE $${params.length}
+        OR LOWER(COALESCE(recommended_next_action, '')) LIKE $${params.length}
+        OR LOWER(COALESCE(primary_contact_name, '')) LIKE $${params.length}
+        OR LOWER(COALESCE(primary_project_name, '')) LIKE $${params.length}
+      )`;
+    }
+    params.push(limit);
     const { rows } = await db.query(`
       SELECT *
       FROM intelligence.attention_queue
-      LIMIT $1
-    `, [limit]);
+      ${where}
+      LIMIT $${params.length}
+    `, params);
     res.json(rows);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
