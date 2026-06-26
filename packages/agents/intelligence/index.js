@@ -852,8 +852,7 @@ async function runIntelligenceServices(pool, options = {}) {
         rc.id::text AS source_id,
         (rc.direction = 'outbound') AS from_me
       FROM relationships.communications rc
-      WHERE rc.source = 'whatsapp'
-        AND rc.is_group IS NOT TRUE
+      WHERE rc.is_group IS NOT TRUE
         AND rc.contact_id IS NOT NULL
         AND COALESCE(rc.content_snippet, rc.subject, '') <> ''
         AND rc.occurred_at > NOW() - INTERVAL '180 days'
