@@ -16,11 +16,27 @@ json_escape() {
 
 write_status() {
   local status="$1" step="$2" message="$3"
+  local extra_json="${4:-{}}"
   local escaped_message
   escaped_message=$(printf '%s' "$message" | json_escape)
-  cat > "$STATUS_FILE.tmp" <<JSON
-{"status":"$status","step":"$step","message":$escaped_message,"branch":"$BRANCH","updated_at":"$(date -u +%Y-%m-%dT%H:%M:%SZ)","log_file":"$LOG_FILE"}
-JSON
+  python3 - "$STATUS_FILE.tmp" "$status" "$step" "$escaped_message" "$BRANCH" "$LOG_FILE" "$extra_json" <<'PY'
+import json, sys, datetime
+path, status, step, escaped_message, branch, log_file, extra = sys.argv[1:]
+obj = {
+  'status': status,
+  'step': step,
+  'message': json.loads(escaped_message),
+  'branch': branch,
+  'updated_at': datetime.datetime.utcnow().replace(microsecond=0).isoformat() + 'Z',
+  'log_file': log_file,
+}
+try:
+  obj.update(json.loads(extra or '{}'))
+except Exception as exc:
+  obj['status_extra_error'] = str(exc)
+with open(path, 'w') as f:
+  json.dump(obj, f)
+PY
   mv "$STATUS_FILE.tmp" "$STATUS_FILE"
 }
 
@@ -49,9 +65,11 @@ if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   exit 1
 fi
 
-if [ -n "$(git status --porcelain)" ]; then
-  git status --short | tee -a "$LOG_FILE"
-  write_status "failed" "preflight" "Working tree is dirty; refusing to pull/reload"
+DIRTY_STATUS="$(git status --porcelain)"
+if [ -n "$DIRTY_STATUS" ]; then
+  printf '%s\n' "$DIRTY_STATUS" | tee -a "$LOG_FILE"
+  DIRTY_JSON=$(printf '%s\n' "$DIRTY_STATUS" | python3 -c 'import json,sys; print(json.dumps([line for line in sys.stdin.read().splitlines() if line.strip()]))')
+  write_status "failed" "preflight" "Working tree is dirty; refusing to pull/reload" "{\"dirty_files\":$DIRTY_JSON}"
   exit 1
 fi
 
