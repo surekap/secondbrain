@@ -85,8 +85,10 @@ async function _runSync(client, clientId, runId, options = {}) {
         }
     }
     if (!chats) {
-        console.error('[sync] could not load chats after 3 attempts, aborting');
-        return;
+        const message = 'could not load chats after 3 attempts, aborting';
+        console.error(`[sync] ${message}`);
+        syncState.errors.push({ chat: null, error: message, ts: new Date().toISOString() });
+        throw new Error(message);
     }
 
     // Filter out chat types that don't support fetchMessages:

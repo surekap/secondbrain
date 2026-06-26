@@ -144,7 +144,11 @@ client.on(Events.READY, async () => {
     console.log('[wa] ready');
     setWaState('CONNECTED');
     if (telemetry) _runId = await telemetry.startRun({ agentId: 'whatsapp', workflowName: 'message_bridge' });
-    startHistoricalSync(client, process.env.CLIENT_ID, _runId);
+    if (process.env.WHATSAPP_AUTO_SYNC_ON_READY === '1') {
+        startHistoricalSync(client, process.env.CLIENT_ID, _runId);
+    } else {
+        console.log('[sync] startup historical sync skipped; use POST /api/sync/historical for manual backfills');
+    }
 });
 client.on(Events.DISCONNECTED, async (reason) => {
     console.log('[wa] disconnected:', reason);

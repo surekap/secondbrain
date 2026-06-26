@@ -23,6 +23,18 @@ test('historical sync falls back when WhatsApp Web loadEarlierMsgs path is broke
   assert.match(syncSource, /window\.WWebJS\.getMessageModel\(m\)/)
 })
 
+test('startup historical sync is disabled by default so manual 90 day backfill can run on a fresh bridge', () => {
+  assert.match(appSource, /WHATSAPP_AUTO_SYNC_ON_READY === '1'/)
+  assert.match(appSource, /startup historical sync skipped/)
+  assert.doesNotMatch(appSource, /setWaState\('CONNECTED'\);\n\s*if \(telemetry\).*\n\s*startHistoricalSync\(client, process\.env\.CLIENT_ID, _runId\);/)
+})
+
+test('historical sync reports getChats failures instead of silent zero-row success', () => {
+  assert.match(syncSource, /could not load chats after 3 attempts, aborting/)
+  assert.match(syncSource, /syncState\.errors\.push\(\{ chat: null, error: message/)
+  assert.match(syncSource, /throw new Error\(message\)/)
+})
+
 test('historical sync exposes status and rejects concurrent runs', () => {
   assert.match(syncSource, /const syncState = \{/)
   assert.match(syncSource, /historical sync already running/)
