@@ -12,6 +12,8 @@ const { recommendContactTiers } = require('./services/contact-tierer')
 const { extractAliases, normalized: normalizeAlias } = require('./services/alias-extractor')
 const { canonicalizeEntityId, canonicalizeEntityIds } = require('./services/canonical-ids')
 const { detectStaleEmailThreads } = require('./services/stale-email-thread-detector')
+const { detectCrossChannelProjectSignals } = require('./services/cross-channel-project-detector')
+const { extractRelationshipFactsFromText, inferContactMention } = require('../relationships/services/fact-extractor')
 
 let schemaReady = false
 
@@ -602,6 +604,46 @@ async function upsertFromGroupOpportunity(groupId, group, opportunity, index = 0
   }
 }
 
+async function upsertContactFact(pool, fact) {
+  if (!fact?.contact_id || !fact?.fact_type || !fact?.fact) return null
+  const contactId = await canonicalizeEntityId(pool, 'contact', fact.contact_id)
+  if (!contactId) return null
+  const params = [
+    Number(contactId),
+    fact.fact_type,
+    fact.fact,
+    fact.source || 'import',
+    fact.source_ref || null,
+    fact.confidence ?? 0.7,
+    fact.sentiment || 'neutral',
+    fact.occurred_at || null,
+    JSON.stringify(fact.metadata || {}),
+  ]
+  const updated = await pool.query(`
+    UPDATE relationships.contact_facts
+    SET source = $4,
+        confidence = GREATEST(COALESCE(confidence, 0), COALESCE($6, confidence)),
+        sentiment = COALESCE($7, sentiment),
+        occurred_at = COALESCE($8, occurred_at),
+        last_seen_at = NOW(),
+        metadata = metadata || $9::jsonb,
+        updated_at = NOW()
+    WHERE contact_id = $1
+      AND fact_type = $2
+      AND fact = $3
+      AND COALESCE(source_ref, '') = COALESCE($5, '')
+    RETURNING id
+  `, params)
+  if (updated.rows[0]?.id) return updated.rows[0].id
+  const inserted = await pool.query(`
+    INSERT INTO relationships.contact_facts (
+      contact_id, fact_type, fact, source, source_ref, confidence, sentiment, occurred_at, metadata
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb)
+    RETURNING id
+  `, params)
+  return inserted.rows[0]?.id || null
+}
+
 async function upsertFromStaleEmailThread(thread) {
   if (!thread?.latest_action_email_id) return null
   const contactId = await resolveContactFromEmail(db, thread.latest_action_email_id)
@@ -659,6 +701,8 @@ async function runIntelligenceServices(pool, options = {}) {
     contacts_with_next_touch: 0,
     dormancy_opportunities: 0,
     stale_email_threads_promoted: 0,
+    cross_channel_project_opportunities: 0,
+    relationship_facts_extracted: 0,
   }
   log('info', 'Starting intelligence pipeline')
 
@@ -732,6 +776,130 @@ async function runIntelligenceServices(pool, options = {}) {
     }
     stats.stale_email_threads_promoted = staleThreadCount
     log('info', 'Stale email thread promotion complete', { count: staleThreadCount })
+
+    log('info', 'Detecting cross-channel project signals')
+    const projectsResult = await pool.query(`
+      SELECT *
+      FROM projects.projects
+      WHERE NOT is_archived
+        AND status IN ('active','stalled','on_hold','unknown')
+      ORDER BY COALESCE(last_activity_at, updated_at, created_at) DESC NULLS LAST
+      LIMIT 300
+    `)
+    const groupMessagesResult = await pool.query(`
+      SELECT
+        m.chat_id,
+        m.ts,
+        COALESCE(m.data->'id'->>'participant', m.data->>'author', m.data->'_data'->>'author') AS participant,
+        COALESCE(m.data->>'body', '') AS body,
+        COALESCE(m.data->'id'->>'_serialized', m.chat_id || ':' || EXTRACT(EPOCH FROM m.ts)::bigint::text) AS source_id
+      FROM public.messages m
+      WHERE m.chat_id LIKE '%@g.us'
+        AND m.event IN ('message','message_create','message_historical')
+        AND m.data->>'body' IS NOT NULL
+        AND m.ts > NOW() - INTERVAL '90 days'
+      ORDER BY m.ts DESC
+      LIMIT 12000
+    `)
+    const directMessagesResult = await pool.query(`
+      SELECT
+        c.id AS contact_id,
+        c.display_name,
+        m.chat_id,
+        m.ts,
+        COALESCE(m.data->>'body', '') AS body,
+        COALESCE(m.data->'id'->>'_serialized', m.chat_id || ':' || EXTRACT(EPOCH FROM m.ts)::bigint::text) AS source_id,
+        (m.data->'id'->>'fromMe')::boolean AS from_me
+      FROM public.messages m
+      JOIN relationships.contacts c ON c.wa_jids @> ARRAY[m.chat_id]::text[]
+      WHERE m.chat_id LIKE '%@c.us'
+        AND m.event IN ('message','message_create','message_historical')
+        AND m.data->>'body' IS NOT NULL
+        AND m.ts > NOW() - INTERVAL '90 days'
+        AND c.is_noise IS NOT TRUE
+      ORDER BY m.ts DESC
+      LIMIT 12000
+    `)
+    log('info', 'Loaded cross-channel inputs', {
+      projects: projectsResult.rows.length,
+      groups: groupsResult.rows.length,
+      group_messages: groupMessagesResult.rows.length,
+      direct_messages: directMessagesResult.rows.length,
+      contacts: contactsResult.rows.length,
+    })
+    const crossChannel = detectCrossChannelProjectSignals({
+      projects: projectsResult.rows,
+      groups: groupsResult.rows,
+      groupMessages: groupMessagesResult.rows,
+      directMessages: directMessagesResult.rows,
+      contacts: contactsResult.rows,
+    })
+    log('info', 'Detected cross-channel project candidates', { count: crossChannel.length })
+    let crossChannelCount = 0
+    for (const candidate of crossChannel) {
+      try {
+        const opportunityId = await upsertOpportunity(candidate)
+        await linkProject(opportunityId, candidate.primary_project_id, 'primary')
+        await linkContacts(opportunityId, candidate.contact_ids || [], candidate.primary_contact_id)
+        for (const evidence of candidate.evidence || []) await addEvidence(opportunityId, evidence)
+        crossChannelCount++
+      } catch (error) {
+        log('error', 'Failed to promote cross-channel project signal', { source_ref: candidate.source_ref, error: error.message })
+      }
+    }
+    stats.cross_channel_project_opportunities = crossChannelCount
+    log('info', 'Cross-channel project promotion complete', { count: crossChannelCount })
+
+    log('info', 'Extracting durable relationship facts')
+    let relationshipFactCount = 0
+    const factCandidates = []
+    for (const dm of directMessagesResult.rows) {
+      const facts = extractRelationshipFactsFromText(dm.body, {
+        contact_id: dm.contact_id,
+        source: 'whatsapp',
+        source_ref: `whatsapp:${dm.source_id}`,
+        occurred_at: dm.ts,
+        metadata: { chat_id: dm.chat_id, direction: dm.from_me ? 'outbound' : 'inbound' },
+      })
+      factCandidates.push(...facts)
+    }
+    for (const email of emailsResult.rows.slice(0, 3000)) {
+      const text = `${email.subject || ''}\n${email.body_text || email.body || ''}`
+      const facts = extractRelationshipFactsFromText(text, {
+        source: 'email',
+        source_ref: `email:${email.id}`,
+        occurred_at: email.date || email.received_at || email.created_at,
+        metadata: { subject: email.subject || null, from_address: email.from_address || null },
+      })
+      if (!facts.length) continue
+      const contactId = await resolveContactFromEmail(pool, email.id)
+      for (const fact of facts) fact.contact_id = contactId
+      factCandidates.push(...facts.filter(f => f.contact_id))
+    }
+    for (const lifelog of lifelogResult.rows.slice(0, 1000)) {
+      const text = `${lifelog.title || ''}\n${lifelog.markdown || lifelog.contents || lifelog.summary || ''}`
+      const mentioned = inferContactMention(text, contactsResult.rows)
+      if (!mentioned?.id) continue
+      const facts = extractRelationshipFactsFromText(text, {
+        contact_id: mentioned.id,
+        source: 'limitless',
+        source_ref: `limitless:${lifelog.id}`,
+        occurred_at: lifelog.start_time || lifelog.created_at,
+        metadata: { title: lifelog.title || null, inferred_contact_name: mentioned.display_name || null },
+      })
+      factCandidates.push(...facts)
+    }
+    log('info', 'Detected relationship fact candidates', { count: factCandidates.length })
+    for (const fact of factCandidates) {
+      try {
+        const id = await upsertContactFact(pool, fact)
+        if (id) relationshipFactCount++
+      } catch (error) {
+        log('error', 'Failed to upsert relationship fact', { fact_type: fact.fact_type, contact_id: fact.contact_id, error: error.message })
+      }
+    }
+    stats.relationship_facts_extracted = relationshipFactCount
+    log('info', 'Relationship fact extraction complete', { count: relationshipFactCount })
 
     const signalInputs = [
       ...(await extractSignals(emailsResult.rows, 'email')),
