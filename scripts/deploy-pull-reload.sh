@@ -68,8 +68,8 @@ fi
 DIRTY_STATUS="$(git status --porcelain)"
 if [ -n "$DIRTY_STATUS" ]; then
   printf '%s\n' "$DIRTY_STATUS" | tee -a "$LOG_FILE"
-  DIRTY_JSON=$(printf '%s\n' "$DIRTY_STATUS" | python3 -c 'import json,sys; print(json.dumps([line for line in sys.stdin.read().splitlines() if line.strip()]))')
-  write_status "failed" "preflight" "Working tree is dirty; refusing to pull/reload" "{\"dirty_files\":$DIRTY_JSON}"
+  DIRTY_SUMMARY=$(printf '%s' "$DIRTY_STATUS" | tr '\n' '; ' | cut -c1-1000)
+  write_status "failed" "preflight" "Working tree is dirty; refusing to pull/reload. Dirty files: $DIRTY_SUMMARY"
   exit 1
 fi
 
