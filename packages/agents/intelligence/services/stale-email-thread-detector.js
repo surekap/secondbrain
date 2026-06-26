@@ -31,7 +31,8 @@ const CLOSING_PATTERNS = [
 ]
 
 const BULK_SENDER_PATTERNS = [
-  /\b(no-?reply|donotreply|newsletter|marketing|promo|promotions|reservations|customer|notifications?|mailbot|conference|microforum)@/i,
+  /\b(no-?reply|donotreply|newsletter|marketing|promo|promotions|reservations|customer|notifications?|mailbot|conference|microforum|alert|status|info)@/i,
+  /\b(news|updates?|events?|communications?)@/i,
   /@comm\.delltechnologies\.com$/i,
   /@customer\.goindigo\.in$/i,
   /@digital\.axisbankmail\.bank\.in$/i,
@@ -58,6 +59,14 @@ const BULK_SUBJECT_PATTERNS = [
   /\bawards?\b/i,
   /\bdialogue\b/i,
   /\bmicroforum\b/i,
+  /\bthis month at\b/i,
+  /\bkey insights?\b/i,
+  /\bevent highlights?\b/i,
+  /\bscheduled maintenance\b/i,
+  /\bmaintenance\b/i,
+  /\bdisaster recovery drill\b/i,
+  /\bmay updates?\b/i,
+  /\bwhat'?s new\b/i,
 ]
 
 const BULK_BODY_PATTERNS = [

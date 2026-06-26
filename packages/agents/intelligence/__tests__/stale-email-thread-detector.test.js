@@ -76,6 +76,9 @@ test('stale-email-thread-detector: ignores newsletters, itineraries, and bulk tr
     { id: 14, subject: 'Your pre-sale is live! "Kisi Aur Ka" is on iTunes', from_address: 'DistroKid <mailbot@distrokid.com>', date: '2026-06-01T00:00:00Z', body_text: 'Hi, your single is live on iTunes' },
     { id: 15, subject: 'ACTION: Connect with your South Asia - Members MicroForum Pair!', from_address: 'MicroForum <microforum@ypo.org>', date: '2026-06-01T00:00:00Z', body_text: 'DO NOT REPLY TO THIS EMAIL Please contact your peer' },
     { id: 16, subject: 'Pending Invoices Awaiting Your Approval', from_address: 'help@grapevine.hartex.in', date: '2026-06-01T00:00:00Z', body_text: 'SPIC - Invoice Approval Required. This is an automated notification from SPIC. Please do not reply to this email.' },
+    { id: 17, subject: 'This Month at Penn Engineering: May 2026', from_address: 'Penn Engineering News <info@seas.upenn.edu>', date: '2026-06-01T00:00:00Z', body_text: 'Newsletter graduation highlights please view online unsubscribe' },
+    { id: 18, subject: 'Sandbox scheduled a new maintenance - Scheduled Disaster Recovery Drill', from_address: 'alert@sandbox.co.in', date: '2026-06-01T00:00:00Z', body_text: 'Please be informed maintenance is scheduled' },
+    { id: 19, subject: 'May Updates: Simplifying probation, payroll & goal tracking', from_address: 'Abinaya from KekaHR <abinaya.s@kekahr.com>', date: '2026-06-01T00:00:00Z', body_text: 'What is new in Keka product updates please read more unsubscribe' },
   ]
   const stale = detectStaleEmailThreads(emails, { now: '2026-06-26T00:00:00Z', staleDays: 14 })
   assert.equal(stale.length, 0)
