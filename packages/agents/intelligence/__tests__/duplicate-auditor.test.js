@@ -8,10 +8,16 @@ const {
   auditDuplicateOrganizations,
 } = require('../services/duplicate-auditor')
 
-test('duplicate-auditor: normalizes titles, punctuation, suffixes, and whitespace', () => {
+test('duplicate-auditor: normalizes safe titles, punctuation, suffixes, and whitespace', () => {
   assert.equal(normalizeNameKey('Dr.  Anupama Sureka'), 'anupama sureka')
+  assert.equal(normalizeNameKey('Mr. Prabhakar Srivastava'), 'prabhakar srivastava')
   assert.equal(normalizeNameKey('Eden Realty Ventures Pvt. Ltd.'), 'eden realty ventures')
   assert.equal(normalizeNameKey('Eden Realty Ventures Pvt'), 'eden realty ventures')
+})
+
+test('duplicate-auditor: preserves spouse markers such as Mrs/Ms so spouses are not collapsed', () => {
+  assert.equal(normalizeNameKey('Mrs Prabhakar Srivastava'), 'mrs prabhakar srivastava')
+  assert.notEqual(normalizeNameKey('Mrs Prabhakar Srivastava'), normalizeNameKey('Prabhakar Srivastava'))
 })
 
 test('duplicate-auditor: suggests canonical by importance, obligation, recency, then id', () => {

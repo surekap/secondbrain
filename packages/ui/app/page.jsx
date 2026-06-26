@@ -122,6 +122,8 @@ export default function DashboardPage() {
   const [attentionItems, setAttentionItems] = useState([])
   const [duplicateSummary, setDuplicateSummary] = useState(null)
   const [dupComms, setDupComms]           = useState({})
+  const [duplicateEvidence, setDuplicateEvidence] = useState(null)
+  const [duplicateEvidenceKey, setDuplicateEvidenceKey] = useState(null)
   const [groupsMap, setGroupsMap]         = useState({})
   const [loading, setLoading]             = useState(true)
 
@@ -185,6 +187,16 @@ export default function DashboardPage() {
       body: JSON.stringify({ status }),
     })
     setAttentionItems(prev => prev.filter(x => x.id !== id))
+  }
+
+  async function inspectDuplicate(group) {
+    const ids = (group.entities || []).map(e => String(e.id)).filter(Boolean)
+    if (!ids.length) return
+    const key = `${group._type}-${group.duplicate_key}`
+    setDuplicateEvidenceKey(key)
+    setDuplicateEvidence({ loading: true, group, data: null })
+    const data = await fetchJson(`/api/intelligence/duplicates/evidence?entity_type=${encodeURIComponent(group._type)}&ids=${encodeURIComponent(ids.join(','))}`, { fallback: { error: 'Failed to load evidence' }, timeoutMs: 10000 })
+    setDuplicateEvidence({ loading: false, group, data })
   }
 
   async function decideDuplicate(group, action) {
@@ -340,6 +352,13 @@ export default function DashboardPage() {
         .duplicate-actions { display:flex; gap:.35rem; margin-top:.5rem; }
         .duplicate-action { border:1px solid var(--border); background:var(--surface); color:var(--text-2); border-radius:6px; padding:.22rem .45rem; font-size:.68rem; cursor:pointer; }
         .duplicate-action:hover { border-color:var(--border-strong); color:var(--text); }
+        .duplicate-evidence { grid-column:1/-1; margin-top:.65rem; border-top:1px solid var(--border); padding-top:.65rem; display:grid; gap:.65rem; }
+        .evidence-block { background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:.55rem .65rem; }
+        .evidence-title { font-size:.7rem; font-weight:700; color:var(--text); margin-bottom:.35rem; }
+        .evidence-row { font-size:.68rem; color:var(--text-2); line-height:1.35; padding:.18rem 0; border-top:1px solid var(--border); }
+        .evidence-row:first-of-type { border-top:none; }
+        .evidence-id { font-family:ui-monospace, SFMono-Regular, Menlo, monospace; color:var(--text-3); }
+        .evidence-empty { font-size:.68rem; color:var(--text-3); }
 
         /* Recent activity */
         .activity-list { display:flex; flex-direction:column; gap:.375rem; }
@@ -480,9 +499,45 @@ export default function DashboardPage() {
                       })}
                     </div>
                     <div className="duplicate-actions">
+                      <button className="duplicate-action" onClick={() => inspectDuplicate(group)}>Inspect evidence</button>
                       <button className="duplicate-action" onClick={() => decideDuplicate(group, 'confirmed')}>Confirm duplicate</button>
                       <button className="duplicate-action" onClick={() => decideDuplicate(group, 'ignored')}>Ignore</button>
                     </div>
+                    {duplicateEvidenceKey === `${group._type}-${group.duplicate_key}` && duplicateEvidence && (
+                      <div className="duplicate-evidence">
+                        {duplicateEvidence.loading ? <div className="evidence-empty">Loading evidence…</div> : duplicateEvidence.data?.error ? <div className="evidence-empty">{duplicateEvidence.data.error}</div> : (
+                          <>
+                            <div className="evidence-block">
+                              <div className="evidence-title">Entities</div>
+                              {(duplicateEvidence.data?.entities || []).map(e => (
+                                <div className="evidence-row" key={`entity-${e.id}`}>
+                                  <span className="evidence-id">#{e.id}</span> {e.display_name || e.name} {e.company ? `· ${e.company}` : ''} {e.job_title ? `· ${e.job_title}` : ''} {e.domain ? `· ${e.domain}` : ''}
+                                  <br />tier/type: {e.relationship_tier || e.sector || '—'} · last: {fmtDate(e.last_interaction_at || e.updated_at)}
+                                </div>
+                              ))}
+                            </div>
+                            <div className="evidence-block">
+                              <div className="evidence-title">Aliases</div>
+                              {(duplicateEvidence.data?.aliases || []).length ? duplicateEvidence.data.aliases.slice(0, 12).map((a, i) => (
+                                <div className="evidence-row" key={`alias-${i}`}><span className="evidence-id">#{a.entity_id}</span> {a.alias} · {a.source || 'source unknown'}</div>
+                              )) : <div className="evidence-empty">No aliases found.</div>}
+                            </div>
+                            <div className="evidence-block">
+                              <div className="evidence-title">Recent communications</div>
+                              {(duplicateEvidence.data?.communications || []).length ? duplicateEvidence.data.communications.slice(0, 12).map((c, i) => (
+                                <div className="evidence-row" key={`comm-${i}`}><span className="evidence-id">#{c.entity_id}</span> {fmtDate(c.occurred_at)} · {c.source}/{c.direction} {c.group_name ? `· ${c.group_name}` : ''}<br />{c.subject || c.content_snippet || 'No snippet'}</div>
+                              )) : <div className="evidence-empty">No relationship communications found.</div>}
+                            </div>
+                            <div className="evidence-block">
+                              <div className="evidence-title">WhatsApp/raw touches</div>
+                              {(duplicateEvidence.data?.whatsapp_messages || duplicateEvidence.data?.touches || []).length ? [ ...(duplicateEvidence.data?.touches || []), ...(duplicateEvidence.data?.whatsapp_messages || []) ].slice(0, 12).map((m, i) => (
+                                <div className="evidence-row" key={`wa-${i}`}><span className="evidence-id">{m.entity_id ? `#${m.entity_id}` : m.chat_id}</span> {fmtDate(m.touched_at || m.ts)} · {m.source || m.event || m.msg_type || 'whatsapp'}<br />{m.note || m.body || m.external_id || 'No snippet'}</div>
+                              )) : <div className="evidence-empty">No raw WhatsApp/touch evidence found.</div>}
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    )}
                   </div>
                 )
               })}

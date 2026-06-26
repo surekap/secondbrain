@@ -1164,6 +1164,104 @@ app.get('/api/intelligence/duplicates/decisions', async (req, res) => {
   } catch (e) { res.status(400).json({ error: e.message }); }
 });
 
+// GET /api/intelligence/duplicates/evidence — inspect candidate rows before deciding
+app.get('/api/intelligence/duplicates/evidence', async (req, res) => {
+  if (!db) return res.status(503).json({ error: 'No database' });
+  try {
+    const entityType = String(req.query.entity_type || req.query.type || 'contact').trim();
+    const ids = String(req.query.ids || '')
+      .split(',')
+      .map(s => s.trim())
+      .filter(Boolean)
+      .slice(0, 12);
+    if (!['contact', 'organization'].includes(entityType)) return res.status(400).json({ error: 'entity_type must be contact or organization' });
+    if (!ids.length) return res.status(400).json({ error: 'ids required' });
+
+    if (entityType === 'contact') {
+      const { rows: entities } = await db.query(`
+        SELECT c.id::text, c.display_name, c.company, c.job_title, c.relationship_type,
+               c.relationship_strength, c.relationship_tier, c.strategic_importance_score,
+               c.emails, c.phone_numbers, c.wa_jids, c.tags,
+               c.first_interaction_at, c.last_interaction_at, c.next_suggested_touch_at,
+               COALESCE((SELECT ARRAY_AGG(key) FROM JSONB_OBJECT_KEYS(COALESCE(c.manual_overrides, '{}'::jsonb)) AS key), '{}') AS manual_override_fields
+        FROM relationships.contacts c
+        WHERE c.id::text = ANY($1::text[])
+        ORDER BY ARRAY_POSITION($1::text[], c.id::text)
+      `, [ids]);
+      const { rows: aliases } = await db.query(`
+        SELECT entity_id::text, alias, normalized_alias, source, confidence
+        FROM intelligence.entity_aliases
+        WHERE entity_type = 'contact' AND entity_id::text = ANY($1::text[])
+        ORDER BY entity_id::text, confidence DESC NULLS LAST, alias ASC
+        LIMIT 100
+      `, [ids]);
+      const { rows: orgs } = await db.query(`
+        SELECT co.contact_id::text AS entity_id, o.id::text AS organization_id, o.name, co.role, co.confidence
+        FROM intelligence.contact_organizations co
+        JOIN intelligence.organizations o ON o.id = co.organization_id
+        WHERE co.contact_id::text = ANY($1::text[])
+        ORDER BY co.contact_id::text, co.confidence DESC NULLS LAST, o.name ASC
+      `, [ids]);
+      const { rows: communications } = await db.query(`
+        SELECT contact_id::text AS entity_id, source, source_id, direction, content_snippet,
+               subject, chat_id, is_group, group_name, occurred_at, metadata
+        FROM relationships.communications
+        WHERE contact_id::text = ANY($1::text[])
+        ORDER BY occurred_at DESC NULLS LAST
+        LIMIT 120
+      `, [ids]);
+      const { rows: touches } = await db.query(`
+        SELECT contact_id::text AS entity_id, source, direction, touched_at, duration_seconds, external_id, note
+        FROM relationships.contact_touches
+        WHERE contact_id::text = ANY($1::text[])
+        ORDER BY touched_at DESC NULLS LAST
+        LIMIT 60
+      `, [ids]);
+      const waJids = [...new Set(entities.flatMap(e => e.wa_jids || []).filter(Boolean))];
+      const { rows: whatsapp_messages } = waJids.length ? await db.query(`
+        SELECT m.chat_id, m.event, m.msg_type, m.ts, m.wa_msg_id,
+               LEFT(COALESCE(m.data->>'body', m.data->>'caption', ''), 500) AS body,
+               COALESCE(m.data->>'from', m.chat_id) AS from_jid,
+               COALESCE(m.data->>'to', '') AS to_jid,
+               COALESCE(m.data->>'author', '') AS author_jid
+        FROM public.messages m
+        WHERE m.chat_id = ANY($1::text[])
+           OR COALESCE(m.data->>'from', '') = ANY($1::text[])
+           OR COALESCE(m.data->>'to', '') = ANY($1::text[])
+           OR COALESCE(m.data->>'author', '') = ANY($1::text[])
+        ORDER BY m.ts DESC NULLS LAST
+        LIMIT 80
+      `, [waJids]) : { rows: [] };
+      return res.json({ entity_type: 'contact', ids, entities, aliases, organizations: orgs, communications, touches, whatsapp_messages });
+    }
+
+    const { rows: entities } = await db.query(`
+      SELECT o.id::text, o.name, o.normalized_name, o.domain, o.sector, o.geography,
+             o.relationship_to_prateek, o.strategic_importance_score, o.tags, o.metadata,
+             o.created_at, o.updated_at
+      FROM intelligence.organizations o
+      WHERE o.id::text = ANY($1::text[])
+      ORDER BY ARRAY_POSITION($1::text[], o.id::text)
+    `, [ids]);
+    const { rows: aliases } = await db.query(`
+      SELECT entity_id::text, alias, normalized_alias, source, confidence
+      FROM intelligence.entity_aliases
+      WHERE entity_type = 'organization' AND entity_id::text = ANY($1::text[])
+      ORDER BY entity_id::text, confidence DESC NULLS LAST, alias ASC
+      LIMIT 100
+    `, [ids]);
+    const { rows: contacts } = await db.query(`
+      SELECT co.organization_id::text AS entity_id, c.id::text AS contact_id, c.display_name, c.company, c.job_title, co.role, co.confidence
+      FROM intelligence.contact_organizations co
+      JOIN relationships.contacts c ON c.id = co.contact_id
+      WHERE co.organization_id::text = ANY($1::text[])
+      ORDER BY co.organization_id::text, co.confidence DESC NULLS LAST, c.display_name ASC
+      LIMIT 120
+    `, [ids]);
+    res.json({ entity_type: 'organization', ids, entities, aliases, contacts });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // POST /api/intelligence/duplicates/decide — record confirm/ignore decision; never auto-merges
 app.post('/api/intelligence/duplicates/decide', async (req, res) => {
   if (!db) return res.status(503).json({ error: 'No database' });

@@ -10,7 +10,7 @@ function normalizeNameKey(value) {
   return String(value || '')
     .trim()
     .toLowerCase()
-    .replace(/^(dr\.?|mr\.?|mrs\.?|ms\.?|prof\.?|shri|smt\.?|sri)\s+/i, '')
+    .replace(/^(dr\.?|mr\.?|prof\.?|shri|sri)\s+/i, '')
     .replace(/\b(pvt\.?\s*ltd\.?|private\s+limited|pvt\.?|private|limited|ltd\.?|llp|inc\.?|corp\.?|corporation|gmbh|llc|plc)\b/gi, '')
     .replace(/[^a-z0-9]+/g, ' ')
     .replace(/\s+/g, ' ')
@@ -49,7 +49,7 @@ async function auditDuplicateContacts(pool, options = {}) {
              c.next_suggested_touch_at,
              c.manual_overrides,
              TRIM(REGEXP_REPLACE(REGEXP_REPLACE(REGEXP_REPLACE(LOWER(COALESCE(c.display_name, '')),
-               '^(dr\\.?|mr\\.?|mrs\\.?|ms\\.?|prof\\.?|shri|smt\\.?|sri)\\s+', ''),
+               '^(dr\\.?|mr\\.?|prof\\.?|shri|sri)\\s+', ''),
                '[^a-z0-9]+', ' ', 'g'), '\\s+', ' ', 'g')) AS duplicate_key
       FROM relationships.contacts c
       WHERE c.display_name IS NOT NULL AND LENGTH(TRIM(c.display_name)) >= 3
