@@ -56,6 +56,14 @@ function isGenericNextAction(item) {
   ].some(phrase => action.includes(phrase))
 }
 
+function isUncorroboratedCluster(item) {
+  const why = String(item?.why_now || '').toLowerCase()
+  const title = String(item?.title || '').toLowerCase()
+  return why.includes('corroborating')
+    && why.includes('across one source')
+    && (title.includes('signals on') || title.startsWith('cluster:'))
+}
+
 function summarizeAttentionQuality(items = [], { topN = 10 } = {}) {
   const top = items.slice(0, topN)
   const problems = []
@@ -63,6 +71,7 @@ function summarizeAttentionQuality(items = [], { topN = 10 } = {}) {
   let genericNextAction = 0
   let weakEvidence = 0
   let missingWhyNow = 0
+  let uncorroboratedCluster = 0
 
   for (const item of top) {
     const itemProblems = []
@@ -71,6 +80,7 @@ function summarizeAttentionQuality(items = [], { topN = 10 } = {}) {
 
     if (isLowValueAdmin(item)) { lowValueAdmin += 1; itemProblems.push('low_value_admin') }
     if (isGenericNextAction(item)) { genericNextAction += 1; itemProblems.push('generic_next_action') }
+    if (isUncorroboratedCluster(item)) { uncorroboratedCluster += 1; itemProblems.push('uncorroborated_cluster') }
     if (evidenceCount < 2 || flags.includes('single_evidence') || flags.includes('no_evidence')) { weakEvidence += 1; itemProblems.push('weak_evidence') }
     if (!item?.why_now) { missingWhyNow += 1; itemProblems.push('missing_why_now') }
 
@@ -85,7 +95,8 @@ function summarizeAttentionQuality(items = [], { topN = 10 } = {}) {
     generic_next_action_count: genericNextAction,
     weak_evidence_count: weakEvidence,
     missing_why_now_count: missingWhyNow,
-    problem_titles: [...new Set(problems.filter(p => p.problems.includes('low_value_admin') || p.problems.includes('generic_next_action') || p.problems.includes('weak_evidence')).map(p => p.title))],
+    uncorroborated_cluster_count: uncorroboratedCluster,
+    problem_titles: [...new Set(problems.filter(p => p.problems.includes('low_value_admin') || p.problems.includes('generic_next_action') || p.problems.includes('weak_evidence') || p.problems.includes('uncorroborated_cluster')).map(p => p.title))],
     problems,
   }
 }
@@ -132,8 +143,8 @@ function evaluateSmoke(snapshot, opts = {}) {
 
   const attention = summarizeAttentionQuality(snapshot.attentionItems || [], { topN })
   if (attention.top_count === 0) failures.push('attention queue is empty')
-  if (attention.low_value_admin_count > 0 || attention.generic_next_action_count > Math.ceil(topN * 0.3)) {
-    failures.push(`attention quality below gate (${attention.low_value_admin_count} low-value admin, ${attention.generic_next_action_count} generic next actions in top ${attention.top_count})`)
+  if (attention.low_value_admin_count > 0 || attention.generic_next_action_count > Math.ceil(topN * 0.3) || attention.uncorroborated_cluster_count > Math.ceil(topN * 0.3)) {
+    failures.push(`attention quality below gate (${attention.low_value_admin_count} low-value admin, ${attention.generic_next_action_count} generic next actions, ${attention.uncorroborated_cluster_count} uncorroborated clusters in top ${attention.top_count})`)
   }
   if (attention.weak_evidence_count > Math.ceil(topN * 0.7)) failures.push(`attention quality below evidence gate (${attention.weak_evidence_count}/${attention.top_count} weak evidence)`) 
   if (attention.missing_why_now_count > Math.ceil(topN * 0.7)) failures.push(`attention quality below timing gate (${attention.missing_why_now_count}/${attention.top_count} missing why_now)`)
@@ -163,4 +174,5 @@ module.exports = {
   summarizeAttentionQuality,
   isLowValueAdmin,
   isGenericNextAction,
+  isUncorroboratedCluster,
 }

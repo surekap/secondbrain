@@ -63,6 +63,44 @@ test('signal-clusterer: rejects noisy URL/numeric clusters', () => {
   assert.equal(shouldPromoteCluster(cluster), false);
 });
 
+test('signal-clusterer: does not promote linked clusters from one source only', () => {
+  const signals = Array.from({ length: 5 }, (_, i) => ({
+    id: i + 1,
+    signal_type: 'risk',
+    title: 'Hartex ERP called Gaurav about implementation risk',
+    description: 'ERP implementation risk repeated in one imported source only',
+    project_id: 9,
+    project_name: 'Hartex Grapevine ERP Implementation',
+    occurred_at: '2026-06-25T00:00:00Z',
+    confidence: 0.8,
+    source_table: 'limitless',
+    source_id: `l${i}`,
+  }));
+  const [cluster] = buildSignalClusters(signals);
+
+  assert.equal(cluster.signal_count, 5);
+  assert.equal(cluster.source_count, 1);
+  assert.equal(shouldPromoteCluster(cluster), false);
+});
+
+test('signal-clusterer: suppresses self-contact clusters', () => {
+  const [cluster] = buildSignalClusters([
+    { id: 1, signal_type: 'risk', title: 'GitHub repository security risk', description: 'security github repository storage risk', contact_id: 284, contact_name: 'Prateek Sureka', occurred_at: '2026-06-24T00:00:00Z', source_table: 'email', source_id: 'a' },
+    { id: 2, signal_type: 'risk', title: 'Dropbox repository security risk', description: 'security github repository storage risk', contact_id: 284, contact_name: 'Prateek Sureka', occurred_at: '2026-06-25T00:00:00Z', source_table: 'whatsapp', source_id: 'b' },
+  ]);
+
+  assert.equal(shouldPromoteCluster(cluster), false);
+});
+
+test('signal-clusterer: generic identity/channel words are not promoted as evidence terms', () => {
+  const [cluster] = buildSignalClusters([
+    { id: 1, signal_type: 'risk', title: 'Prateek Sureka direct 3rd Claude', description: 'Prateek Sureka direct 3rd Claude', project_id: 49, occurred_at: '2026-06-24T00:00:00Z', source_table: 'email', source_id: 'a' },
+    { id: 2, signal_type: 'risk', title: 'Sureka direct Prateek Claude', description: 'direct Prateek Sureka 3rd', project_id: 49, occurred_at: '2026-06-25T00:00:00Z', source_table: 'whatsapp', source_id: 'b' },
+  ]);
+
+  assert.equal(shouldPromoteCluster(cluster), false);
+});
+
 test('signal-clusterer: promotion plan identifies stale previously-promoted clusters', () => {
   const clusters = buildSignalClusters([
     { id: 1, signal_type: 'risk', title: 'MT940 missing statement', description: 'bank statement missing', project_id: 7, occurred_at: '2026-06-24T00:00:00Z', source_table: 'email', source_id: 'a' },

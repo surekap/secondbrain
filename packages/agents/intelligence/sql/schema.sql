@@ -357,12 +357,12 @@ WITH scored_inputs AS (
       + CASE WHEN confidence >= 0.80 THEN 5 WHEN confidence <= 0.40 THEN -8 ELSE 0 END
       + CASE WHEN evidence_count >= 3 THEN 4 WHEN evidence_count = 2 THEN 1 ELSE 0 END
       - CASE WHEN LOWER(title) LIKE 're-engage %' THEN 25 ELSE 0 END
-      - CASE WHEN evidence_count = 0 THEN 35 WHEN evidence_count = 1 THEN 20 ELSE 0 END
+      - CASE WHEN evidence_count = 0 THEN 45 WHEN evidence_count = 1 THEN 60 ELSE 0 END
       - CASE WHEN evidence_count = 1 AND scoring_source_at < NOW() - INTERVAL '14 days' THEN 15 ELSE 0 END
       - CASE WHEN opportunity_type = 'group_opportunity' AND evidence_count < 2 THEN 26 ELSE 0 END
       - CASE WHEN opportunity_type = 'group_opportunity' AND primary_contact_id IS NULL AND primary_project_id IS NULL THEN 18 ELSE 0 END
       - CASE WHEN NULLIF(TRIM(COALESCE(recommended_next_action, '')), '') IS NULL THEN 8 ELSE 0 END
-      - CASE WHEN why_now IS NULL OR NULLIF(TRIM(COALESCE(why_now, '')), '') IS NULL THEN 18 ELSE 0 END
+      - CASE WHEN why_now IS NULL OR NULLIF(TRIM(COALESCE(why_now, '')), '') IS NULL THEN 35 ELSE 0 END
       - CASE WHEN action_text LIKE '%turn %into a concrete task%'
                OR action_text LIKE '%identify the best-fit person or project owner%'
                OR action_text LIKE '%send a short intro note explaining the specific mutual value%'

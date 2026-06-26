@@ -31,9 +31,14 @@ const CLOSING_PATTERNS = [
 ]
 
 const BULK_SENDER_PATTERNS = [
-  /\b(no-?reply|donotreply|newsletter|marketing|promo|promotions|reservations|customer|notifications?)@/i,
+  /\b(no-?reply|donotreply|newsletter|marketing|promo|promotions|reservations|customer|notifications?|mailbot|conference|microforum)@/i,
   /@comm\.delltechnologies\.com$/i,
   /@customer\.goindigo\.in$/i,
+  /@digital\.axisbankmail\.bank\.in$/i,
+  /@axis\.bank\.in$/i,
+  /@distrokid\.com$/i,
+  /@conference\.cii\.in$/i,
+  /@ypo\.org$/i,
 ]
 
 const BULK_SUBJECT_PATTERNS = [
@@ -45,13 +50,27 @@ const BULK_SUBJECT_PATTERNS = [
   /\bunlock ai\b/i,
   /\bproduct updates?\b/i,
   /\bdispatch\b/i,
+  /\bpayment advice\b/i,
+  /\bpre-sale is live\b/i,
+  /\bon itunes\b/i,
+  /\binvitation:/i,
+  /\bcalendar invitation\b/i,
+  /\bawards?\b/i,
+  /\bdialogue\b/i,
+  /\bmicroforum\b/i,
 ]
 
 const BULK_BODY_PATTERNS = [
   /\bview online\b/i,
+  /\bview the web version\b/i,
   /\bunsubscribe\b/i,
+  /\bdo not reply\b/i,
+  /\bsystem generated email\b/i,
   /click\.comm\./i,
+  /deliverirs\/servlet/i,
   /\bpayment status\s+confirmed\b/i,
+  /\bjoin with google meet\b/i,
+  /\bjoin zoom meeting\b/i,
 ]
 
 function compact(value, max = 500) {

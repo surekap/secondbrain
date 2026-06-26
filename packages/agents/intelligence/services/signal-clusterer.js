@@ -2,8 +2,11 @@
 
 const STOPWORDS = new Set([
   'the','and','for','with','from','this','that','into','your','you','are','was','were','has','have','had','not','but','can','will','may','should','could','again','still','issue','issues','problem','need','needs','needed','help','message','messages','session','group','project','opportunity','risk','failed','failure','blocked','execution','calls','follow',
-  'https','http','www','com','logo','blog','utm','click','view','open','tracking','footer','image','png','jpg'
+  'https','http','www','com','logo','blog','utm','click','view','open','tracking','footer','image','png','jpg',
+  'prateek','sureka','direct','claude','chatgpt','whatsapp','email','called','call','3rd','third'
 ])
+
+const SELF_CONTACT_NAMES = new Set(['prateek sureka', 'prateek'])
 
 function isNoisyTerm(term) {
   return /^\d+$/.test(String(term || '')) || String(term || '').length < 3 || STOPWORDS.has(String(term || '').toLowerCase())
@@ -11,6 +14,10 @@ function isNoisyTerm(term) {
 
 function hasUsableTerms(cluster) {
   return (cluster?.cluster_terms || []).filter(term => !isNoisyTerm(term)).length >= 2
+}
+
+function isSelfContactCluster(cluster) {
+  return cluster?.contact_name && SELF_CONTACT_NAMES.has(normalizeText(cluster.contact_name))
 }
 
 function normalizeText(value) {
@@ -100,10 +107,11 @@ function summaryForCluster(cluster) {
 
 function shouldPromoteCluster(cluster) {
   if (!cluster) return false
+  if (isSelfContactCluster(cluster)) return false
   if (!hasUsableTerms(cluster)) return false
 
   const linked = Boolean(cluster.project_id || cluster.contact_id)
-  if (linked && cluster.signal_count >= 2) return true
+  if (linked && cluster.signal_count >= 2 && cluster.source_count >= 2) return true
 
   // Unlinked clusters need independent corroboration; volume from one inbox/source
   // is usually repeated boilerplate, notifications, newsletters, or transactional noise.

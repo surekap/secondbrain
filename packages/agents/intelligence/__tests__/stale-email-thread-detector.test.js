@@ -71,6 +71,10 @@ test('stale-email-thread-detector: ignores newsletters, itineraries, and bulk tr
   const emails = [
     { id: 10, subject: 'Unlock AI-driven insights with Dell', from_address: 'Dell Technologies <DellTechnologies_APJ@comm.delltechnologies.com>', date: '2026-06-01T00:00:00Z', body_text: 'View Online unsubscribe please click to learn more' },
     { id: 11, subject: 'Your IndiGo Itinerary - OB88MG', from_address: 'IndiGo <reservations@customer.goindigo.in>', date: '2026-06-01T00:00:00Z', body_text: 'Payment Status CONFIRMED Please arrive at airport' },
+    { id: 12, subject: 'Payment Advice::PRATEEK SUREKA::SUREKA', from_address: 'Straight2axis@axis.bank.in', date: '2026-06-01T00:00:00Z', body_text: 'This is a system generated email. Please do not reply to this mail.' },
+    { id: 13, subject: 'Invitation: Prateek Sir Meeting @ Tue Jun 2, 2026', from_address: 'Avisek <avisek@example.com>', date: '2026-06-01T00:00:00Z', body_text: 'Join with Google Meet Join Zoom Meeting' },
+    { id: 14, subject: 'Your pre-sale is live! "Kisi Aur Ka" is on iTunes', from_address: 'DistroKid <mailbot@distrokid.com>', date: '2026-06-01T00:00:00Z', body_text: 'Hi, your single is live on iTunes' },
+    { id: 15, subject: 'ACTION: Connect with your South Asia - Members MicroForum Pair!', from_address: 'MicroForum <microforum@ypo.org>', date: '2026-06-01T00:00:00Z', body_text: 'DO NOT REPLY TO THIS EMAIL Please contact your peer' },
   ]
   const stale = detectStaleEmailThreads(emails, { now: '2026-06-26T00:00:00Z', staleDays: 14 })
   assert.equal(stale.length, 0)

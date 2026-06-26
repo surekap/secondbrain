@@ -44,7 +44,9 @@ test('summarizeAttentionQuality flags generic clustered actions', () => {
   ], { topN: 1 })
 
   assert.equal(summary.generic_next_action_count, 1)
+  assert.equal(summary.uncorroborated_cluster_count, 1)
   assert.equal(summary.problems[0].problems.includes('generic_next_action'), true)
+  assert.equal(summary.problems[0].problems.includes('uncorroborated_cluster'), true)
 })
 
 test('evaluateSmoke fails when contact tier summary contains unknown tier bucket', () => {
