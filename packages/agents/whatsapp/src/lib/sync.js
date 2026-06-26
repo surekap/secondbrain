@@ -5,9 +5,26 @@ const pool = require('./db');
 let telemetry = null;
 try { telemetry = require('@secondbrain/telemetry'); } catch (_) {}
 
-const LOOKBACK_DAYS  = 14;
-const MSG_LIMIT      = 2000;  // per chat — fetchMessages auto-loads earlier pages
-const CHAT_DELAY_MS  = 300;   // brief pause between chats to avoid rate-limiting
+const DEFAULT_LOOKBACK_DAYS = 14;
+const DEFAULT_MSG_LIMIT     = 2000;  // per chat — fetchMessages auto-loads earlier pages
+const DEFAULT_CHAT_DELAY_MS = 300;   // brief pause between chats to avoid rate-limiting
+
+const syncState = {
+    running: false,
+    startedAt: null,
+    finishedAt: null,
+    days: null,
+    msgLimit: null,
+    totalChats: 0,
+    completedChats: 0,
+    totalSaved: 0,
+    totalSkipped: 0,
+    errors: [],
+};
+
+function getHistoricalSyncStatus() {
+    return { ...syncState, errors: syncState.errors.slice(-20) };
+}
 
 /**
  * Fire-and-forget: fetch all messages from the last LOOKBACK_DAYS days
@@ -16,21 +33,46 @@ const CHAT_DELAY_MS  = 300;   // brief pause between chats to avoid rate-limitin
  * @param {import('whatsapp-web.js').Client} client
  * @param {string} clientId
  */
-function startHistoricalSync(client, clientId, runId = null) {
+function startHistoricalSync(client, clientId, runId = null, options = {}) {
+    if (syncState.running) {
+        const err = new Error('historical sync already running');
+        err.code = 'SYNC_RUNNING';
+        throw err;
+    }
+    syncState.running = true;
+    syncState.startedAt = new Date().toISOString();
+    syncState.finishedAt = null;
+    syncState.days = Number(options.days || DEFAULT_LOOKBACK_DAYS);
+    syncState.msgLimit = Number(options.msgLimit || DEFAULT_MSG_LIMIT);
+    syncState.totalChats = 0;
+    syncState.completedChats = 0;
+    syncState.totalSaved = 0;
+    syncState.totalSkipped = 0;
+    syncState.errors = [];
+
     setImmediate(async () => {
         try {
-            await _runSync(client, clientId, runId);
+            await _runSync(client, clientId, runId, options);
         } catch (err) {
             console.error('[sync] fatal error:', err.message);
+            syncState.errors.push({ chat: null, error: err.message, ts: new Date().toISOString() });
+        } finally {
+            syncState.running = false;
+            syncState.finishedAt = new Date().toISOString();
         }
     });
+    return getHistoricalSyncStatus();
 }
 
-async function _runSync(client, clientId, runId) {
+async function _runSync(client, clientId, runId, options = {}) {
+    const lookbackDays = Math.max(1, Math.min(Number(options.days || DEFAULT_LOOKBACK_DAYS), 365));
+    const msgLimit = Math.max(100, Math.min(Number(options.msgLimit || DEFAULT_MSG_LIMIT), 50000));
+    const chatDelayMs = Math.max(0, Math.min(Number(options.chatDelayMs ?? DEFAULT_CHAT_DELAY_MS), 10000));
+    const downloadMedia = options.downloadMedia !== false;
     const cutoff = new Date();
-    cutoff.setDate(cutoff.getDate() - LOOKBACK_DAYS);
+    cutoff.setDate(cutoff.getDate() - lookbackDays);
 
-    console.log(`[sync] starting — last ${LOOKBACK_DAYS} days (since ${cutoff.toISOString()})`);
+    console.log(`[sync] starting — last ${lookbackDays} days (since ${cutoff.toISOString()}), limit ${msgLimit}/chat, media=${downloadMedia}`);
 
     let chats;
     for (let attempt = 1; attempt <= 3; attempt++) {
@@ -59,6 +101,7 @@ async function _runSync(client, clientId, runId) {
     const skippedTypes = chats.length - syncable.length;
 
     console.log(`[sync] ${chats.length} chats found (${syncable.length} syncable, ${skippedTypes} skipped — broadcast/status/channels)`);
+    syncState.totalChats = syncable.length;
     if (telemetry && runId) telemetry.progress(runId, 'chats_scanned', { completed: syncable.length, total: syncable.length });
 
     // Persist chat names for group name resolution
@@ -82,29 +125,33 @@ async function _runSync(client, clientId, runId) {
     for (const chat of syncable) {
         const name = chat.name || chat.id._serialized;
         try {
-            const { saved, skipped } = await _syncChat(chat, cutoff, clientId);
+            const { saved, skipped } = await _syncChat(chat, cutoff, clientId, { msgLimit, downloadMedia });
             if (saved > 0 || skipped > 0) {
                 console.log(`[sync]   ${name}: +${saved} saved, ${skipped} already existed`);
             }
             totalSaved   += saved;
             totalSkipped += skipped;
+            syncState.completedChats += 1;
+            syncState.totalSaved = totalSaved;
+            syncState.totalSkipped = totalSkipped;
             if (telemetry && runId) telemetry.progress(runId, 'messages_synced', { completed: totalSaved });
         } catch (err) {
             // Suppress known whatsapp-web.js internal errors for unsupported chat types
             if (err.message?.includes('waitForChatLoading')) continue;
+            syncState.errors.push({ chat: name, error: err.message, ts: new Date().toISOString() });
             console.error(`[sync]   ${name}: error — ${err.message}`);
         }
         // Small delay to avoid hammering WhatsApp
-        await new Promise(r => setTimeout(r, CHAT_DELAY_MS));
+        await new Promise(r => setTimeout(r, chatDelayMs));
     }
 
     console.log(`[sync] done — ${totalSaved} saved, ${totalSkipped} already existed`);
 }
 
-async function _syncChat(chat, cutoff, clientId) {
+async function _syncChat(chat, cutoff, clientId, { msgLimit, downloadMedia }) {
     // fetchMessages with a high limit automatically calls loadEarlierMsgs
     // internally until it has enough messages or the store is exhausted.
-    const messages = await chat.fetchMessages({ limit: MSG_LIMIT });
+    const messages = await chat.fetchMessages({ limit: msgLimit });
 
     // Messages come back sorted oldest-first. Filter to our window.
     const inWindow = messages.filter(m => new Date(m.timestamp * 1000) >= cutoff);
@@ -118,11 +165,13 @@ async function _syncChat(chat, cutoff, clientId) {
         else                      skipped++;
     }
 
-    // Background media download for messages with media (fire-and-forget)
-    const { downloadAndStore } = require('./mediaDownloader');
-    for (const msg of inWindow) {
-        if (msg.hasMedia) {
-            downloadAndStore(msg).catch(() => {});
+    if (downloadMedia) {
+        // Background media download for messages with media (fire-and-forget)
+        const { downloadAndStore } = require('./mediaDownloader');
+        for (const msg of inWindow) {
+            if (msg.hasMedia) {
+                downloadAndStore(msg).catch(() => {});
+            }
         }
     }
 
@@ -170,4 +219,4 @@ async function _saveMessage(msg, clientId) {
     }
 }
 
-module.exports = { startHistoricalSync };
+module.exports = { startHistoricalSync, getHistoricalSyncStatus };

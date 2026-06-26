@@ -8,7 +8,7 @@ const express = require('express');
 const { Client, Events, LocalAuth } = require('whatsapp-web.js');
 const PostgresStore = require('./lib/PostgresStore');
 const dispatcher = require('./lib/dispatcher');
-const { startHistoricalSync } = require('./lib/sync');
+const { startHistoricalSync, getHistoricalSyncStatus } = require('./lib/sync');
 const pool = require('./lib/db');
 const { cleanupOrphanedRuns, killDuplicateProcesses } = require('../../shared/cleanup');
 
@@ -53,6 +53,24 @@ app.use(express.static(path.join(__dirname, 'public')));
 app.use('/api/subscribers', subscribersRouter);
 app.use('/api/messages', messagesRouter);
 app.use('/api/status', statusRouter);
+
+app.get('/api/sync/historical/status', (req, res) => {
+    res.json(getHistoricalSyncStatus());
+});
+
+app.post('/api/sync/historical', (req, res) => {
+    const days = Math.max(1, Math.min(Number(req.body?.days || 90), 365));
+    const msgLimit = Math.max(100, Math.min(Number(req.body?.msgLimit || 10000), 50000));
+    const chatDelayMs = Math.max(0, Math.min(Number(req.body?.chatDelayMs ?? 300), 10000));
+    const downloadMedia = Boolean(req.body?.downloadMedia);
+    try {
+        const status = startHistoricalSync(client, process.env.CLIENT_ID, _runId, { days, msgLimit, chatDelayMs, downloadMedia });
+        res.status(202).json({ ok: true, status });
+    } catch (err) {
+        if (err.code === 'SYNC_RUNNING') return res.status(409).json({ ok: false, error: err.message, status: getHistoricalSyncStatus() });
+        res.status(500).json({ ok: false, error: err.message });
+    }
+});
 
 const PORT = parseInt(process.env.PORT ?? '3000', 10);
 
