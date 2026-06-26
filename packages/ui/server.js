@@ -1608,6 +1608,27 @@ app.get('/api/intelligence/opportunities', async (req, res) => {
       params.push(req.query.type);
       conditions.push(`o.opportunity_type = $${params.length}`);
     }
+    const q = String(req.query.q || '').trim();
+    if (q) {
+      params.push(`%${q.toLowerCase()}%`);
+      conditions.push(`(
+        LOWER(o.title) LIKE $${params.length}
+        OR LOWER(COALESCE(o.description, '')) LIKE $${params.length}
+        OR LOWER(COALESCE(o.recommended_next_action, '')) LIKE $${params.length}
+        OR EXISTS (
+          SELECT 1 FROM intelligence.opportunity_contacts oc
+          JOIN relationships.contacts qc ON qc.id = oc.contact_id
+          WHERE oc.opportunity_id = o.id
+            AND LOWER(CONCAT_WS(' ', qc.display_name, qc.company, qc.summary)) LIKE $${params.length}
+        )
+        OR EXISTS (
+          SELECT 1 FROM intelligence.opportunity_projects op
+          JOIN projects.projects qp ON qp.id = op.project_id
+          WHERE op.opportunity_id = o.id
+            AND LOWER(CONCAT_WS(' ', qp.name, qp.description, qp.ai_summary)) LIKE $${params.length}
+        )
+      )`);
+    }
     if (req.query.contact_id) {
       const contactId = parsePositiveIntQuery(req.query.contact_id, null, Number.MAX_SAFE_INTEGER);
       if (contactId === null) return res.status(400).json({ error: 'Invalid contact_id' });
@@ -1885,7 +1906,9 @@ app.patch('/api/relationships/contacts/:id', async (req, res) => {
   if (isNaN(id)) return res.status(400).json({ error: 'Invalid id' });
 
   const allowed = ['display_name','company','job_title','my_role','relationship_type',
-                   'relationship_strength','summary','tags','is_noise'];
+                   'relationship_strength','relationship_tier','strategic_importance_score',
+                   'preferred_cadence_days','dormant_threshold_days','intro_sensitivity',
+                   'do_not_contact_unless','summary','tags','is_noise'];
   const updates = {};
   for (const key of allowed) {
     if (key in req.body) updates[key] = req.body[key];
@@ -1923,10 +1946,13 @@ app.patch('/api/relationships/contacts/:id', async (req, res) => {
     values.push(JSON.stringify(overrideEntries));
   }
 
-  // Remove overrides for fields the caller wants to hand back to agents
-  for (const field of clearOverrides) {
-    setClauses.push(`manual_overrides = manual_overrides - $${idx++}`);
-    values.push(field);
+  // Remove overrides for fields the caller wants to hand back to agents.
+  // Use one assignment so clearing several fields does not emit
+  // "multiple assignments to same column manual_overrides".
+  const validClearOverrides = clearOverrides.filter(field => allowed.includes(field));
+  if (validClearOverrides.length > 0) {
+    setClauses.push(`manual_overrides = COALESCE(manual_overrides, '{}'::jsonb) - $${idx++}::text[]`);
+    values.push(validClearOverrides);
   }
 
   setClauses.push('updated_at = NOW()');

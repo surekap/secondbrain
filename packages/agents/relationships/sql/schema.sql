@@ -85,6 +85,37 @@ CREATE TABLE IF NOT EXISTS relationships.contact_touches (
 CREATE INDEX IF NOT EXISTS contact_touches_contact_idx ON relationships.contact_touches (contact_id, touched_at DESC);
 CREATE INDEX IF NOT EXISTS contact_touches_source_idx  ON relationships.contact_touches (source, touched_at DESC);
 
+-- ── Contact facts ──────────────────────────────────────────────────────────────
+-- Durable relationship memory atoms. These are not free-text profile summaries;
+-- they preserve evidence-backed facts such as preferences, important dates,
+-- gifts, cancelled plans, support context, family links, and communication advice.
+CREATE TABLE IF NOT EXISTS relationships.contact_facts (
+  id             BIGSERIAL PRIMARY KEY,
+  contact_id     BIGINT REFERENCES relationships.contacts(id) ON DELETE CASCADE,
+  fact_type      TEXT NOT NULL CHECK (fact_type IN (
+                   'gift_preference','important_date','life_event','support_context',
+                   'cancelled_plan','gift_sent','personal_preference','family_context',
+                   'communication_advice','open_loop','avoidance'
+                 )),
+  fact           TEXT NOT NULL,
+  sentiment      TEXT CHECK (sentiment IN ('positive','neutral','sensitive','negative')) DEFAULT 'neutral',
+  source         TEXT NOT NULL CHECK (source IN ('manual','whatsapp','email','limitless','hermes','import')),
+  source_ref     TEXT,
+  confidence     NUMERIC(4,3) DEFAULT 0.700 CHECK (confidence >= 0 AND confidence <= 1),
+  occurred_at    TIMESTAMPTZ,
+  first_seen_at  TIMESTAMPTZ DEFAULT NOW(),
+  last_seen_at   TIMESTAMPTZ DEFAULT NOW(),
+  expires_at     TIMESTAMPTZ,
+  metadata       JSONB DEFAULT '{}',
+  created_at     TIMESTAMPTZ DEFAULT NOW(),
+  updated_at     TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS contact_facts_dedupe_idx ON relationships.contact_facts (contact_id, fact_type, fact, COALESCE(source_ref, ''));
+CREATE INDEX IF NOT EXISTS contact_facts_contact_idx ON relationships.contact_facts (contact_id, last_seen_at DESC);
+CREATE INDEX IF NOT EXISTS contact_facts_type_idx    ON relationships.contact_facts (fact_type, last_seen_at DESC);
+CREATE INDEX IF NOT EXISTS contact_facts_source_idx  ON relationships.contact_facts (source, source_ref);
+
 -- ── Insights ──────────────────────────────────────────────────────────────────
 
 CREATE TABLE IF NOT EXISTS relationships.insights (
