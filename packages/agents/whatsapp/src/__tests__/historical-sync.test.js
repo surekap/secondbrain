@@ -11,7 +11,16 @@ test('historical sync is configurable for one-shot 90 day backfills', () => {
   assert.match(syncSource, /function startHistoricalSync\(client, clientId, runId = null, options = \{\}\)/)
   assert.match(syncSource, /options\.days \|\| DEFAULT_LOOKBACK_DAYS/)
   assert.match(syncSource, /options\.msgLimit \|\| DEFAULT_MSG_LIMIT/)
+  assert.match(syncSource, /_fetchChatMessages\(chat, msgLimit\)/)
   assert.match(syncSource, /chat\.fetchMessages\(\{ limit: msgLimit \}\)/)
+})
+
+test('historical sync falls back when WhatsApp Web loadEarlierMsgs path is broken', () => {
+  assert.match(syncSource, /waitForChatLoading/)
+  assert.match(syncSource, /using loaded-message fallback/)
+  assert.match(syncSource, /window\.WWebJS\.getChat\(chatId, \{ getAsModel: false \}\)/)
+  assert.match(syncSource, /chatModel\?\.msgs\?\.getModelsArray/)
+  assert.match(syncSource, /window\.WWebJS\.getMessageModel\(m\)/)
 })
 
 test('historical sync exposes status and rejects concurrent runs', () => {

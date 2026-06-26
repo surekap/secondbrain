@@ -147,10 +147,38 @@ async function _runSync(client, clientId, runId, options = {}) {
     console.log(`[sync] done — ${totalSaved} saved, ${totalSkipped} already existed`);
 }
 
+async function _fetchChatMessages(chat, msgLimit) {
+    try {
+        // fetchMessages with a high limit normally calls loadEarlierMsgs internally.
+        return await chat.fetchMessages({ limit: msgLimit });
+    } catch (err) {
+        if (!String(err.message || '').includes('waitForChatLoading')) throw err;
+        // WhatsApp Web occasionally changes ConversationMsgs internals before
+        // whatsapp-web.js catches up. Fall back to the currently-loaded message
+        // models instead of failing the whole chat. This may be shallower than a
+        // true scrollback fetch, but it preserves all locally available rows and
+        // keeps the deduped backfill useful while the upstream path is broken.
+        console.warn(`[sync]   ${chat.name || chat.id?._serialized}: fetchMessages failed (${err.message}); using loaded-message fallback`);
+        const raw = await chat.client.pupPage.evaluate((chatId, limit) => {
+            const msgFilter = (m) => !m.isNotification;
+            const getChat = async () => {
+                try { return await window.WWebJS.getChat(chatId, { getAsModel: false }); } catch (_) {}
+                try { return window.Store.Chat.get(chatId) || await window.Store.Chat.find(chatId); } catch (_) {}
+                return null;
+            };
+            return getChat().then(chatModel => {
+                const models = chatModel?.msgs?.getModelsArray ? chatModel.msgs.getModelsArray() : [];
+                let msgs = models.filter(msgFilter).sort((a, b) => (a.t > b.t ? 1 : -1));
+                if (limit > 0 && msgs.length > limit) msgs = msgs.slice(msgs.length - limit);
+                return msgs.map(m => window.WWebJS.getMessageModel(m));
+            });
+        }, chat.id._serialized, msgLimit);
+        return raw || [];
+    }
+}
+
 async function _syncChat(chat, cutoff, clientId, { msgLimit, downloadMedia }) {
-    // fetchMessages with a high limit automatically calls loadEarlierMsgs
-    // internally until it has enough messages or the store is exhausted.
-    const messages = await chat.fetchMessages({ limit: msgLimit });
+    const messages = await _fetchChatMessages(chat, msgLimit);
 
     // Messages come back sorted oldest-first. Filter to our window.
     const inWindow = messages.filter(m => new Date(m.timestamp * 1000) >= cutoff);
@@ -182,12 +210,12 @@ async function _saveMessage(msg, clientId) {
 
     // For group messages, the chat ID is msg.id.remote (the group JID).
     // For DMs, it's msg.from (for incoming) or msg.to (for outgoing).
-    const chatId  = msg.id?.remote ?? msg.from ?? null;
-    const groupId = msg.isGroup ? chatId : null;
+    const chatId  = msg.id?.remote ?? msg.from ?? msg.to ?? null;
+    const groupId = (msg.isGroup || String(chatId || '').endsWith('@g.us')) ? chatId : null;
 
     let jsonData;
     try {
-        jsonData = JSON.stringify(msg._data ?? null);
+        jsonData = JSON.stringify(msg._data ?? msg ?? null);
     } catch (_) {
         jsonData = JSON.stringify({ _error: 'could not serialize' });
     }
