@@ -1238,7 +1238,7 @@ app.get('/api/intelligence/contact-tiers', async (req, res) => {
       canonicalConditions.push(`cc.relationship_tier = $${params.length}`);
     }
     if (String(req.query.overdue || '').toLowerCase() === 'true') {
-      canonicalConditions.push(`cc.next_suggested_touch_at < NOW()`);
+      canonicalConditions.push(`rec.effective_next_suggested_touch_at < NOW()`);
     }
     if (req.query.q) {
       params.push(`%${String(req.query.q).trim().toLowerCase()}%`);
@@ -1271,26 +1271,63 @@ app.get('/api/intelligence/contact-tiers', async (req, res) => {
          AND (c.id::text = d.canonical_id OR c.id::text = ANY(d.duplicate_ids))
         ${matchWhere}
       ),
-      canonicalized AS (
-        SELECT DISTINCT ON (canonical_entity_id) *
-        FROM matched
-        ORDER BY canonical_entity_id, is_duplicate_entity ASC, matched_entity_id ASC
+      canonical_groups AS (
+        SELECT canonical_entity_id,
+               (ARRAY_AGG(matched_entity_id ORDER BY is_duplicate_entity ASC, matched_entity_id ASC))[1] AS matched_entity_id,
+               MAX(duplicate_decision_id) AS duplicate_decision_id,
+               MAX(duplicate_key) AS duplicate_key,
+               ARRAY_AGG(DISTINCT contact_id ORDER BY contact_id) AS contact_ids,
+               ARRAY_AGG(DISTINCT matched_entity_id ORDER BY matched_entity_id) AS matched_entity_ids,
+               BOOL_OR(is_duplicate_entity) AS is_duplicate_entity
+        FROM (
+          SELECT *, UNNEST(ARRAY[matched_entity_id] || COALESCE(duplicate_ids, ARRAY[]::text[])) AS contact_id
+          FROM matched
+        ) expanded
+        GROUP BY canonical_entity_id
       )
       SELECT cc.id, cc.display_name, cc.company, cc.job_title, cc.relationship_type, cc.relationship_strength,
              cc.relationship_tier, cc.strategic_importance_score, cc.preferred_cadence_days,
-             cc.dormant_threshold_days, cc.intro_sensitivity, cc.last_interaction_at, cc.next_suggested_touch_at,
-             czn.matched_entity_id, czn.canonical_entity_id, czn.duplicate_decision_id,
-             czn.duplicate_key, czn.duplicate_ids, czn.is_duplicate_entity,
-             CASE WHEN cc.next_suggested_touch_at < NOW() THEN EXTRACT(DAYS FROM NOW() - cc.next_suggested_touch_at)::int ELSE 0 END AS days_overdue,
+             cc.dormant_threshold_days, cc.intro_sensitivity,
+             rec.effective_last_interaction_at AS last_interaction_at,
+             rec.effective_next_suggested_touch_at AS next_suggested_touch_at,
+             cg.matched_entity_id, cg.canonical_entity_id, cg.duplicate_decision_id,
+             cg.duplicate_key, cg.contact_ids AS duplicate_ids, cg.is_duplicate_entity,
+             CASE WHEN rec.effective_next_suggested_touch_at < NOW() THEN EXTRACT(DAYS FROM NOW() - rec.effective_next_suggested_touch_at)::int ELSE 0 END AS days_overdue,
              COALESCE((SELECT ARRAY_AGG(key) FROM JSONB_OBJECT_KEYS(COALESCE(cc.manual_overrides, '{}'::jsonb)) AS key), '{}') AS manual_override_fields
-      FROM canonicalized czn
-      JOIN relationships.contacts cc ON cc.id::text = czn.canonical_entity_id
+      FROM canonical_groups cg
+      JOIN relationships.contacts cc ON cc.id::text = cg.canonical_entity_id
+      LEFT JOIN LATERAL (
+        SELECT MAX(touch_at) AS effective_last_interaction_at,
+               CASE WHEN MAX(touch_at) IS NOT NULL AND cc.preferred_cadence_days IS NOT NULL
+                    THEN MAX(touch_at) + (cc.preferred_cadence_days || ' days')::interval
+                    ELSE cc.next_suggested_touch_at
+               END AS effective_next_suggested_touch_at
+        FROM (
+          SELECT c2.last_interaction_at AS touch_at
+          FROM relationships.contacts c2
+          WHERE c2.id::text = ANY(cg.contact_ids)
+          UNION ALL
+          SELECT comm.occurred_at AS touch_at
+          FROM relationships.communications comm
+          WHERE comm.contact_id::text = ANY(cg.contact_ids)
+          UNION ALL
+          SELECT touch.touched_at AS touch_at
+          FROM relationships.contact_touches touch
+          WHERE touch.contact_id::text = ANY(cg.contact_ids)
+          UNION ALL
+          SELECT m.ts AS touch_at
+          FROM public.messages m
+          JOIN relationships.contacts wc ON m.chat_id = ANY(wc.wa_jids)
+          WHERE wc.id::text = ANY(cg.contact_ids)
+            AND m.event IN ('message','message_create','message_historical')
+        ) touches
+      ) rec ON true
       ${canonicalWhere}
       ORDER BY
         CASE cc.relationship_tier WHEN 'tier_1' THEN 1 WHEN 'tier_2' THEN 2 WHEN 'tier_3' THEN 3 WHEN 'unknown' THEN 4 WHEN 'noise' THEN 5 ELSE 6 END,
-        COALESCE(cc.next_suggested_touch_at, 'infinity'::timestamptz) ASC,
+        COALESCE(rec.effective_next_suggested_touch_at, 'infinity'::timestamptz) ASC,
         cc.strategic_importance_score DESC NULLS LAST,
-        cc.last_interaction_at DESC NULLS LAST
+        rec.effective_last_interaction_at DESC NULLS LAST
       LIMIT $${params.length}
     `, params);
     res.json(rows);

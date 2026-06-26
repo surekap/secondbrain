@@ -754,13 +754,52 @@ async function runIntelligenceServices(pool, options = {}) {
 
 async function tierContacts(pool) {
   const { rows } = await pool.query(`
+    WITH duplicate_members AS (
+      SELECT d.canonical_id,
+             UNNEST(ARRAY[d.canonical_id] || COALESCE(d.duplicate_ids, ARRAY[]::text[])) AS contact_id
+      FROM intelligence.duplicate_decisions d
+      WHERE d.entity_type = 'contact'
+        AND d.action = 'confirmed'
+    ),
+    contact_groups AS (
+      SELECT c.id::text AS canonical_id,
+             ARRAY_AGG(DISTINCT COALESCE(dm.contact_id, c.id::text)) AS contact_ids
+      FROM relationships.contacts c
+      LEFT JOIN duplicate_members dm
+        ON c.id::text = dm.canonical_id OR c.id::text = dm.contact_id
+      GROUP BY c.id
+    )
     SELECT c.*,
+           COALESCE(rec.effective_last_interaction_at, c.last_interaction_at) AS last_interaction_at,
            COUNT(DISTINCT comm.id)::int AS comm_count,
            COUNT(DISTINCT i.id)::int AS insight_count
     FROM relationships.contacts c
+    LEFT JOIN contact_groups cg ON cg.canonical_id = c.id::text
+    LEFT JOIN LATERAL (
+      SELECT MAX(touch_at) AS effective_last_interaction_at
+      FROM (
+        SELECT c2.last_interaction_at AS touch_at
+        FROM relationships.contacts c2
+        WHERE c2.id::text = ANY(cg.contact_ids)
+        UNION ALL
+        SELECT comm2.occurred_at AS touch_at
+        FROM relationships.communications comm2
+        WHERE comm2.contact_id::text = ANY(cg.contact_ids)
+        UNION ALL
+        SELECT touch.touched_at AS touch_at
+        FROM relationships.contact_touches touch
+        WHERE touch.contact_id::text = ANY(cg.contact_ids)
+        UNION ALL
+        SELECT m.ts AS touch_at
+        FROM public.messages m
+        JOIN relationships.contacts wc ON m.chat_id = ANY(wc.wa_jids)
+        WHERE wc.id::text = ANY(cg.contact_ids)
+          AND m.event IN ('message','message_create','message_historical')
+      ) touches
+    ) rec ON true
     LEFT JOIN relationships.communications comm ON comm.contact_id = c.id
     LEFT JOIN relationships.insights i ON i.contact_id = c.id AND COALESCE(i.is_dismissed, false) = false
-    GROUP BY c.id
+    GROUP BY c.id, rec.effective_last_interaction_at
   `)
 
   const recommendations = recommendContactTiers(rows)

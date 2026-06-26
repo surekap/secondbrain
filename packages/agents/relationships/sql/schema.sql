@@ -63,6 +63,28 @@ CREATE INDEX IF NOT EXISTS comms_occurred_at_idx   ON relationships.communicatio
 CREATE INDEX IF NOT EXISTS comms_source_idx        ON relationships.communications (source);
 CREATE INDEX IF NOT EXISTS comms_chat_id_idx       ON relationships.communications (chat_id);
 
+-- ── Contact touch ledger ──────────────────────────────────────────────────────
+-- Metadata-only relationship touches from manual corrections, WhatsApp/iOS call
+-- history, phone calls, in-person meetings, and other non-content sources.
+CREATE TABLE IF NOT EXISTS relationships.contact_touches (
+  id          BIGSERIAL PRIMARY KEY,
+  contact_id  BIGINT REFERENCES relationships.contacts(id) ON DELETE CASCADE,
+  source      TEXT NOT NULL CHECK (source IN (
+                'manual','whatsapp','whatsapp_call','ios_call','phone','in_person','email','limitless'
+              )),
+  direction   TEXT CHECK (direction IN ('inbound','outbound','missed','unknown')) DEFAULT 'unknown',
+  touched_at  TIMESTAMPTZ NOT NULL,
+  duration_seconds INT,
+  external_id TEXT,
+  note        TEXT,
+  metadata    JSONB DEFAULT '{}',
+  created_at  TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE (source, external_id, contact_id)
+);
+
+CREATE INDEX IF NOT EXISTS contact_touches_contact_idx ON relationships.contact_touches (contact_id, touched_at DESC);
+CREATE INDEX IF NOT EXISTS contact_touches_source_idx  ON relationships.contact_touches (source, touched_at DESC);
+
 -- ── Insights ──────────────────────────────────────────────────────────────────
 
 CREATE TABLE IF NOT EXISTS relationships.insights (

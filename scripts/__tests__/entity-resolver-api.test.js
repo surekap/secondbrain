@@ -27,15 +27,20 @@ test('organization search uses entity_aliases for q matching', () => {
   assert.match(routeSource, /matched_entity_id/)
 })
 
-test('contact tier q search uses entity_aliases for alias matching', () => {
+test('contact tier q search uses entity_aliases and canonical recency for alias matching', () => {
   const routeStart = source.indexOf("// GET /api/intelligence/contact-tiers — inspect contacts by tier/overdue state")
   assert.ok(routeStart > 0)
-  const routeSource = source.slice(routeStart, routeStart + 5000)
+  const routeSource = source.slice(routeStart, routeStart + 7000)
   assert.match(routeSource, /entity_aliases/)
   assert.match(routeSource, /normalized_alias/)
   assert.match(routeSource, /duplicate_decisions/)
   assert.match(routeSource, /canonical_entity_id/)
   assert.match(routeSource, /matched_entity_id/)
+  assert.match(routeSource, /effective_last_interaction_at/)
+  assert.match(routeSource, /relationships\.communications/)
+  assert.match(routeSource, /relationships\.contact_touches/)
+  assert.match(routeSource, /public\.messages/)
+  assert.match(routeSource, /ANY\(cg\.contact_ids\)/)
 })
 
 test('server exposes read-only duplicate audit endpoints', () => {
