@@ -847,6 +847,23 @@ app.post('/api/agents/:id/import', express.json({ limit: '200mb' }), async (req,
   }
 });
 
+// GET /api/health — lightweight liveness/readiness probe
+app.get('/api/health', async (req, res) => {
+  const payload = {
+    ok: true,
+    service: 'secondbrain-api',
+    db: Boolean(db),
+    timestamp: new Date().toISOString(),
+  };
+  if (!db) return res.status(503).json({ ...payload, ok: false, db: false });
+  try {
+    await db.query('SELECT 1');
+    res.json(payload);
+  } catch (error) {
+    res.status(503).json({ ...payload, ok: false, db: false, error: error.message });
+  }
+});
+
 // GET /api/config — secrets are redacted; POST /api/config accepts new values
 app.get('/api/config', (req, res) => {
   const env = readEnv();
