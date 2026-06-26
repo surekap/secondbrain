@@ -64,6 +64,11 @@ function isUncorroboratedCluster(item) {
     && (title.includes('signals on') || title.startsWith('cluster:'))
 }
 
+function isAcceptableSingleEvidence(item) {
+  const type = String(item?.opportunity_type || item?.type || '').toLowerCase()
+  return type === 'check_in' && Boolean(item?.why_now)
+}
+
 function summarizeAttentionQuality(items = [], { topN = 10 } = {}) {
   const top = items.slice(0, topN)
   const problems = []
@@ -81,7 +86,7 @@ function summarizeAttentionQuality(items = [], { topN = 10 } = {}) {
     if (isLowValueAdmin(item)) { lowValueAdmin += 1; itemProblems.push('low_value_admin') }
     if (isGenericNextAction(item)) { genericNextAction += 1; itemProblems.push('generic_next_action') }
     if (isUncorroboratedCluster(item)) { uncorroboratedCluster += 1; itemProblems.push('uncorroborated_cluster') }
-    if (evidenceCount < 2 || flags.includes('single_evidence') || flags.includes('no_evidence')) { weakEvidence += 1; itemProblems.push('weak_evidence') }
+    if (!isAcceptableSingleEvidence(item) && (evidenceCount < 2 || flags.includes('single_evidence') || flags.includes('no_evidence'))) { weakEvidence += 1; itemProblems.push('weak_evidence') }
     if (!item?.why_now) { missingWhyNow += 1; itemProblems.push('missing_why_now') }
 
     if (itemProblems.length) {
@@ -175,4 +180,5 @@ module.exports = {
   isLowValueAdmin,
   isGenericNextAction,
   isUncorroboratedCluster,
+  isAcceptableSingleEvidence,
 }

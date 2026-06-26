@@ -49,6 +49,22 @@ test('summarizeAttentionQuality flags generic clustered actions', () => {
   assert.equal(summary.problems[0].problems.includes('uncorroborated_cluster'), true)
 })
 
+test('summarizeAttentionQuality accepts relationship check-ins with a why_now as sufficient evidence', () => {
+  const summary = summarizeAttentionQuality([
+    {
+      title: 'Check in with Siddharth Agarwal',
+      opportunity_type: 'check_in',
+      recommended_next_action: 'Send Siddharth a concise check-in tied to the relationship cadence.',
+      why_now: 'tier_2 relationship crossed dormancy threshold',
+      evidence_count: 1,
+      quality_flags: ['single_evidence'],
+    }
+  ], { topN: 1 })
+
+  assert.equal(summary.weak_evidence_count, 0)
+  assert.equal(summary.problems.length, 0)
+})
+
 test('evaluateSmoke fails when contact tier summary contains unknown tier bucket', () => {
   const snapshot = {
     endpoints: [{ name: 'contact_tiers_summary', ok: true }],
