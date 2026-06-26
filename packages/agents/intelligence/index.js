@@ -14,6 +14,7 @@ const { canonicalizeEntityId, canonicalizeEntityIds } = require('./services/cano
 const { detectStaleEmailThreads } = require('./services/stale-email-thread-detector')
 const { detectCrossChannelProjectSignals } = require('./services/cross-channel-project-detector')
 const { detectRelationshipOpenLoops } = require('./services/relationship-open-loop-detector')
+const { detectHomeImprovementOpportunities } = require('./services/home-improvement-detector')
 const { extractRelationshipFactsFromText, inferContactMention } = require('../relationships/services/fact-extractor')
 
 let schemaReady = false
@@ -704,6 +705,7 @@ async function runIntelligenceServices(pool, options = {}) {
     stale_email_threads_promoted: 0,
     cross_channel_project_opportunities: 0,
     relationship_open_loop_opportunities: 0,
+    home_improvement_opportunities: 0,
     relationship_facts_extracted: 0,
   }
   log('info', 'Starting intelligence pipeline')
@@ -950,6 +952,44 @@ async function runIntelligenceServices(pool, options = {}) {
     }
     stats.relationship_open_loop_opportunities = relationshipOpenLoopCount
     log('info', 'Relationship open-loop promotion complete', { count: relationshipOpenLoopCount })
+
+    log('info', 'Detecting home-improvement project opportunities')
+    const homeImprovement = detectHomeImprovementOpportunities({ lifelogs: lifelogResult.rows })
+    log('info', 'Detected home-improvement project candidates', { count: homeImprovement.length })
+    const activeHomeImprovementRefs = new Set(homeImprovement.map(candidate => candidate.source_ref).filter(Boolean))
+    const existingHomeImprovement = await pool.query(`
+      SELECT source_ref
+      FROM intelligence.opportunities
+      WHERE status = 'open'
+        AND source_system = 'signals'
+        AND source_ref LIKE 'home_improvement_project:%'
+    `)
+    const staleHomeImprovementRefs = existingHomeImprovement.rows
+      .map(row => row.source_ref)
+      .filter(ref => !activeHomeImprovementRefs.has(ref))
+    if (staleHomeImprovementRefs.length) {
+      await pool.query(`
+        UPDATE intelligence.opportunities
+        SET status = 'dismissed',
+            feedback = COALESCE(feedback, 'closed_or_no_longer_detected'),
+            feedback_note = COALESCE(feedback_note, 'Auto-dismissed: home-improvement detector no longer validates this item'),
+            dismissed_at = COALESCE(dismissed_at, NOW()),
+            updated_at = NOW()
+        WHERE source_ref = ANY($1::text[])
+      `, [staleHomeImprovementRefs])
+    }
+    let homeImprovementCount = 0
+    for (const candidate of homeImprovement) {
+      try {
+        const opportunityId = await upsertOpportunity(candidate)
+        for (const evidence of candidate.evidence || []) await addEvidence(opportunityId, evidence)
+        homeImprovementCount++
+      } catch (error) {
+        log('error', 'Failed to promote home-improvement project opportunity', { source_ref: candidate.source_ref, error: error.message })
+      }
+    }
+    stats.home_improvement_opportunities = homeImprovementCount
+    log('info', 'Home-improvement project promotion complete', { count: homeImprovementCount })
 
     log('info', 'Extracting durable relationship facts')
     let relationshipFactCount = 0

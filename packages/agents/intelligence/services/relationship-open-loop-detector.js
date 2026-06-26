@@ -60,6 +60,14 @@ function classifyOpenLoop(messages = []) {
   return candidate
 }
 
+function isSuppressedOpenLoop(contact = {}, text = '') {
+  const name = String(contactName(contact)).toLowerCase()
+  const body = String(text || '').toLowerCase()
+  // User-confirmed false positive: this direct row is not actionable intelligence about Nikhil.
+  if (/\bnikhil\s+mehra\b/.test(name) && /\bdiving\s+trip\b/.test(body)) return true
+  return false
+}
+
 function detectRelationshipOpenLoops(input = {}) {
   const contacts = input.contacts || []
   const directMessages = input.directMessages || []
@@ -79,6 +87,7 @@ function detectRelationshipOpenLoops(input = {}) {
     if (!messages.length) continue
     const open = classifyOpenLoop(messages)
     if (!open) continue
+    if (isSuppressedOpenLoop(contact, open.text)) continue
     const name = contactName(contact)
     const text = open.text
     const direction = open.from_me ? 'outbound' : 'inbound'

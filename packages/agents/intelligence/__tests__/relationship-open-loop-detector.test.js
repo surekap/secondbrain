@@ -13,13 +13,12 @@ test('surfaces Sivaram remittance open loop', () => {
   assert.match(out[0].description, /remittance|Drawdown/i)
 })
 
-test('surfaces Nikhil cancelled diving trip / plan loop even for weak friend', () => {
+test('suppresses user-confirmed false positive Nikhil diving-trip attribution', () => {
   const out = detectRelationshipOpenLoops({
     contacts: [{ id: 63, display_name: 'Nikhil Mehra', relationship_tier: 'noise', relationship_type: 'friend', is_noise: true }],
     directMessages: [{ contact_id: 63, source_id: 'nikhil-1', ts: '2026-03-06T06:09:54Z', from_me: false, body: 'Am assuming diving trip is cancelled. Now the plan is ?' }]
   })
-  assert.equal(out.length, 1)
-  assert.match(out[0].description, /diving trip|plan/i)
+  assert.equal(out.length, 0)
 })
 
 test('surfaces Vivek Gupta membership/intro direct-chat loop', () => {

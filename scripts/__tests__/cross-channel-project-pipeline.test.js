@@ -32,6 +32,13 @@ test('intelligence pipeline promotes direct relationship open loops', () => {
   assert.match(indexSource, /Auto-dismissed: direct relationship open-loop detector no longer validates/)
 })
 
+test('intelligence pipeline promotes home-improvement lifelog opportunities', () => {
+  assert.match(indexSource, /detectHomeImprovementOpportunities/)
+  assert.match(indexSource, /home_improvement_opportunities/)
+  assert.match(indexSource, /source_ref LIKE 'home_improvement_project:%'/)
+  assert.match(indexSource, /Auto-dismissed: home-improvement detector no longer validates/)
+})
+
 test('intelligence pipeline extracts durable relationship facts from source rows', () => {
   assert.match(indexSource, /extractRelationshipFactsFromText/)
   assert.match(indexSource, /upsertContactFact/)
