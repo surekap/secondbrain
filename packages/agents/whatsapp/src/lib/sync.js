@@ -136,8 +136,7 @@ async function _runSync(client, clientId, runId, options = {}) {
             syncState.totalSkipped = totalSkipped;
             if (telemetry && runId) telemetry.progress(runId, 'messages_synced', { completed: totalSaved });
         } catch (err) {
-            // Suppress known whatsapp-web.js internal errors for unsupported chat types
-            if (err.message?.includes('waitForChatLoading')) continue;
+            syncState.completedChats += 1;
             syncState.errors.push({ chat: name, error: err.message, ts: new Date().toISOString() });
             console.error(`[sync]   ${name}: error — ${err.message}`);
         }
