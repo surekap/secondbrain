@@ -11,6 +11,7 @@ const { buildSignalClusters, shouldPromoteCluster, opportunityFromCluster, clust
 const { recommendContactTiers } = require('./services/contact-tierer')
 const { extractAliases, normalized: normalizeAlias } = require('./services/alias-extractor')
 const { canonicalizeEntityId, canonicalizeEntityIds } = require('./services/canonical-ids')
+const { detectStaleEmailThreads } = require('./services/stale-email-thread-detector')
 
 let schemaReady = false
 
@@ -601,6 +602,44 @@ async function upsertFromGroupOpportunity(groupId, group, opportunity, index = 0
   }
 }
 
+async function upsertFromStaleEmailThread(thread) {
+  if (!thread?.latest_action_email_id) return null
+  const contactId = await resolveContactFromEmail(db, thread.latest_action_email_id)
+  const opportunityId = await upsertOpportunity({
+    opportunity_type: 'email_response_gap',
+    title: thread.title,
+    description: thread.description,
+    recommended_next_action: thread.recommended_next_action,
+    why_now: thread.why_now,
+    priority: thread.age_days >= 30 ? 'high' : 'medium',
+    confidence: 0.82,
+    impact_score: thread.age_days >= 30 ? 75 : 60,
+    urgency_score: Math.min(90, 45 + Math.floor(thread.age_days / 2)),
+    relationship_score: contactId ? 70 : 50,
+    source_system: 'signals',
+    source_ref: `email_thread:${thread.thread_key}`,
+    dedupe_key: `email_thread:${thread.thread_key}`,
+    primary_contact_id: contactId || null,
+    metadata: thread.metadata || {},
+  })
+  await addEvidence(opportunityId, {
+    source_table: 'email.emails',
+    source_id: thread.latest_action_email_id,
+    source_ref: `email:${thread.latest_action_email_id}`,
+    occurred_at: thread.latest_action_at || thread.latest_at || null,
+    quote: thread.quote,
+    relevance: 0.9,
+    metadata: {
+      thread_key: thread.thread_key,
+      latest_email_id: thread.latest_email_id,
+      pending_direction: thread.pending_direction,
+      age_days: thread.age_days,
+    },
+  })
+  if (contactId) await linkContacts(opportunityId, [contactId], contactId)
+  return opportunityId
+}
+
 async function runIntelligenceServices(pool, options = {}) {
   const log = typeof options.log === 'function'
     ? options.log
@@ -619,6 +658,7 @@ async function runIntelligenceServices(pool, options = {}) {
     contacts_tiered: 0,
     contacts_with_next_touch: 0,
     dormancy_opportunities: 0,
+    stale_email_threads_promoted: 0,
   }
   log('info', 'Starting intelligence pipeline')
 
@@ -674,10 +714,25 @@ async function runIntelligenceServices(pool, options = {}) {
 
     // Step 3: Extract durable weak signals from multiple sources.
     log('info', 'Extracting weak signals')
-    const emailsResult = await pool.query('SELECT * FROM email.emails WHERE COALESCE(date, received_at, created_at) > NOW() - INTERVAL \'45 days\' ORDER BY COALESCE(date, received_at, created_at) DESC LIMIT 5000')
+    const emailsResult = await pool.query('SELECT * FROM email.emails WHERE COALESCE(date, received_at, created_at) > NOW() - INTERVAL \'120 days\' ORDER BY COALESCE(date, received_at, created_at) DESC LIMIT 10000')
     const whatsappResult = await pool.query('SELECT * FROM public.messages WHERE ts > NOW() - INTERVAL \'45 days\' ORDER BY ts DESC LIMIT 5000')
     const lifelogResult = await pool.query('SELECT * FROM limitless.lifelogs WHERE COALESCE(start_time, created_at) > NOW() - INTERVAL \'45 days\' ORDER BY COALESCE(start_time, created_at) DESC LIMIT 2000')
     log('info', 'Loaded signal inputs', { emails: emailsResult.rows.length, whatsapp: whatsappResult.rows.length, lifelogs: lifelogResult.rows.length, groups: groupsResult.rows.length, opportunities: opportunitiesResult.rows.length })
+
+    const staleThreads = detectStaleEmailThreads(emailsResult.rows, { staleDays: 14 })
+    log('info', 'Detected stale email thread candidates', { count: staleThreads.length })
+    let staleThreadCount = 0
+    for (const thread of staleThreads) {
+      try {
+        await upsertFromStaleEmailThread(thread)
+        staleThreadCount++
+      } catch (error) {
+        log('error', 'Failed to promote stale email thread', { thread_key: thread.thread_key, error: error.message })
+      }
+    }
+    stats.stale_email_threads_promoted = staleThreadCount
+    log('info', 'Stale email thread promotion complete', { count: staleThreadCount })
+
     const signalInputs = [
       ...(await extractSignals(emailsResult.rows, 'email')),
       ...(await extractSignals(whatsappResult.rows, 'whatsapp')),
