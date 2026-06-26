@@ -765,6 +765,28 @@ async function runIntelligenceServices(pool, options = {}) {
 
     const staleThreads = detectStaleEmailThreads(emailsResult.rows, { staleDays: 14 })
     log('info', 'Detected stale email thread candidates', { count: staleThreads.length })
+    const activeEmailThreadRefs = new Set(staleThreads.map(thread => `email_thread:${thread.thread_key}`))
+    const existingEmailThreads = await pool.query(`
+      SELECT source_ref
+      FROM intelligence.opportunities
+      WHERE status = 'open'
+        AND opportunity_type = 'email_response_gap'
+        AND source_ref LIKE 'email_thread:%'
+    `)
+    const staleEmailThreadRefs = existingEmailThreads.rows
+      .map(row => row.source_ref)
+      .filter(ref => !activeEmailThreadRefs.has(ref))
+    if (staleEmailThreadRefs.length) {
+      await pool.query(`
+        UPDATE intelligence.opportunities
+        SET status = 'dismissed',
+            feedback = COALESCE(feedback, 'false_positive'),
+            feedback_note = COALESCE(feedback_note, 'Auto-dismissed: stale-email detector no longer validates this thread'),
+            dismissed_at = COALESCE(dismissed_at, NOW()),
+            updated_at = NOW()
+        WHERE source_ref = ANY($1::text[])
+      `, [staleEmailThreadRefs])
+    }
     let staleThreadCount = 0
     for (const thread of staleThreads) {
       try {
@@ -923,12 +945,20 @@ async function runIntelligenceServices(pool, options = {}) {
     stats.relationship_facts_extracted = relationshipFactCount
     log('info', 'Relationship fact extraction complete', { count: relationshipFactCount })
 
+    const removedGeneratedSignals = await pool.query(`
+      DELETE FROM intelligence.signals
+      WHERE source_table IN ('opportunities', 'intelligence.opportunities')
+      RETURNING id
+    `)
+    if (removedGeneratedSignals.rowCount) {
+      log('info', 'Removed generated-opportunity feedback-loop signals', { count: removedGeneratedSignals.rowCount })
+    }
+
     const signalInputs = [
       ...(await extractSignals(emailsResult.rows, 'email')),
       ...(await extractSignals(whatsappResult.rows, 'whatsapp')),
       ...(await extractSignals(lifelogResult.rows, 'limitless')),
       ...(await extractSignals(groupsResult.rows, 'groups')),
-      ...(await extractSignals(opportunitiesResult.rows, 'opportunities')),
     ]
     log('info', 'Extracted weak signal candidates', { count: signalInputs.length })
     let signalCount = 0

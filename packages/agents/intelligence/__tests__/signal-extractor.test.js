@@ -25,3 +25,16 @@ test('signal-extractor: deduplicates on source_id_hash', async () => {
   const offerCount = signals.filter(s => s.signal_type === 'offer').length;
   assert.strictEqual(offerCount, 1, 'should deduplicate identical signals');
 });
+
+test('signal-extractor: does not feed generated opportunities back into weak signals', async () => {
+  const signals = await extractSignals([
+    {
+      id: 1,
+      title: 'Prateek Sureka: risk signals on security',
+      description: 'Ask Prateek Sureka to confirm the risk and owner',
+      source_ref: 'cross_channel_project:1:2:284',
+      primary_contact_name: 'Prateek Sureka'
+    }
+  ], 'opportunities');
+  assert.strictEqual(signals.length, 0);
+});

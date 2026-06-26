@@ -115,11 +115,18 @@ function strengthFor(signalType, text, sourceTable) {
   return Math.min(strength, 85);
 }
 
+function isSkippableOpportunity(record) {
+  if (record?.source_ref && /^(cross_channel_project|email_thread):/i.test(String(record.source_ref))) return true;
+  if (record?.primary_contact_name && /\bprateek\s+sureka\b/i.test(String(record.primary_contact_name))) return true;
+  return true; // Opportunities are outputs, not raw evidence. Never feed them back into weak-signal extraction.
+}
+
 async function extractSignals(records, sourceTable) {
   const signals = [];
   const seen = new Set();
 
   for (const record of records || []) {
+    if (sourceTable === 'opportunities' && isSkippableOpportunity(record)) continue;
     const text = extractText(record, sourceTable);
     if (!text) continue;
     const id = sourceId(record, sourceTable);

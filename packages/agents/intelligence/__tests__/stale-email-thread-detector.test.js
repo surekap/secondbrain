@@ -66,3 +66,12 @@ test('stale-email-thread-detector: promotes old external request with no later c
 test('stale-email-thread-detector: strips repeated reply prefixes', () => {
   assert.equal(stripReplyPrefix('Re: Fwd: RE:  Test subject'), 'Test subject')
 })
+
+test('stale-email-thread-detector: ignores newsletters, itineraries, and bulk transactional mail', () => {
+  const emails = [
+    { id: 10, subject: 'Unlock AI-driven insights with Dell', from_address: 'Dell Technologies <DellTechnologies_APJ@comm.delltechnologies.com>', date: '2026-06-01T00:00:00Z', body_text: 'View Online unsubscribe please click to learn more' },
+    { id: 11, subject: 'Your IndiGo Itinerary - OB88MG', from_address: 'IndiGo <reservations@customer.goindigo.in>', date: '2026-06-01T00:00:00Z', body_text: 'Payment Status CONFIRMED Please arrive at airport' },
+  ]
+  const stale = detectStaleEmailThreads(emails, { now: '2026-06-26T00:00:00Z', staleDays: 14 })
+  assert.equal(stale.length, 0)
+})

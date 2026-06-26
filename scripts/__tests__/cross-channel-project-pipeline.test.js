@@ -16,6 +16,8 @@ test('intelligence pipeline promotes cross-channel project opportunities', () =>
   assert.match(indexSource, /JOIN relationships\.contacts c ON c\.wa_jids @> ARRAY\[m\.chat_id\]::text\[\]/)
   assert.match(indexSource, /source_ref LIKE 'cross_channel_project:%'/)
   assert.match(indexSource, /Auto-dismissed: cross-channel detector no longer validates/)
+  assert.match(indexSource, /source_table IN \('opportunities', 'intelligence\.opportunities'\)/)
+  assert.doesNotMatch(indexSource, /extractSignals\(opportunitiesResult\.rows, 'opportunities'\)/)
   const detectorSource = fs.readFileSync(path.join(__dirname, '../../packages/agents/intelligence/services/cross-channel-project-detector.js'), 'utf8')
   assert.match(detectorSource, /source_ref: `cross_channel_project:/)
 })

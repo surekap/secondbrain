@@ -30,6 +30,30 @@ const CLOSING_PATTERNS = [
   /\bwill revert\b/i,
 ]
 
+const BULK_SENDER_PATTERNS = [
+  /\b(no-?reply|donotreply|newsletter|marketing|promo|promotions|reservations|customer|notifications?)@/i,
+  /@comm\.delltechnologies\.com$/i,
+  /@customer\.goindigo\.in$/i,
+]
+
+const BULK_SUBJECT_PATTERNS = [
+  /\bnewsletter\b/i,
+  /\bitinerary\b/i,
+  /\bbooking\b/i,
+  /\bpnr\b/i,
+  /\bwebinar\b/i,
+  /\bunlock ai\b/i,
+  /\bproduct updates?\b/i,
+  /\bdispatch\b/i,
+]
+
+const BULK_BODY_PATTERNS = [
+  /\bview online\b/i,
+  /\bunsubscribe\b/i,
+  /click\.comm\./i,
+  /\bpayment status\s+confirmed\b/i,
+]
+
 function compact(value, max = 500) {
   return String(value || '').replace(/\s+/g, ' ').trim().slice(0, max)
 }
@@ -70,6 +94,18 @@ function hasClosingLanguage(email) {
   return CLOSING_PATTERNS.some(p => p.test(text))
 }
 
+function isBulkOrTransactional(email) {
+  const sender = senderAddress(email.from_address || email.from_addr || '')
+  const subject = String(email.subject || '')
+  const body = String(email.body_text || email.body || '')
+  if (BULK_SENDER_PATTERNS.some(p => p.test(sender))) return true
+  if (BULK_SUBJECT_PATTERNS.some(p => p.test(subject))) return true
+  let bulkHits = 0
+  for (const p of BULK_BODY_PATTERNS) if (p.test(body)) bulkHits++
+  if (bulkHits >= 1 && body.length > 500) return true
+  return false
+}
+
 function latestByDate(emails) {
   return [...emails].sort((a, b) => (emailAt(b)?.getTime() || 0) - (emailAt(a)?.getTime() || 0))[0]
 }
@@ -87,7 +123,7 @@ function detectStaleEmailThreads(emails, options = {}) {
 
   const out = []
   for (const [key, thread] of groups.entries()) {
-    const dated = thread.filter(e => emailAt(e))
+    const dated = thread.filter(e => emailAt(e) && !isBulkOrTransactional(e))
     if (!dated.length) continue
     const latest = latestByDate(dated)
     const latestAt = emailAt(latest)
@@ -143,4 +179,5 @@ module.exports = {
   isInternalAddress,
   hasPendingLanguage,
   hasClosingLanguage,
+  isBulkOrTransactional,
 }
