@@ -99,6 +99,20 @@ function InsightCard({ item, type, onAction, onDismiss, groupsMap }) {
   )
 }
 
+async function fetchJson(path, { fallback = null, timeoutMs = 8000 } = {}) {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  try {
+    const res = await fetch(path, { signal: controller.signal })
+    if (!res.ok) return fallback
+    return await res.json()
+  } catch {
+    return fallback
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
 export default function DashboardPage() {
   const [relInsights, setRelInsights]     = useState([])
   const [projInsights, setProjInsights]   = useState([])
@@ -111,30 +125,38 @@ export default function DashboardPage() {
   const [loading, setLoading]             = useState(true)
 
   async function load() {
-    try {
-      const [ri, pi, rs, ps, ra, gr, aq, ds] = await Promise.all([
-        fetch('/api/relationships/insights').then(r => r.json()),
-        fetch('/api/projects/insights/open').then(r => r.json()),
-        fetch('/api/relationships/stats').then(r => r.json()),
-        fetch('/api/projects/stats').then(r => r.json()),
-        fetch('/api/projects/activity/recent').then(r => r.json()),
-        fetch('/api/relationships/groups').then(r => r.json()),
-        fetch('/api/intelligence/attention?limit=5').then(r => r.ok ? r.json() : []).catch(() => []),
-        fetch('/api/intelligence/duplicates/summary?limit=3').then(r => r.ok ? r.json() : null).catch(() => null),
-      ])
-      if (Array.isArray(ri)) setRelInsights(ri)
-      if (Array.isArray(pi)) setProjInsights(pi)
-      if (rs && !rs.error)  setRelStats(rs)
-      if (ps && !ps.error)  setProjStats(ps)
-      if (Array.isArray(ra)) setRecentActivity(ra.slice(0, 8))
-      if (Array.isArray(aq)) setAttentionItems(aq)
-      if (ds && !ds.error) setDuplicateSummary(ds)
-      if (Array.isArray(gr)) {
-        const map = {}
-        for (const g of gr) if (g.wa_chat_id && g.name) map[g.wa_chat_id] = g.name
-        setGroupsMap(map)
-      }
-    } catch { /* ignore */ }
+    const [ri, pi, rs, ps, ra, gr, aq, ds] = await Promise.allSettled([
+      fetchJson('/api/relationships/insights', { fallback: [], timeoutMs: 8000 }),
+      fetchJson('/api/projects/insights/open', { fallback: [], timeoutMs: 8000 }),
+      fetchJson('/api/relationships/stats', { fallback: null, timeoutMs: 8000 }),
+      fetchJson('/api/projects/stats', { fallback: null, timeoutMs: 8000 }),
+      fetchJson('/api/projects/activity/recent', { fallback: [], timeoutMs: 8000 }),
+      fetchJson('/api/relationships/groups', { fallback: [], timeoutMs: 3000 }),
+      fetchJson('/api/intelligence/attention?limit=5', { fallback: [], timeoutMs: 5000 }),
+      fetchJson('/api/intelligence/duplicates/summary?limit=3', { fallback: null, timeoutMs: 5000 }),
+    ])
+    const value = result => result.status === 'fulfilled' ? result.value : null
+    const relInsightData = value(ri)
+    const projectInsightData = value(pi)
+    const relStatsData = value(rs)
+    const projectStatsData = value(ps)
+    const recentActivityData = value(ra)
+    const groupsData = value(gr)
+    const attentionData = value(aq)
+    const duplicateData = value(ds)
+
+    if (Array.isArray(relInsightData)) setRelInsights(relInsightData)
+    if (Array.isArray(projectInsightData)) setProjInsights(projectInsightData)
+    if (relStatsData && !relStatsData.error) setRelStats(relStatsData)
+    if (projectStatsData && !projectStatsData.error) setProjStats(projectStatsData)
+    if (Array.isArray(recentActivityData)) setRecentActivity(recentActivityData.slice(0, 8))
+    if (Array.isArray(attentionData)) setAttentionItems(attentionData)
+    if (duplicateData && !duplicateData.error) setDuplicateSummary(duplicateData)
+    if (Array.isArray(groupsData)) {
+      const map = {}
+      for (const g of groupsData) if (g.wa_chat_id && g.name) map[g.wa_chat_id] = g.name
+      setGroupsMap(map)
+    }
     setLoading(false)
   }
 
