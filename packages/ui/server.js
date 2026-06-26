@@ -958,6 +958,7 @@ app.put('/api/system/config', async (req, res) => {
   try {
     const { setConfig } = require('../agents/shared/config');
     for (const [key, value] of Object.entries(updates)) {
+      if (value === '[REDACTED]') continue;
       await setConfig(`system.${key}`, value);
     }
     res.json({ ok: true });
@@ -1000,7 +1001,7 @@ app.post('/api/config', (req, res) => {
                     'ANTHROPIC_API_KEY', 'OPENAI_API_KEY',
                     'AI_ANTHROPIC_MODEL', 'AI_OPENAI_MODEL', 'AI_CLAUDE_CLI_MODEL'];
       for (const k of keys) {
-        if (updates[k] != null) envUpdates[k] = updates[k];
+        if (updates[k] != null && updates[k] !== '[REDACTED]') envUpdates[k] = updates[k];
       }
     }
 
@@ -2899,6 +2900,7 @@ app.put('/api/system/agents/:id/config', async (req, res) => {
   try {
     const { setConfig } = require('../agents/shared/config');
     for (const [key, value] of Object.entries(updates)) {
+      if (value === '[REDACTED]') continue;
       await setConfig(`${schema}.${key}`, value);
     }
     res.json({ ok: true });
