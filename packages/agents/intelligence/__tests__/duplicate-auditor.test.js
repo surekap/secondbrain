@@ -50,6 +50,7 @@ test('duplicate-auditor: contact audit is read-only and returns candidate groups
   assert.match(calls[0].sql, /SELECT grouped\.duplicate_key/)
   assert.match(calls[0].sql, /ORDER BY confidence DESC, duplicate_count DESC, obligation_count DESC, grouped\.duplicate_key ASC/)
   assert.match(calls[0].sql, /HAVING COUNT\(\*\) > 1/)
+  assert.match(calls[0].sql, /COUNT\(\*\) FILTER \(WHERE COALESCE\(relationship_tier, ''\) <> 'noise'\) > 0/)
   assert.doesNotMatch(calls[0].sql, /\b(UPDATE|DELETE|MERGE)\b/i)
   assert.equal(calls[0].params[0], 5)
 })

@@ -80,6 +80,7 @@ async function auditDuplicateContacts(pool, options = {}) {
       WHERE LENGTH(duplicate_key) >= 5
       GROUP BY duplicate_key
       HAVING COUNT(*) > 1
+         AND COUNT(*) FILTER (WHERE COALESCE(relationship_tier, '') <> 'noise') > 0
     )
     SELECT grouped.duplicate_key,
            duplicate_count,
