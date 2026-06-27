@@ -224,6 +224,21 @@ async function mergeContactRecords(pool, canonicalId, duplicateIds = [], options
          AND d.identity_value = c.identity_value
          AND d.is_active = TRUE
          AND c.is_active = TRUE`,
+      `DELETE FROM intelligence.entity_aliases d
+       USING intelligence.entity_aliases c
+       WHERE d.entity_type = 'contact'
+         AND c.entity_type = 'contact'
+         AND d.entity_id = ANY($2::text[])
+         AND c.entity_id = $1
+         AND d.normalized_alias = c.normalized_alias`,
+      `DELETE FROM intelligence.object_topics d
+       USING intelligence.object_topics c
+       WHERE d.object_type = 'contact'
+         AND c.object_type = 'contact'
+         AND d.object_id = ANY($2::text[])
+         AND c.object_id = $1
+         AND d.topic_id = c.topic_id
+         AND COALESCE(d.role, 'mentioned') = COALESCE(c.role, 'mentioned')`,
     ]
     for (const sql of conflictDeletes) {
       try { await run(sql) } catch (err) {
