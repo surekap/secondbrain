@@ -932,7 +932,7 @@ async function runIntelligenceServices(pool, options = {}) {
       await pool.query(`
         UPDATE intelligence.opportunities
         SET status = 'dismissed',
-            feedback = COALESCE(feedback, 'closed_or_no_longer_detected'),
+            feedback = COALESCE(feedback, 'false_positive'),
             feedback_note = COALESCE(feedback_note, 'Auto-dismissed: direct relationship open-loop detector no longer validates this item'),
             dismissed_at = COALESCE(dismissed_at, NOW()),
             updated_at = NOW()
@@ -971,7 +971,7 @@ async function runIntelligenceServices(pool, options = {}) {
       await pool.query(`
         UPDATE intelligence.opportunities
         SET status = 'dismissed',
-            feedback = COALESCE(feedback, 'closed_or_no_longer_detected'),
+            feedback = COALESCE(feedback, 'false_positive'),
             feedback_note = COALESCE(feedback_note, 'Auto-dismissed: home-improvement detector no longer validates this item'),
             dismissed_at = COALESCE(dismissed_at, NOW()),
             updated_at = NOW()
