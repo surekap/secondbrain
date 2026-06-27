@@ -8,6 +8,7 @@ const NAV_LINKS = [
   { href: "/relationships", label: "Relationships" },
   { href: "/groups", label: "Groups" },
   { href: "/projects", label: "Projects" },
+  { href: "/intelligence", label: "Intelligence" },
   { href: "/agents", label: "Agents" },
   { href: "/search", label: "Search" },
   { href: "/observe", label: "Observe" },
