@@ -967,7 +967,7 @@ async function runIntelligenceServices(pool, options = {}) {
     log('info', 'Relationship open-loop promotion complete', { count: relationshipOpenLoopCount })
 
     log('info', 'Detecting home-improvement project opportunities')
-    const homeImprovement = detectHomeImprovementOpportunities({ lifelogs: lifelogResult.rows })
+    const homeImprovement = detectHomeImprovementOpportunities({ lifelogs: lifelogResult.rows, emails: emailsResult.rows })
     log('info', 'Detected home-improvement project candidates', { count: homeImprovement.length })
     const activeHomeImprovementRefs = new Set(homeImprovement.map(candidate => candidate.source_ref).filter(Boolean))
     const existingHomeImprovement = await pool.query(`

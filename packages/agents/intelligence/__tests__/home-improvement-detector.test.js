@@ -1,27 +1,50 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
-const { detectHomeImprovementOpportunities, isHomeImprovementLifelog } = require('../services/home-improvement-detector')
+const {
+  detectHomeImprovementOpportunities,
+  isHomeImprovementEmail,
+  isHomeImprovementLifelog,
+} = require('../services/home-improvement-detector')
 
-test('detects Jxtapose home renovation lifelog even when ASR says just to pose', () => {
-  const lifelog = {
-    id: '4H8G36cYecxMRjTPgdSt',
-    title: 'Discussion about house renovation',
-    start_time: '2026-05-21T00:34:23.000Z',
-    markdown: 'meeting with just to pose for the renovation of the house with Gayatri. Nandita joined. Review proposed workflow of using an interior PMC to manage civil electrical and plumbing work.',
+test('detects Jxtapose home renovation evidence from emails', () => {
+  const email = {
+    id: 57354,
+    subject: "Concept renders and services drawings for Prateek & Nanditha's residence",
+    from_address: '"jxp designhouse" <jxpdesignhouse@gmail.com>',
+    date: '2026-06-17T15:31:31+05:30',
+    body_text: 'PFA the concept render document and service drawings AutoCAD files, which include Floor plan, Brick marking & demolition layout, Electrical layout, Plumbing layout, HVAC layout, RCP layout. Regards, Vijay Jxtapose',
   }
-  assert.equal(isHomeImprovementLifelog(lifelog), true)
-  const out = detectHomeImprovementOpportunities({ lifelogs: [lifelog] })
-  assert.equal(out.length, 1)
-  assert.equal(out[0].opportunity_type, 'project_opportunity')
-  assert.match(out[0].title, /Home renovation with Jxtapose/i)
-  assert.match(out[0].description, /just to pose|Gayatri|PMC/i)
-  assert.equal(out[0].metadata.vendor, 'Jxtapose')
-  assert.deepEqual(out[0].metadata.members.sort(), ['Gayatri', 'Nandita'].sort())
+
+  assert.equal(isHomeImprovementEmail(email), true)
+  const opportunities = detectHomeImprovementOpportunities({ emails: [email], lifelogs: [] })
+  assert.equal(opportunities.length, 1)
+  assert.equal(opportunities[0].source_ref, 'home_improvement_project:jxtapose_residence')
+  assert.equal(opportunities[0].metadata.email_count, 1)
+  assert.equal(opportunities[0].evidence[0].source_table, 'email.emails')
+  assert.match(opportunities[0].description, /concept renders/i)
+  assert.match(opportunities[0].recommended_next_action, /GFC drawings|site-documentation payment/i)
 })
 
-test('does not promote generic home chatter without Jxtapose alias', () => {
-  const out = detectHomeImprovementOpportunities({
-    lifelogs: [{ id: 'x', title: 'Personal updates and home setup', markdown: 'Moving home next Saturday and household stuff.' }],
-  })
-  assert.equal(out.length, 0)
+test('combines Jxtapose lifelog and emails into one corroborated opportunity', () => {
+  const lifelog = {
+    id: 'life-1',
+    title: 'Discussion about house renovation',
+    start_time: '2026-05-21T06:04:23Z',
+    markdown: 'meeting with just to pose for the renovation of the house with Gayatri and Nandita',
+  }
+  const email = {
+    id: 57375,
+    subject: "Re: Concept renders and services drawings for Prateek & Nanditha's residence",
+    from_address: '"jxp designhouse" <jxpdesignhouse@gmail.com>',
+    date: '2026-06-23T10:04:58+05:30',
+    body_text: 'PFA the window drawing intent. Regards, Vijay Jxtapose',
+  }
+
+  assert.equal(isHomeImprovementLifelog(lifelog), true)
+  const opportunities = detectHomeImprovementOpportunities({ lifelogs: [lifelog], emails: [email] })
+  assert.equal(opportunities.length, 1)
+  assert.equal(opportunities[0].metadata.email_count, 1)
+  assert.equal(opportunities[0].metadata.lifelog_count, 1)
+  assert.equal(opportunities[0].evidence.length, 2)
+  assert.match(opportunities[0].why_now, /2026-06-23/)
 })
