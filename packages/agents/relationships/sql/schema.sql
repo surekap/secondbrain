@@ -37,6 +37,29 @@ CREATE INDEX IF NOT EXISTS contacts_emails_idx          ON relationships.contact
 CREATE INDEX IF NOT EXISTS contacts_last_interaction_idx ON relationships.contacts (last_interaction_at DESC);
 CREATE INDEX IF NOT EXISTS contacts_is_noise_idx        ON relationships.contacts (is_noise);
 
+-- ── Canonical source identities ────────────────────────────────────────────────
+-- Stable per-source identity keys for preventing duplicate people across
+-- WhatsApp, email, phone, Apple Contacts, Limitless, and manual corrections.
+-- relationships.contacts remains the canonical person/profile row.
+CREATE TABLE IF NOT EXISTS relationships.contact_identities (
+  id             BIGSERIAL PRIMARY KEY,
+  contact_id     BIGINT NOT NULL REFERENCES relationships.contacts(id) ON DELETE CASCADE,
+  source         TEXT NOT NULL CHECK (source IN ('whatsapp','email','phone','apple_contacts','manual','limitless')),
+  identity_type  TEXT NOT NULL CHECK (identity_type IN ('wa_jid','email','phone','apple_contact_id','name_alias','limitless_speaker')),
+  identity_value TEXT NOT NULL,
+  confidence     NUMERIC(5,4) CHECK (confidence IS NULL OR (confidence >= 0 AND confidence <= 1)),
+  verified_by    TEXT DEFAULT 'system',
+  is_active      BOOLEAN DEFAULT TRUE,
+  metadata       JSONB DEFAULT '{}',
+  created_at     TIMESTAMPTZ DEFAULT NOW(),
+  updated_at     TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS contact_identities_unique_active_idx
+  ON relationships.contact_identities (source, identity_type, identity_value)
+  WHERE is_active;
+CREATE INDEX IF NOT EXISTS contact_identities_contact_idx
+  ON relationships.contact_identities (contact_id, is_active);
+
 -- ── Communications ────────────────────────────────────────────────────────────
 
 CREATE TABLE IF NOT EXISTS relationships.communications (

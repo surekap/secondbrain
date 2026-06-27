@@ -14,6 +14,7 @@ const opportunities = require('./services/opportunities')
 const intelligence   = require('../intelligence')
 const batching      = require('../shared/batching')
 const caching       = require('../shared/caching')
+const identity      = require('./services/identity')
 
 let telemetry = null
 try { telemetry = require('@secondbrain/telemetry') } catch (_) {}
@@ -30,6 +31,7 @@ async function ensureSchema() {
   try {
     const sql = fs.readFileSync(path.resolve(__dirname, 'sql/schema.sql'), 'utf8')
     await db.query(sql)
+    await identity.ensureIdentitySchema(db)
     console.log('✅ Schema ready')
   } catch (err) {
     console.error('❌ Schema setup error:', err.message)
@@ -54,16 +56,30 @@ async function upsertContact(profile, chatId) {
   const waJid = chatId
 
   try {
-    // Try to find existing by wa_jid
-    const { rows: existing } = await db.query(`
-      SELECT id FROM relationships.contacts
-      WHERE wa_jids @> ARRAY[$1]::text[]
-         OR normalized_name = $2
-      LIMIT 1
-    `, [waJid, normalizeName(profile.display_name)])
+    await identity.ensureIdentitySchema(db)
 
-    if (existing.length > 0) {
-      const id = existing[0].id
+    // Try exact source identities first. Name-only matches are intentionally
+    // weaker and should not override stable WhatsApp/email/phone identity.
+    let id = await identity.findContactByIdentity(db, { source: 'whatsapp', identity_type: 'wa_jid', identity_value: waJid })
+    if (!id) id = await identity.findContactByIdentity(db, { source: 'phone', identity_type: 'phone', identity_value: phone })
+
+    if (!id) {
+      const { rows: existing } = await db.query(`
+        SELECT id FROM relationships.contacts
+        WHERE wa_jids @> ARRAY[$1]::text[]
+           OR phone_numbers @> ARRAY[$2]::text[]
+           OR normalized_name = $3
+        ORDER BY CASE WHEN wa_jids @> ARRAY[$1]::text[] THEN 0
+                      WHEN phone_numbers @> ARRAY[$2]::text[] THEN 1
+                      ELSE 2 END,
+                 last_interaction_at DESC NULLS LAST,
+                 id ASC
+        LIMIT 1
+      `, [waJid, phone, normalizeName(profile.display_name)])
+      id = existing[0]?.id || null
+    }
+
+    if (id) {
       // Use CASE WHEN manual_overrides ? 'field' to skip agent overwrites on locked fields
       await db.query(`
         UPDATE relationships.contacts SET
@@ -100,6 +116,10 @@ async function upsertContact(profile, chatId) {
         profile.first_msg_at || null,  // $14
         id,                            // $15
       ])
+      await identity.recordContactIdentities(db, id, [
+        { source: 'whatsapp', identity_type: 'wa_jid', identity_value: waJid, confidence: 1 },
+        { source: 'phone', identity_type: 'phone', identity_value: phone, confidence: 0.98 },
+      ])
       return id
     }
 
@@ -128,7 +148,12 @@ async function upsertContact(profile, chatId) {
       profile.last_msg_at || null,
       profile.first_msg_at || null,
     ])
-    return inserted[0].id
+    const contactId = inserted[0].id
+    await identity.recordContactIdentities(db, contactId, [
+      { source: 'whatsapp', identity_type: 'wa_jid', identity_value: waJid, confidence: 1 },
+      { source: 'phone', identity_type: 'phone', identity_value: phone, confidence: 0.98 },
+    ])
+    return contactId
   } catch (err) {
     console.error('[index] upsertContact error:', err.message)
     return null
@@ -514,12 +539,16 @@ async function runAnalysis() {
 
         if (isNoise) continue
 
-        // Try to link to an existing contact by email or name
-        const { rows: existingByEmail } = await db.query(`
-          SELECT id FROM relationships.contacts WHERE emails @> ARRAY[$1]::text[] LIMIT 1
-        `, [sender.email])
+        // Try to link to an existing contact by exact source identity first, then legacy email/name fallback.
+        let contactId = await identity.findContactByIdentity(db, { source: 'email', identity_type: 'email', identity_value: sender.email })
 
-        let contactId = existingByEmail[0]?.id || null
+        if (!contactId) {
+          const { rows: existingByEmail } = await db.query(`
+            SELECT id FROM relationships.contacts WHERE emails @> ARRAY[$1]::text[] LIMIT 1
+          `, [sender.email])
+          contactId = existingByEmail[0]?.id || null
+        }
+
         let isNew = !contactId
 
         if (!contactId && sender.name) {
@@ -555,6 +584,10 @@ async function runAnalysis() {
             WHERE id = $3
           `, [sender.email, sender.last_email_at, contactId])
         }
+
+        await identity.recordContactIdentities(db, contactId, [
+          { source: 'email', identity_type: 'email', identity_value: sender.email, confidence: 1 },
+        ])
 
         // Link email_sender to contact
         await db.query(`

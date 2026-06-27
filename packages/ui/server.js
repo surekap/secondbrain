@@ -18,6 +18,7 @@ const observeAlerts = require('../observe/alerts');
 const { resolveEntityAlias } = require('../agents/intelligence/services/entity-resolver');
 const { auditDuplicateContacts, auditDuplicateOrganizations, auditDuplicateSummary } = require('../agents/intelligence/services/duplicate-auditor');
 const { upsertDuplicateDecision, listDuplicateDecisions } = require('../agents/intelligence/services/duplicate-decisions');
+const { runExactIdentityMerge } = require('../agents/relationships/services/exact-identity-backfill');
 
 // ── Bootstrap ─────────────────────────────────────────────────────────────────
 
@@ -1364,6 +1365,34 @@ app.get('/api/intelligence/duplicates/evidence', async (req, res) => {
       LIMIT 120
     `, [ids]);
     res.json({ entity_type: 'organization', ids, entities, aliases, contacts });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// POST /api/intelligence/identity/exact-merge — dry-run or execute safe exact source-identity merges.
+// Body: { write: true, limit: 50 }. Defaults to dry-run; no fuzzy/name-only merges.
+app.post('/api/intelligence/identity/exact-merge', async (req, res) => {
+  if (!db) return res.status(503).json({ error: 'No database' });
+  try {
+    const limit = parsePositiveIntQuery(req.body?.limit || req.query.limit, 50, 500);
+    if (limit === null) return res.status(400).json({ error: 'Invalid limit' });
+    const result = await runExactIdentityMerge(db, {
+      write: req.body?.write === true || req.query.write === 'true',
+      limit,
+      identityLimit: req.body?.identityLimit || req.query.identityLimit || 10000,
+      decided_by: req.body?.decided_by || 'dashboard',
+    });
+    res.json(result);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// GET /api/intelligence/identity/exact-merge — dry-run exact source-identity merge audit.
+app.get('/api/intelligence/identity/exact-merge', async (req, res) => {
+  if (!db) return res.status(503).json({ error: 'No database' });
+  try {
+    const limit = parsePositiveIntQuery(req.query.limit, 50, 500);
+    if (limit === null) return res.status(400).json({ error: 'Invalid limit' });
+    const result = await runExactIdentityMerge(db, { write: false, limit });
+    res.json(result);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
