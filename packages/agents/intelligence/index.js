@@ -869,12 +869,25 @@ async function runIntelligenceServices(pool, options = {}) {
       relationship_direct_messages: relationshipDirectMessagesResult.rows.length,
       contacts: contactsResult.rows.length,
     })
+    const canonicalContactMapResult = await pool.query(`
+      SELECT canonical_id, duplicate_ids
+      FROM intelligence.duplicate_decisions
+      WHERE entity_type = 'contact'
+        AND action = 'confirmed'
+        AND canonical_id IS NOT NULL
+    `)
+    const canonicalContactMap = {}
+    for (const row of canonicalContactMapResult.rows) {
+      const canonical = String(row.canonical_id)
+      for (const id of row.duplicate_ids || []) canonicalContactMap[String(id)] = canonical
+    }
     const crossChannel = detectCrossChannelProjectSignals({
       projects: projectsResult.rows,
       groups: groupsResult.rows,
       groupMessages: groupMessagesResult.rows,
       directMessages: directMessagesResult.rows,
       contacts: contactsResult.rows,
+      canonicalContactMap,
     })
     log('info', 'Detected cross-channel project candidates', { count: crossChannel.length })
     const activeCrossChannelRefs = new Set(crossChannel.map(candidate => candidate.source_ref).filter(Boolean))

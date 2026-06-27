@@ -18,6 +18,17 @@ const GENERIC_PROJECT_NAMES = [
   /\bmarket analysis\b/i,
 ]
 
+const ADMIN_OPS_PATTERNS = [
+  /\bvisa\b/i,
+  /\bflight|hotel|cab|taxi|booking|travel plan\b/i,
+  /\btds|challan|invoice|reimbursement|ledger|payment backlog|compliance workflow\b/i,
+  /\botp|password|login|subscription\b/i,
+]
+
+const STRATEGIC_PATTERNS = [
+  /\bacquisition|investment|capital|ipo|strategic|customer lead|distribution|partnership|board|fundrais/i,
+]
+
 const STOPWORDS = new Set([
   'the','and','for','with','from','this','that','there','their','your','you','are','was','were','have','has','had',
   'project','group','whatsapp','meeting','call','team','update','please','thanks','thank','about','into','will','can',
@@ -62,6 +73,31 @@ function isSelfContact(contact) {
 function isGenericProject(project) {
   const name = String(project?.name || '')
   return GENERIC_PROJECT_NAMES.some(pattern => pattern.test(name))
+}
+
+function isTierOneContact(contact = {}) {
+  return String(contact.relationship_tier || '').toLowerCase() === 'tier_1'
+    || Number(contact.strategic_importance_score || 0) >= 80
+}
+
+function isLowValueAdminCandidate({ projectLabel, group, relevantDms, contact }) {
+  if (isTierOneContact(contact)) return false
+  const text = [projectLabel, group?.name, groupText(group), ...((relevantDms || []).map(x => x.text || ''))]
+    .filter(Boolean).join(' ').toLowerCase()
+  return ADMIN_OPS_PATTERNS.some(pattern => pattern.test(text))
+    && !STRATEGIC_PATTERNS.some(pattern => pattern.test(text))
+}
+
+function canonicalContactId(contact, canonicalContactMap = {}) {
+  const raw = String(contact?.id || '')
+  if (!raw) return raw
+  return String(canonicalContactMap[raw] || canonicalContactMap[Number(raw)] || raw)
+}
+
+function withCanonicalContactId(contact, canonicalContactMap = {}) {
+  const canonicalId = canonicalContactId(contact, canonicalContactMap)
+  if (!canonicalId || String(contact?.id) === canonicalId) return contact
+  return { ...contact, id: canonicalId, original_contact_id: contact.id }
 }
 
 function projectText(project) {
@@ -155,6 +191,7 @@ function detectCrossChannelProjectSignals(input = {}) {
   const groupMessages = input.groupMessages || []
   const directMessages = input.directMessages || []
   const contacts = input.contacts || []
+  const canonicalContactMap = input.canonicalContactMap || {}
   const minProjectGroupScore = input.minProjectGroupScore ?? 0.22
   const minProjectDmScore = input.minProjectDmScore ?? 0.16
   const minSharedProjectDmTerms = input.minSharedProjectDmTerms ?? 1
@@ -171,7 +208,7 @@ function detectCrossChannelProjectSignals(input = {}) {
 
   const directByContact = new Map()
   for (const m of directMessages) {
-    const key = String(m.contact_id || contactKey(m.contact || {}) || '')
+    const key = String(canonicalContactMap[String(m.contact_id || '')] || canonicalContactMap[Number(m.contact_id)] || m.contact_id || contactKey(m.contact || {}) || '')
     if (!key) continue
     if (!directByContact.has(key)) directByContact.set(key, [])
     directByContact.get(key).push(m)
@@ -197,7 +234,8 @@ function detectCrossChannelProjectSignals(input = {}) {
         for (const mentioned of contactsMentionedInText(messageText(gm), contacts)) addParticipantContact(participants, mentioned)
       }
 
-      for (const contact of participants.values()) {
+      for (const rawContact of participants.values()) {
+        const contact = withCanonicalContactId(rawContact, canonicalContactMap)
         if (isSelfContact(contact)) continue
         const dms = directByContact.get(String(contact.id)) || []
         const knownGroupDerived = isKnownGroupDerivedProject(group)
@@ -228,6 +266,7 @@ function detectCrossChannelProjectSignals(input = {}) {
         const sourcePrefix = useGroupDerivedProject ? 'cross_channel_group_project' : 'cross_channel_project'
         const projectRef = useGroupDerivedProject ? 'group-derived' : project.id
         const title = `${projectLabel}: direct follow-up with ${contactName} from ${group.name || group.wa_chat_id}`
+        if (isLowValueAdminCandidate({ projectLabel, group, relevantDms, contact })) continue
         out.push({
           opportunity_type: 'meeting_action',
           title: compactText(title, 180),

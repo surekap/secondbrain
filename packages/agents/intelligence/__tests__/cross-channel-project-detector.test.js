@@ -37,10 +37,10 @@ test('detects project work spanning WhatsApp group and direct member chat', () =
 test('uses group context to connect direct tasks whose wording differs from project name', () => {
   const opportunities = detectCrossChannelProjectSignals({
     projects: [{ id: 8, name: 'Grapevine ERP Implementation', description: 'ERP rollout and operational issue closure' }],
-    groups: [{ id: 9, wa_chat_id: 'erp@g.us', name: 'ERP rollout group', ai_summary: 'Gaurav and team are resolving admin approval and invoice workflow issues for Grapevine ERP' }],
+    groups: [{ id: 9, wa_chat_id: 'erp@g.us', name: 'ERP rollout group', ai_summary: 'Gaurav and team are resolving strategic rollout approvals and customer migration issues for Grapevine ERP' }],
     contacts: [{ id: 10, display_name: 'Gaurav Partner', wa_jids: ['911222222222@c.us'] }],
-    groupMessages: [{ chat_id: 'erp@g.us', participant: '911222222222@c.us', body: 'Admin approval pending for invoice workflow, Gaurav to coordinate next step' }],
-    directMessages: [{ contact_id: 10, chat_id: '911222222222@c.us', body: 'Please review admin approval pending and confirm next step for invoice issue' }],
+    groupMessages: [{ chat_id: 'erp@g.us', participant: '911222222222@c.us', body: 'Strategic rollout approval pending for customer migration, Gaurav to coordinate next step' }],
+    directMessages: [{ contact_id: 10, chat_id: '911222222222@c.us', body: 'Please review rollout approval pending and confirm next step for customer migration issue' }],
   })
   assert.equal(opportunities.length, 1)
   assert.equal(opportunities[0].primary_project_id, 8)
@@ -118,4 +118,36 @@ test('does not promote self-contact or generic project buckets as cross-channel 
     projects: [{ id: 67, name: 'Specific Travel Program', description: 'Travel dining itinerary program' }],
     contacts: [{ id: 284, display_name: 'Prateek Sureka', wa_jids: ['919999999999@c.us'] }],
   }).length, 0)
+})
+
+test('canonicalizes duplicate contact ids before source_ref/dedupe generation', () => {
+  const opportunities = detectCrossChannelProjectSignals({
+    projects: [{ id: 71, name: 'Hartex Partnership', description: 'Hartex distribution partnership strategic customer lead' }],
+    groups: [{ id: 94, wa_chat_id: 'frontier@g.us', name: 'The Final Frontier', ai_summary: 'Hartex partnership customer lead and distribution discussion' }],
+    contacts: [{ id: 92, display_name: 'Gaurav Atha', wa_jids: ['919748983882@c.us'] }],
+    groupMessages: [{ chat_id: 'frontier@g.us', participant: '919748983882@c.us', body: 'Gaurav please coordinate Hartex partnership customer lead next step' }],
+    directMessages: [{ contact_id: 3134, chat_id: '919748983882@c.us', body: 'Need follow up on Hartex partnership and customer lead approval' }],
+    canonicalContactMap: { 92: '3134' },
+  })
+  assert.equal(opportunities.length, 1)
+  assert.equal(opportunities[0].primary_contact_id, '3134')
+  assert.match(opportunities[0].source_ref, /:3134$/)
+  assert.doesNotMatch(opportunities[0].source_ref, /:92$/)
+})
+
+test('suppresses low-value admin cross-channel candidates unless contact is tier one', () => {
+  const base = {
+    projects: [{ id: 57, name: 'YPO UAE Golden Visa Initiative', description: 'visa application processing and travel documentation' }],
+    groups: [{ id: 87, wa_chat_id: 'ypo@g.us', name: 'YPO Personal Needs', ai_summary: 'golden visa process application coordination' }],
+    groupMessages: [{ chat_id: 'ypo@g.us', participant: '919748983882@c.us', body: 'Need golden visa documents and application process confirmation' }],
+    directMessages: [{ contact_id: 3134, chat_id: '919748983882@c.us', body: 'Please confirm visa application process and documents pending' }],
+  }
+  assert.equal(detectCrossChannelProjectSignals({
+    ...base,
+    contacts: [{ id: 3134, display_name: 'Gaurav Atha', relationship_tier: 'tier_2', strategic_importance_score: 60, wa_jids: ['919748983882@c.us'] }],
+  }).length, 0)
+  assert.equal(detectCrossChannelProjectSignals({
+    ...base,
+    contacts: [{ id: 3134, display_name: 'Gaurav Atha', relationship_tier: 'tier_1', strategic_importance_score: 90, wa_jids: ['919748983882@c.us'] }],
+  }).length, 1)
 })
