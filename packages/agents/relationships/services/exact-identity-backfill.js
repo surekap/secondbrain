@@ -29,7 +29,8 @@ async function findExactIdentityDuplicateGroups(pool, options = {}) {
              LOWER(TRIM(w)) AS identity_value
       FROM relationships.contacts c
       CROSS JOIN LATERAL unnest(COALESCE(c.wa_jids, '{}')) w
-      WHERE w IS NOT NULL AND TRIM(w) <> ''
+      WHERE c.is_noise IS DISTINCT FROM TRUE
+        AND w IS NOT NULL AND TRIM(w) <> ''
 
       UNION ALL
       SELECT c.id::text AS contact_id,
@@ -39,7 +40,8 @@ async function findExactIdentityDuplicateGroups(pool, options = {}) {
              LOWER(TRIM(e)) AS identity_value
       FROM relationships.contacts c
       CROSS JOIN LATERAL unnest(COALESCE(c.emails, '{}')) e
-      WHERE e IS NOT NULL AND TRIM(e) <> ''
+      WHERE c.is_noise IS DISTINCT FROM TRUE
+        AND e IS NOT NULL AND TRIM(e) <> ''
 
       UNION ALL
       SELECT c.id::text AS contact_id,
@@ -49,7 +51,8 @@ async function findExactIdentityDuplicateGroups(pool, options = {}) {
              REGEXP_REPLACE(TRIM(p), '[^0-9]', '', 'g') AS identity_value
       FROM relationships.contacts c
       CROSS JOIN LATERAL unnest(COALESCE(c.phone_numbers, '{}')) p
-      WHERE p IS NOT NULL AND TRIM(p) <> ''
+      WHERE c.is_noise IS DISTINCT FROM TRUE
+        AND p IS NOT NULL AND TRIM(p) <> ''
     ), grouped AS (
       SELECT source,
              identity_type,

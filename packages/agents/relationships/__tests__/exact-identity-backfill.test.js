@@ -26,6 +26,7 @@ test('exact-identity-backfill: duplicate audit groups exact WhatsApp/email/phone
   assert.match(calls[0].sql, /unnest\(COALESCE\(c\.wa_jids/)
   assert.match(calls[0].sql, /unnest\(COALESCE\(c\.emails/)
   assert.match(calls[0].sql, /unnest\(COALESCE\(c\.phone_numbers/)
+  assert.match(calls[0].sql, /c\.is_noise IS DISTINCT FROM TRUE/)
   assert.match(calls[0].sql, /HAVING COUNT\(DISTINCT contact_id\) > 1/)
   assert.equal(calls[0].params[0], 5)
 })
