@@ -925,6 +925,24 @@ async function runIntelligenceServices(pool, options = {}) {
       }
     }
     stats.cross_channel_project_opportunities = crossChannelCount
+    const dismissedAdminCrossChannel = await pool.query(`
+      UPDATE intelligence.opportunities
+      SET status = 'dismissed',
+          feedback = COALESCE(feedback, 'too_low_value'),
+          feedback_note = COALESCE(feedback_note, 'Auto-dismissed: visa/personal-needs cross-channel admin item is below strategic attention threshold'),
+          dismissed_at = COALESCE(dismissed_at, NOW()),
+          updated_at = NOW()
+      WHERE status = 'open'
+        AND source_system = 'signals'
+        AND (source_ref LIKE 'cross_channel_project:%' OR source_ref LIKE 'cross_channel_group_project:%')
+        AND (
+          title ~* '(golden\\s+visa|personal\\s+needs|visa\\s+(application|documents?|process))'
+          OR description ~* '(golden\\s+visa|personal\\s+needs|visa\\s+(application|documents?|process))'
+        )
+    `)
+    if (dismissedAdminCrossChannel.rowCount) {
+      log('info', 'Dismissed low-value admin cross-channel opportunities', { count: dismissedAdminCrossChannel.rowCount })
+    }
     log('info', 'Cross-channel project promotion complete', { count: crossChannelCount })
 
     log('info', 'Detecting direct relationship open loops')
