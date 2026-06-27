@@ -257,8 +257,9 @@ async function run() {
 
   const summary = { processed: 0, skipped: 0, errors: 0 };
 
-  // Sequential processing — respects Gmail rate limits per account
-  for (const accountConfig of accounts) {
+  // Concurrent processing — each account is an independent Gmail connection with
+  // its own rate limit, so running them in parallel cuts total sync time by N×.
+  const results = await Promise.all(accounts.map(async (accountConfig) => {
     const accountLog = log.child(accountConfig.email);
     accountLog.info('Starting sync');
 
@@ -275,17 +276,12 @@ async function run() {
 
         const result = await processAccount(account, gmailClient, accountLog, { batchSize, mailbox });
 
-        summary.processed += result.processed;
-        summary.skipped   += result.skipped;
-        summary.errors    += result.errors;
-
         accountLog.info(
           `Sync complete — processed: ${result.processed}, ` +
           `skipped: ${result.skipped}, errors: ${result.errors}`
         );
 
-        // Success - break out of retry loop
-        break;
+        return result;
 
       } catch (err) {
         accountRetries++;
@@ -299,7 +295,7 @@ async function run() {
           await new Promise(resolve => setTimeout(resolve, delay));
         } else {
           accountLog.error(`Account sync failed after ${maxAccountRetries + 1} attempts: ${err.message}`);
-          summary.errors++;
+          return { processed: 0, skipped: 0, errors: 1 };
         }
       } finally {
         if (gmailClient) {
@@ -307,6 +303,13 @@ async function run() {
         }
       }
     }
+    return { processed: 0, skipped: 0, errors: 1 };
+  }));
+
+  for (const r of results) {
+    summary.processed += r.processed;
+    summary.skipped   += r.skipped;
+    summary.errors    += r.errors;
   }
 
   log.info(
