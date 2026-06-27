@@ -66,7 +66,8 @@ async function indexSource(source, rows, toContent, toSourceId, toMeta, embeddin
   const nonEmpty  = contents.map((c, i) => ({ i, c, row: rows[i] })).filter(x => x.c.trim());
   if (!nonEmpty.length) return 0;
 
-  const { embeddings: vecs } = await embedBatch(nonEmpty.map(x => x.c));
+  const { embeddings: vecs, modelUsed } = await embedBatch(nonEmpty.map(x => x.c));
+  const actualEmbeddingModel = modelUsed || embeddingModel;
 
   for (let j = 0; j < nonEmpty.length; j++) {
     const { c, row } = nonEmpty[j];
@@ -78,7 +79,7 @@ async function indexSource(source, rows, toContent, toSourceId, toMeta, embeddin
             embedding  = EXCLUDED.embedding,
             metadata   = EXCLUDED.metadata,
             indexed_at = NOW()
-    `, [source, String(toSourceId(row)), c, toSql(vecs[j]), JSON.stringify(toMeta(row)), embeddingModel]);
+    `, [source, String(toSourceId(row)), c, toSql(vecs[j]), JSON.stringify(toMeta(row)), actualEmbeddingModel]);
   }
 
   return nonEmpty.length;

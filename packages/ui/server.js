@@ -9,7 +9,7 @@ const dotenv     = require('dotenv');
 const { Pool }   = require('pg');
 const Anthropic  = require('@anthropic-ai/sdk');
 const indexer    = require('./services/indexer');
-const { embed, toSql, getEmbeddingConfig } = require('./services/embedder');
+const { embedBatch, toSql, getEmbeddingConfig } = require('./services/embedder');
 const { getProviderDefinitions, DEFAULT_OLLAMA_BASE_URL } = require('../agents/shared/model-catalog');
 const { listOllamaModelOptions } = require('../agents/shared/ollama');
 const { getAvailableModels } = require('../agents/shared/model-fetcher');
@@ -2715,8 +2715,7 @@ app.get('/api/search', async (req, res) => {
   if (!db)          return res.status(503).json({ error: 'No database' });
 
   try {
-    const { model: embeddingModel } = await getEmbeddingConfig();
-    const vec = await embed(q, 'RETRIEVAL_QUERY');
+    const { embeddings: [vec], modelUsed: embeddingModel } = await embedBatch([q], 'RETRIEVAL_QUERY');
 
     let sourceClause = '';
     const params = [embeddingModel, toSql(vec), limit];

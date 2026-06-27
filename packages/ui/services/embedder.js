@@ -173,6 +173,19 @@ async function embedWithJina(modelName, apiKey, texts) {
 
 // ── Fallback dispatcher ───────────────────────────────────────────────────────
 
+function embeddingAttemptConfig(config, providerType) {
+  const providerDefault = PROVIDER_DEFAULTS[providerType] || {};
+  const configuredDefault = PROVIDER_DEFAULTS[config.providerType] || {};
+  const configuredModelBelongsToProvider = config.model === configuredDefault.model;
+  return {
+    ...config,
+    providerType,
+    model: providerType === config.providerType || !configuredModelBelongsToProvider
+      ? config.model
+      : providerDefault.model || config.model,
+  };
+}
+
 async function embedWithProvider(config, texts, taskType) {
   switch (config.providerType) {
     case "ollama":
@@ -213,7 +226,7 @@ async function embedBatchWithFallback(texts, taskType = "RETRIEVAL_DOCUMENT") {
   const errors = [];
   for (const providerType of providersToTry) {
     try {
-      const attemptConfig = { ...config, providerType };
+      const attemptConfig = embeddingAttemptConfig(config, providerType);
       const embeddings = await embedWithProvider(
         attemptConfig,
         texts,
@@ -273,4 +286,5 @@ module.exports = {
   DEFAULT_MODEL,
   DEFAULT_PROVIDER,
   getEmbeddingConfig,
+  embeddingAttemptConfig,
 };
