@@ -120,6 +120,24 @@ test('does not promote self-contact or generic project buckets as cross-channel 
   }).length, 0)
 })
 
+test('does not promote cross-channel work for contacts already classified as noise', () => {
+  const opportunities = detectCrossChannelProjectSignals({
+    projects: [{ id: 54, name: 'Investment Opportunities and Strategy', description: 'investment dividend capital strategy' }],
+    groups: [{ id: 38, wa_chat_id: 'fin@g.us', name: 'MyEO-INL-FinServ&Invest', ai_summary: 'Investment strategy and finance opportunities' }],
+    contacts: [{
+      id: 12,
+      display_name: 'Vested Finance',
+      relationship_tier: 'noise',
+      relationship_strength: 'noise',
+      is_noise: true,
+      wa_jids: ['918591400209@c.us'],
+    }],
+    groupMessages: [{ chat_id: 'fin@g.us', participant: '918591400209@c.us', body: 'Investment opportunity discussion and dividend strategy' }],
+    directMessages: [{ contact_id: 12, chat_id: '918591400209@c.us', body: 'Dividend payout received. Please review investment details and confirm.' }],
+  })
+  assert.equal(opportunities.length, 0)
+})
+
 test('canonicalizes duplicate contact ids before source_ref/dedupe generation', () => {
   const opportunities = detectCrossChannelProjectSignals({
     projects: [{ id: 71, name: 'Hartex Partnership', description: 'Hartex distribution partnership strategic customer lead' }],

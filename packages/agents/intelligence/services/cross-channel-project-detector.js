@@ -70,6 +70,12 @@ function isSelfContact(contact) {
   return SELF_PATTERNS.some(pattern => pattern.test(haystack))
 }
 
+function isNoiseContact(contact = {}) {
+  return contact.is_noise === true
+    || String(contact.relationship_tier || '').toLowerCase() === 'noise'
+    || String(contact.relationship_strength || '').toLowerCase() === 'noise'
+}
+
 function isGenericProject(project) {
   const name = String(project?.name || '')
   return GENERIC_PROJECT_NAMES.some(pattern => pattern.test(name))
@@ -237,6 +243,7 @@ function detectCrossChannelProjectSignals(input = {}) {
       for (const rawContact of participants.values()) {
         const contact = withCanonicalContactId(rawContact, canonicalContactMap)
         if (isSelfContact(contact)) continue
+        if (isNoiseContact(contact)) continue
         const dms = directByContact.get(String(contact.id)) || []
         const knownGroupDerived = isKnownGroupDerivedProject(group)
         const dmContext = knownGroupDerived ? gText : `${pText} ${gText}`
