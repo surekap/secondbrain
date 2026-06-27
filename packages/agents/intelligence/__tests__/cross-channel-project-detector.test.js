@@ -167,5 +167,5 @@ test('suppresses low-value admin cross-channel candidates unless contact is tier
   assert.equal(detectCrossChannelProjectSignals({
     ...base,
     contacts: [{ id: 3134, display_name: 'Gaurav Atha', relationship_tier: 'tier_1', strategic_importance_score: 90, wa_jids: ['919748983882@c.us'] }],
-  }).length, 1)
+  }).length, 0)
 })

@@ -87,11 +87,13 @@ function isTierOneContact(contact = {}) {
 }
 
 function isLowValueAdminCandidate({ projectLabel, group, relevantDms, contact }) {
-  if (isTierOneContact(contact)) return false
   const text = [projectLabel, group?.name, groupText(group), ...((relevantDms || []).map(x => x.text || ''))]
     .filter(Boolean).join(' ').toLowerCase()
-  return ADMIN_OPS_PATTERNS.some(pattern => pattern.test(text))
+  const isAdmin = ADMIN_OPS_PATTERNS.some(pattern => pattern.test(text))
     && !STRATEGIC_PATTERNS.some(pattern => pattern.test(text))
+  if (!isAdmin) return false
+  if (/\bgolden\s+visa\b|\bpersonal\s+needs?\b|\bvisa\s+(application|documents?|process)\b/i.test(text)) return true
+  return !isTierOneContact(contact)
 }
 
 function canonicalContactId(contact, canonicalContactMap = {}) {

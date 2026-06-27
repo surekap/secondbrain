@@ -99,7 +99,7 @@ function detectHomeImprovementOpportunities(input = {}) {
   const latestAt = [
     ...lifelogs.map(x => x.start_time || x.created_at),
     ...emails.map(emailOccurredAt),
-  ].filter(Boolean).sort().at(-1) || null
+  ].filter(Boolean).sort((a, b) => dateValue(a) - dateValue(b)).at(-1) || null
   const allText = [...lifelogs.map(textForLifelog), ...emails.map(textForEmail)].join('\n')
   const members = extractMembers(allText)
   const latestEmail = emails[0]
