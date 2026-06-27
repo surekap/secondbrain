@@ -7,6 +7,7 @@ STATUS_FILE="$REPO_DIR/.agent-logs/deploy-reload-status.json"
 LOG_FILE="$REPO_DIR/.agent-logs/deploy-reload.log"
 LOCK_DIR="$REPO_DIR/.agent-logs/deploy-reload.lock"
 RUN_BUILD="${SECOND_BRAIN_DEPLOY_BUILD:-1}"
+RUN_INSTALL="${SECOND_BRAIN_DEPLOY_INSTALL:-0}"
 
 mkdir -p "$REPO_DIR/.agent-logs"
 
@@ -56,7 +57,7 @@ fi
 
 : > "$LOG_FILE"
 write_status "running" "start" "Starting pull/reload"
-log "repo=$REPO_DIR branch=$BRANCH run_build=$RUN_BUILD"
+log "repo=$REPO_DIR branch=$BRANCH run_build=$RUN_BUILD run_install=$RUN_INSTALL"
 cd "$REPO_DIR"
 
 write_status "running" "preflight" "Checking git state"
@@ -90,6 +91,12 @@ elif [ "$LOCAL" = "$BASE" ]; then
 else
   write_status "failed" "pull" "Local branch diverged from origin/$BRANCH; refusing automatic reload"
   exit 1
+fi
+
+if [ "$RUN_INSTALL" = "1" ]; then
+  write_status "running" "install" "Installing npm dependencies"
+  log "npm install"
+  npm install 2>&1 | tee -a "$LOG_FILE"
 fi
 
 if [ "$RUN_BUILD" = "1" ]; then

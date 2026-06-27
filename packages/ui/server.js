@@ -903,7 +903,7 @@ app.get('/api/system/deploy/status', (req, res) => {
   res.json(readDeployStatus());
 });
 
-// POST /api/system/deploy/reload — fast-forward pull, build, restart UI/API.
+// POST /api/system/deploy/reload — fast-forward pull, optional install/build, restart UI/API.
 // Guardrails: explicit confirmation, no concurrent deploys, detached script handles
 // git cleanliness/ff-only/build/port restart. Optional env SECOND_BRAIN_DEPLOY_TOKEN
 // can require x-deploy-token or body.deploy_token.
@@ -933,6 +933,7 @@ app.post('/api/system/deploy/reload', (req, res) => {
         ...process.env,
         SECOND_BRAIN_DEPLOY_BRANCH: String(req.body?.branch || 'main'),
         SECOND_BRAIN_DEPLOY_BUILD: req.body?.build === false ? '0' : '1',
+        SECOND_BRAIN_DEPLOY_INSTALL: req.body?.install === true ? '1' : '0',
       },
     });
     child.unref();

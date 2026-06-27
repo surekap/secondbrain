@@ -15,13 +15,17 @@ test('server exposes guarded deploy reload API', () => {
   assert.match(serverSource, /confirm.*pull-and-reload/s)
   assert.match(serverSource, /SECOND_BRAIN_DEPLOY_TOKEN/)
   assert.match(serverSource, /deployAlreadyRunning\(\)/)
-  assert.match(serverSource, /spawn\('\/usr\/bin\/env', \['bash', DEPLOY_SCRIPT\]/)
+  assert.match(serverSource, /SECOND_BRAIN_DEPLOY_INSTALL/)
+  assert.match(serverSource, /req\.body\?\.install === true \? '1' : '0'/)
 })
 
 test('deploy reload script is fast-forward only and restarts UI listeners', () => {
   assert.match(deployScript, /git fetch origin "\$BRANCH"/)
   assert.match(deployScript, /git pull --ff-only origin "\$BRANCH"/)
   assert.match(deployScript, /git status --porcelain/)
+  assert.match(deployScript, /SECOND_BRAIN_DEPLOY_INSTALL/)
+  assert.match(deployScript, /write_status "running" "install" "Installing npm dependencies"/)
+  assert.match(deployScript, /npm install 2>&1 \| tee -a "\$LOG_FILE"/)
   assert.match(deployScript, /npm run build --workspace=packages\/ui/)
   assert.match(deployScript, /lsof -ti tcp:4000/)
   assert.match(deployScript, /lsof -ti tcp:4001/)
