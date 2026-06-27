@@ -122,19 +122,29 @@ try {
     process.exit(1);
 }
 
+// Use system Chrome explicitly — the puppeteer bundled Chrome (131) is incompatible
+// with wwebjs's internal puppeteer-core. System Chrome 149 works but wwebjs spoofs
+// a Chrome/101 user-agent by default, causing WhatsApp to hang at AUTHENTICATED.
+// Override both the executable path and user-agent to stay consistent with 149.
+const SYSTEM_CHROME = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+const resolvedExec = fs.existsSync(SYSTEM_CHROME) ? SYSTEM_CHROME : executablePath;
+const CHROME_UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.7827.199 Safari/537.36';
+
 const client = new Client({
     authStrategy: new LocalAuth({
         clientId: process.env.CLIENT_ID,
         dataPath: path.resolve(__dirname, '..', '.wwebjs_auth'),
     }),
+    userAgent: CHROME_UA,
     puppeteer: {
-        executablePath,
+        executablePath: resolvedExec,
         headless: true,
         protocolTimeout: 600_000,
         args: [
             '--no-sandbox',
             '--disable-setuid-sandbox',
             '--disable-blink-features=AutomationControlled',
+            `--user-agent=${CHROME_UA}`,
         ],
     },
 });
