@@ -90,6 +90,7 @@ function finishIntelligenceRefreshRun(run, status, result = null, error = null) 
 }
 
 const DEPLOY_STATUS_FILE = path.resolve(LOGS_DIR, 'deploy-reload-status.json');
+const DEPLOY_LOG_FILE = path.resolve(LOGS_DIR, 'deploy-reload.log');
 const DEPLOY_SCRIPT = path.resolve(__dirname, '../../scripts/deploy-pull-reload.sh');
 
 function readDeployStatus() {
@@ -901,6 +902,23 @@ app.get('/api/config', (req, res) => {
 // GET /api/system/deploy/status — inspect last git-pull/reload request
 app.get('/api/system/deploy/status', (req, res) => {
   res.json(readDeployStatus());
+});
+
+// GET /api/system/deploy/log?tail=20000 — retrieve captured deploy output for debugging
+app.get('/api/system/deploy/log', (req, res) => {
+  try {
+    if (!fs.existsSync(DEPLOY_LOG_FILE)) return res.status(404).json({ error: 'Deploy log not found' });
+    const maxBytes = Math.max(1000, Math.min(Number(req.query.tail || 20000), 200000));
+    const stat = fs.statSync(DEPLOY_LOG_FILE);
+    const start = Math.max(0, stat.size - maxBytes);
+    const fd = fs.openSync(DEPLOY_LOG_FILE, 'r');
+    const buffer = Buffer.alloc(stat.size - start);
+    fs.readSync(fd, buffer, 0, buffer.length, start);
+    fs.closeSync(fd);
+    res.type('text/plain').send(buffer.toString('utf8'));
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
 });
 
 // POST /api/system/deploy/reload — fast-forward pull, optional install/build, restart UI/API.

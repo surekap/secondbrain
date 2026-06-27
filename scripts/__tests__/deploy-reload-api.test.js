@@ -11,6 +11,9 @@ const deployScript = fs.readFileSync(path.join(__dirname, '../../scripts/deploy-
 
 test('server exposes guarded deploy reload API', () => {
   assert.match(serverSource, /app\.get\('\/api\/system\/deploy\/status'/)
+  assert.match(serverSource, /app\.get\('\/api\/system\/deploy\/log'/)
+  assert.match(serverSource, /DEPLOY_LOG_FILE/)
+  assert.match(serverSource, /tail \|\| 20000/)
   assert.match(serverSource, /app\.post\('\/api\/system\/deploy\/reload'/)
   assert.match(serverSource, /confirm.*pull-and-reload/s)
   assert.match(serverSource, /SECOND_BRAIN_DEPLOY_TOKEN/)
