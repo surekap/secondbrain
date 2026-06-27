@@ -153,7 +153,7 @@ test('canonicalizes duplicate contact ids before source_ref/dedupe generation', 
   assert.doesNotMatch(opportunities[0].source_ref, /:92$/)
 })
 
-test('suppresses low-value admin cross-channel candidates unless contact is tier one', () => {
+test('suppresses low-value admin cross-channel candidates even for tier one contacts', () => {
   const base = {
     projects: [{ id: 57, name: 'YPO UAE Golden Visa Initiative', description: 'visa application processing and travel documentation' }],
     groups: [{ id: 87, wa_chat_id: 'ypo@g.us', name: 'YPO Personal Needs', ai_summary: 'golden visa process application coordination' }],
@@ -168,4 +168,15 @@ test('suppresses low-value admin cross-channel candidates unless contact is tier
     ...base,
     contacts: [{ id: 3134, display_name: 'Gaurav Atha', relationship_tier: 'tier_1', strategic_importance_score: 90, wa_jids: ['919748983882@c.us'] }],
   }).length, 0)
+})
+
+test('suppresses family-office compliance admin joins even for family contacts', () => {
+  const opportunities = detectCrossChannelProjectSignals({
+    projects: [{ id: 5, name: 'Hartex Banking & Payment Systems', description: 'payments banking operations' }],
+    groups: [{ id: 35, wa_chat_id: 'fo@g.us', name: 'Sureka Family Office Internal', ai_summary: 'Family-office finance/compliance workflow: TDS challan invoice reimbursement ledger and audit coordination' }],
+    contacts: [{ id: 1, display_name: 'Anupama Sureka', relationship_tier: 'tier_1', strategic_importance_score: 95, wa_jids: ['919111111111@c.us'] }],
+    groupMessages: [{ chat_id: 'fo@g.us', participant: '919111111111@c.us', body: 'Please coordinate TDS challan and invoice compliance workflow' }],
+    directMessages: [{ contact_id: 1, chat_id: '919111111111@c.us', body: 'Need the ledger and reimbursement confirmation pending' }],
+  })
+  assert.equal(opportunities.length, 0)
 })

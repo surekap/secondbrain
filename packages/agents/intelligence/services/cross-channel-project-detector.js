@@ -21,7 +21,7 @@ const GENERIC_PROJECT_NAMES = [
 const ADMIN_OPS_PATTERNS = [
   /\bvisa\b/i,
   /\bflight|hotel|cab|taxi|booking|travel plan\b/i,
-  /\btds|challan|invoice|reimbursement|ledger|payment backlog|compliance workflow\b/i,
+  /\btds|challan|invoice|reimbursement|ledger|payment backlog|compliance workflow|family-office finance\/compliance workflow\b/i,
   /\botp|password|login|subscription\b/i,
 ]
 
@@ -92,7 +92,7 @@ function isLowValueAdminCandidate({ projectLabel, group, relevantDms, contact })
   const isAdmin = ADMIN_OPS_PATTERNS.some(pattern => pattern.test(text))
     && !STRATEGIC_PATTERNS.some(pattern => pattern.test(text))
   if (!isAdmin) return false
-  if (/\bgolden\s+visa\b|\bpersonal\s+needs?\b|\bvisa\s+(application|documents?|process)\b/i.test(text)) return true
+  if (/\bgolden\s+visa\b|\bpersonal\s+needs?\b|\bvisa\s+(application|documents?|process)\b|\bfamily-office\s+finance\/compliance\s+workflow\b|\bsureka\s+family\s+office\s+internal\b/i.test(text)) return true
   return !isTierOneContact(contact)
 }
 

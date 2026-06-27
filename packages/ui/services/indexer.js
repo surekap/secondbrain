@@ -21,7 +21,7 @@ try { telemetry = require('@secondbrain/telemetry'); } catch (_) {}
 if (telemetry) telemetry.init('indexer');
 
 const INTERVAL_MS   = 10 * 60 * 1000; // 10 minutes
-const BATCH_PER_RUN = 200;            // max items per source per run
+const BATCH_PER_RUN = Math.max(1, Number(process.env.SEARCH_INDEX_BATCH_PER_RUN || 200)); // max items per source per run
 
 let _db  = null;
 let _tid = null;
