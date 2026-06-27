@@ -938,6 +938,8 @@ async function runIntelligenceServices(pool, options = {}) {
         AND (
           title ~* '(golden\\s+visa|personal\\s+needs|visa\\s+(application|documents?|process))'
           OR description ~* '(golden\\s+visa|personal\\s+needs|visa\\s+(application|documents?|process))'
+          OR title ILIKE 'Family-office finance/compliance workflow:%'
+          OR metadata->>'group_derived_project_label' = 'Family-office finance/compliance workflow'
         )
     `)
     if (dismissedAdminCrossChannel.rowCount) {

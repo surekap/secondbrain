@@ -89,6 +89,8 @@ function isTierOneContact(contact = {}) {
 function isLowValueAdminCandidate({ projectLabel, group, relevantDms, contact }) {
   const text = [projectLabel, group?.name, groupText(group), ...((relevantDms || []).map(x => x.text || ''))]
     .filter(Boolean).join(' ').toLowerCase()
+  if (String(projectLabel || '').toLowerCase() === 'family-office finance/compliance workflow') return true
+  if (String(group?.name || '').toLowerCase() === 'sureka family office internal') return true
   const isAdmin = ADMIN_OPS_PATTERNS.some(pattern => pattern.test(text))
     && !STRATEGIC_PATTERNS.some(pattern => pattern.test(text))
   if (!isAdmin) return false
