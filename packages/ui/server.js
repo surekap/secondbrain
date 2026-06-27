@@ -2715,31 +2715,97 @@ app.get('/api/search', async (req, res) => {
   if (!db)          return res.status(503).json({ error: 'No database' });
 
   try {
-    const { embeddings: [vec], modelUsed: embeddingModel } = await embedBatch([q], 'RETRIEVAL_QUERY');
+    const lexicalParams = [`%${q}%`, limit * 2];
+    const { rows: lexicalRows } = await db.query(`
+      SELECT * FROM (
+        SELECT 'email' AS source, e.id::text AS source_id,
+               CONCAT_WS(E'\n', e.subject, LEFT(e.body_text, 1200)) AS content,
+               jsonb_build_object('subject', e.subject, 'from_address', e.from_address, 'date', e.date) AS metadata,
+               1.0::float AS similarity
+        FROM email.emails e
+        WHERE e.subject ILIKE $1 OR e.from_address ILIKE $1 OR e.body_text ILIKE $1
+        ORDER BY e.date DESC NULLS LAST
+        LIMIT $2
+      ) email_hits
+      UNION ALL
+      SELECT * FROM (
+        SELECT 'lifelog' AS source, l.id::text AS source_id,
+               CONCAT_WS(E'\n', l.title, LEFT(COALESCE(l.markdown, l.contents, ''), 1200)) AS content,
+               jsonb_build_object('title', l.title, 'start_time', l.start_time) AS metadata,
+               1.0::float AS similarity
+        FROM limitless.lifelogs l
+        WHERE l.title ILIKE $1 OR COALESCE(l.markdown, l.contents, '') ILIKE $1
+        ORDER BY l.start_time DESC NULLS LAST
+        LIMIT $2
+      ) lifelog_hits
+      UNION ALL
+      SELECT * FROM (
+        SELECT 'project' AS source, p.id::text AS source_id,
+               CONCAT_WS(E'\n', p.name, p.description, LEFT(COALESCE(p.ai_summary, ''), 1200)) AS content,
+               jsonb_build_object('name', p.name, 'status', p.status, 'last_activity_at', p.last_activity_at) AS metadata,
+               1.0::float AS similarity
+        FROM projects.projects p
+        WHERE NOT p.is_archived AND (p.name ILIKE $1 OR COALESCE(p.description, '') ILIKE $1 OR COALESCE(p.ai_summary, '') ILIKE $1)
+        ORDER BY p.last_activity_at DESC NULLS LAST
+        LIMIT $2
+      ) project_hits
+      UNION ALL
+      SELECT * FROM (
+        SELECT 'contact' AS source, c.id::text AS source_id,
+               CONCAT_WS(E'\n', c.display_name, c.company, c.job_title, LEFT(COALESCE(c.summary, ''), 1200)) AS content,
+               jsonb_build_object('display_name', c.display_name, 'company', c.company, 'relationship_tier', c.relationship_tier) AS metadata,
+               1.0::float AS similarity
+        FROM relationships.contacts c
+        WHERE NOT c.is_noise AND (c.display_name ILIKE $1 OR COALESCE(c.company, '') ILIKE $1 OR COALESCE(c.summary, '') ILIKE $1)
+        ORDER BY c.last_interaction_at DESC NULLS LAST
+        LIMIT $2
+      ) contact_hits
+      UNION ALL
+      SELECT * FROM (
+        SELECT 'whatsapp' AS source, (m.chat_id || '::' || EXTRACT(EPOCH FROM m.ts)::bigint::text) AS source_id,
+               LEFT(m.data->>'body', 1200) AS content,
+               jsonb_build_object('chat_id', m.chat_id, 'ts', m.ts, 'notify_name', m.data->'_data'->>'notifyName') AS metadata,
+               1.0::float AS similarity
+        FROM public.messages m
+        WHERE m.event IN ('message','message_create','message_historical') AND m.data->>'body' ILIKE $1
+        ORDER BY m.ts DESC NULLS LAST
+        LIMIT $2
+      ) whatsapp_hits
+    `, lexicalParams);
 
-    let sourceClause = '';
-    const params = [embeddingModel, toSql(vec), limit];
-    if (sources?.length) {
-      params.push(sources);
-      sourceClause = `AND source = ANY($${params.length})`;
+    const sourceAllowed = row => !sources?.length || sources.includes(row.source);
+    const byKey = new Map();
+    for (const row of lexicalRows.filter(sourceAllowed)) byKey.set(`${row.source}:${row.source_id}`, row);
+
+    try {
+      const { embeddings: [vec], modelUsed: embeddingModel } = await embedBatch([q], 'RETRIEVAL_QUERY');
+
+      let sourceClause = '';
+      const params = [embeddingModel, toSql(vec), limit];
+      if (sources?.length) {
+        params.push(sources);
+        sourceClause = `AND source = ANY($${params.length})`;
+      }
+
+      const { rows } = await db.query(`
+        SELECT
+          source,
+          source_id,
+          content,
+          metadata,
+          1 - (embedding <=> $2::public.vector) AS similarity
+        FROM search.embeddings
+        WHERE embedding_model = $1
+          AND 1 - (embedding <=> $2::public.vector) > 0.25
+        ${sourceClause}
+        ORDER BY embedding <=> $2::public.vector
+        LIMIT $3
+      `, params);
+      for (const row of rows) if (!byKey.has(`${row.source}:${row.source_id}`)) byKey.set(`${row.source}:${row.source_id}`, row);
+      return res.json({ results: Array.from(byKey.values()).slice(0, limit) });
+    } catch (embeddingError) {
+      return res.json({ results: Array.from(byKey.values()).slice(0, limit), warning: `semantic search unavailable: ${embeddingError.message}` });
     }
-
-    const { rows } = await db.query(`
-      SELECT
-        source,
-        source_id,
-        content,
-        metadata,
-        1 - (embedding <=> $2::public.vector) AS similarity
-      FROM search.embeddings
-      WHERE embedding_model = $1
-        AND 1 - (embedding <=> $2::public.vector) > 0.25
-      ${sourceClause}
-      ORDER BY embedding <=> $2::public.vector
-      LIMIT $3
-    `, params);
-
-    res.json({ results: rows });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
