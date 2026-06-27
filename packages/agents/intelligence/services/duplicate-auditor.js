@@ -100,7 +100,7 @@ async function auditDuplicateContacts(pool, options = {}) {
     FROM grouped
     LEFT JOIN intelligence.duplicate_decisions d
       ON d.entity_type = 'contact' AND d.duplicate_key = grouped.duplicate_key
-    WHERE d.action IS DISTINCT FROM 'ignored'
+    WHERE d.action IS NULL
     ORDER BY confidence DESC, duplicate_count DESC, obligation_count DESC, grouped.duplicate_key ASC
     LIMIT $1
   `, [limit])
@@ -151,7 +151,7 @@ async function auditDuplicateOrganizations(pool, options = {}) {
     FROM grouped
     LEFT JOIN intelligence.duplicate_decisions d
       ON d.entity_type = 'organization' AND d.duplicate_key = grouped.duplicate_key
-    WHERE d.action IS DISTINCT FROM 'ignored'
+    WHERE d.action IS NULL
     ORDER BY confidence DESC, duplicate_count DESC, grouped.duplicate_key ASC
     LIMIT $1
   `, [limit])
