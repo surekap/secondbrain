@@ -29,6 +29,14 @@ const STRATEGIC_PATTERNS = [
   /\bacquisition|investment|capital|ipo|strategic|customer lead|distribution|partnership|board|fundrais/i,
 ]
 
+const SOCIAL_NOISE_PATTERNS = [
+  /\bsongs?\b/i,
+  /\bfacebook\.com\/share\b/i,
+  /\breels?\b/i,
+  /\blisten\b/i,
+  /\bpeaceful manner\b/i,
+]
+
 const STOPWORDS = new Set([
   'the','and','for','with','from','this','that','there','their','your','you','are','was','were','have','has','had',
   'project','group','whatsapp','meeting','call','team','update','please','thanks','thank','about','into','will','can',
@@ -96,6 +104,12 @@ function isLowValueAdminCandidate({ projectLabel, group, relevantDms, contact })
   if (!isAdmin) return false
   if (/\bgolden\s+visa\b|\bpersonal\s+needs?\b|\bvisa\s+(application|documents?|process)\b|\bfamily-office\s+finance\/compliance\s+workflow\b|\bsureka\s+family\s+office\s+internal\b/i.test(text)) return true
   return !isTierOneContact(contact)
+}
+
+function isLowValueSocialCandidate({ relevantDms }) {
+  const directText = (relevantDms || []).map(x => x.text || '').join(' ').toLowerCase()
+  if (!directText) return false
+  return SOCIAL_NOISE_PATTERNS.some(pattern => pattern.test(directText))
 }
 
 function canonicalContactId(contact, canonicalContactMap = {}) {
@@ -294,6 +308,7 @@ function detectCrossChannelProjectSignals(input = {}) {
         const projectRef = useGroupDerivedProject ? 'group-derived' : project.id
         const title = `${projectLabel}: direct follow-up with ${contactName} from ${group.name || group.wa_chat_id}`
         if (isLowValueAdminCandidate({ projectLabel, group, relevantDms, contact })) continue
+        if (isLowValueSocialCandidate({ relevantDms })) continue
         out.push({
           opportunity_type: 'meeting_action',
           title: compactText(title, 180),

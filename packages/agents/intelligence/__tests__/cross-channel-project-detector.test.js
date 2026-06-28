@@ -187,7 +187,7 @@ test('does not promote a project join when the direct DM only matches unrelated 
     groups: [{ id: 44, wa_chat_id: 'social@g.us', name: "Nandita's Men", ai_summary: 'Mixed social group where members discuss investment strategy in one thread and share songs, family reels, social listening suggestions, and casual Facebook links in another.' }],
     contacts: [{ id: 118, display_name: 'Dinesh Kumar Jhunjhnuwala', relationship_tier: 'tier_1', strategic_importance_score: 85, wa_jids: ['919222222222@c.us'] }],
     groupMessages: [{ chat_id: 'social@g.us', participant: '919222222222@c.us', body: 'Investment capital strategy came up earlier; separately please share the two songs and Facebook reel in the social group' }],
-    directMessages: [{ contact_id: 118, chat_id: '919222222222@c.us', body: 'Can you share your two songs. Will want to listen to them in a peaceful manner.' }],
+    directMessages: [{ contact_id: 118, chat_id: '919222222222@c.us', body: 'Can you share your two investment songs. Will want to listen to them in a peaceful manner. https://www.facebook.com/share/r/abc' }],
   })
   assert.equal(opportunities.length, 0)
 })
