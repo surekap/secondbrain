@@ -259,9 +259,25 @@ function detectCrossChannelProjectSignals(input = {}) {
             const contextScore = overlapScore(dmContext, text)
             const projectTerms = sharedTerms(pText, text)
             const contextTerms = sharedTerms(dmContext, text)
-            return { dm, text, score: Math.max(projectScore, contextScore), projectScore, contextScore, shared_terms: Array.from(new Set([...projectTerms, ...contextTerms])) }
+            return {
+              dm,
+              text,
+              score: Math.max(projectScore, contextScore),
+              projectScore,
+              contextScore,
+              project_terms: projectTerms,
+              context_terms: contextTerms,
+              shared_terms: Array.from(new Set([...projectTerms, ...contextTerms])),
+            }
           })
-          .filter(x => x.score >= dmThreshold && x.shared_terms.length >= minSharedProjectDmTerms && isActionable(x.text))
+          .filter(x => {
+            if (x.score < dmThreshold || x.shared_terms.length < minSharedProjectDmTerms || !isActionable(x.text)) return false
+            // For real project joins, the direct DM must carry at least one project term itself.
+            // Otherwise a mixed-purpose/social group can make an unrelated DM look project-relevant
+            // just because it matches group context words like "share", "songs", or links.
+            if (!knownGroupDerived && x.project_terms.length < minSharedProjectDmTerms) return false
+            return true
+          })
           .sort((a, b) => b.score - a.score)
           .slice(0, 5)
         if (!relevantDms.length) continue
