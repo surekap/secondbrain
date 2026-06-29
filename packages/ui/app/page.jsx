@@ -113,6 +113,25 @@ async function fetchJson(path, { fallback = null, timeoutMs = 8000 } = {}) {
   }
 }
 
+async function fetchJsonDetailed(path, { fallback = null, timeoutMs = 8000 } = {}) {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  try {
+    const res = await fetch(path, { signal: controller.signal })
+    if (!res.ok) {
+      return { data: fallback, error: `${res.status} ${res.statusText || 'request failed'}` }
+    }
+    return { data: await res.json(), error: null }
+  } catch (err) {
+    return {
+      data: fallback,
+      error: err?.name === 'AbortError' ? `Timed out after ${timeoutMs}ms` : (err?.message || 'request failed'),
+    }
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
 export default function DashboardPage() {
   const [relInsights, setRelInsights]     = useState([])
   const [projInsights, setProjInsights]   = useState([])
@@ -125,41 +144,45 @@ export default function DashboardPage() {
   const [duplicateEvidence, setDuplicateEvidence] = useState(null)
   const [duplicateEvidenceKey, setDuplicateEvidenceKey] = useState(null)
   const [groupsMap, setGroupsMap]         = useState({})
+  const [feedIssues, setFeedIssues]       = useState([])
   const [loading, setLoading]             = useState(true)
 
   async function load() {
-    const [ri, pi, rs, ps, ra, gr, aq, ds] = await Promise.allSettled([
-      fetchJson('/api/relationships/insights', { fallback: [], timeoutMs: 8000 }),
-      fetchJson('/api/projects/insights/open', { fallback: [], timeoutMs: 8000 }),
-      fetchJson('/api/relationships/stats', { fallback: null, timeoutMs: 8000 }),
-      fetchJson('/api/projects/stats', { fallback: null, timeoutMs: 8000 }),
-      fetchJson('/api/projects/activity/recent', { fallback: [], timeoutMs: 8000 }),
-      fetchJson('/api/relationships/groups', { fallback: [], timeoutMs: 3000 }),
-      fetchJson('/api/intelligence/attention?limit=5', { fallback: [], timeoutMs: 5000 }),
-      fetchJson('/api/intelligence/duplicates/summary?limit=3', { fallback: null, timeoutMs: 5000 }),
+    const [ri, pi, rs, ps, ra, gr, aq, ds] = await Promise.all([
+      fetchJsonDetailed('/api/relationships/insights', { fallback: [], timeoutMs: 8000 }),
+      fetchJsonDetailed('/api/projects/insights/open', { fallback: [], timeoutMs: 8000 }),
+      fetchJsonDetailed('/api/relationships/stats', { fallback: null, timeoutMs: 8000 }),
+      fetchJsonDetailed('/api/projects/stats', { fallback: null, timeoutMs: 8000 }),
+      fetchJsonDetailed('/api/projects/activity/recent', { fallback: [], timeoutMs: 8000 }),
+      fetchJsonDetailed('/api/relationships/groups', { fallback: [], timeoutMs: 3000 }),
+      fetchJsonDetailed('/api/intelligence/attention?limit=5', { fallback: [], timeoutMs: 5000 }),
+      fetchJsonDetailed('/api/intelligence/duplicates/summary?limit=3', { fallback: null, timeoutMs: 5000 }),
     ])
-    const value = result => result.status === 'fulfilled' ? result.value : null
-    const relInsightData = value(ri)
-    const projectInsightData = value(pi)
-    const relStatsData = value(rs)
-    const projectStatsData = value(ps)
-    const recentActivityData = value(ra)
-    const groupsData = value(gr)
-    const attentionData = value(aq)
-    const duplicateData = value(ds)
 
-    if (Array.isArray(relInsightData)) setRelInsights(relInsightData)
-    if (Array.isArray(projectInsightData)) setProjInsights(projectInsightData)
-    if (relStatsData && !relStatsData.error) setRelStats(relStatsData)
-    if (projectStatsData && !projectStatsData.error) setProjStats(projectStatsData)
-    if (Array.isArray(recentActivityData)) setRecentActivity(recentActivityData.slice(0, 8))
-    if (Array.isArray(attentionData)) setAttentionItems(attentionData)
-    if (duplicateData && !duplicateData.error) setDuplicateSummary(duplicateData)
-    if (Array.isArray(groupsData)) {
+    const feedErrors = [
+      ['relationships insights', ri.error],
+      ['projects insights', pi.error],
+      ['relationships stats', rs.error],
+      ['projects stats', ps.error],
+      ['recent activity', ra.error],
+      ['relationship groups', gr.error],
+      ['attention queue', aq.error],
+      ['duplicate summary', ds.error],
+    ].filter(([, error]) => error).map(([name, error]) => `${name}: ${error}`)
+
+    if (Array.isArray(ri.data)) setRelInsights(ri.data)
+    if (Array.isArray(pi.data)) setProjInsights(pi.data)
+    if (rs.data && !rs.error) setRelStats(rs.data)
+    if (ps.data && !ps.error) setProjStats(ps.data)
+    if (Array.isArray(ra.data)) setRecentActivity(ra.data.slice(0, 8))
+    if (Array.isArray(aq.data)) setAttentionItems(aq.data)
+    if (ds.data && !ds.error) setDuplicateSummary(ds.data)
+    if (Array.isArray(gr.data)) {
       const map = {}
-      for (const g of groupsData) if (g.wa_chat_id && g.name) map[g.wa_chat_id] = g.name
+      for (const g of gr.data) if (g.wa_chat_id && g.name) map[g.wa_chat_id] = g.name
       setGroupsMap(map)
     }
+    setFeedIssues(feedErrors)
     setLoading(false)
   }
 
@@ -253,6 +276,15 @@ export default function DashboardPage() {
         .dash-title { font-family:'Fraunces',serif; font-weight:300; font-size: clamp(1.5rem,3vw,2rem); letter-spacing:-.03em; color:var(--text); margin-bottom:.25rem; }
         .dash-title em { font-style:italic; color:var(--accent); }
         .dash-desc { font-size:.825rem; color:var(--text-3); }
+        .health-banner {
+          display:flex; align-items:flex-start; gap:.65rem; justify-content:space-between;
+          margin-bottom:1rem; padding:.8rem 1rem; border:1px solid var(--amber-border);
+          background:var(--amber-bg); color:var(--amber); border-radius:10px; font-size:.8rem;
+        }
+        .health-banner strong { color:inherit; }
+        .health-list { margin:.35rem 0 0; padding-left:1.1rem; color:inherit; }
+        .health-list li + li { margin-top:.2rem; }
+        .health-link { color:inherit; font-weight:600; text-decoration:underline; }
 
         /* Stats bar */
         .stats-row { display:flex; gap:1rem; flex-wrap:wrap; margin-bottom:2rem; }
@@ -374,6 +406,7 @@ export default function DashboardPage() {
         .ai-date { font-size:.68rem; color:var(--text-3); flex-shrink:0; padding-top:.1rem; }
 
         .empty-state { padding:2rem 1rem; text-align:center; color:var(--text-3); font-size:.825rem; }
+        .empty-state strong { color:var(--text); }
 
         /* Cmd+K hint */
         .search-hint {
@@ -396,6 +429,18 @@ export default function DashboardPage() {
               : 'No open insights — you\'re all caught up.'}
           </p>
         </div>
+
+        {feedIssues.length > 0 && (
+          <div className="health-banner">
+            <div>
+              <strong>Data feed degraded.</strong> Some intelligence slices fell back to cached/empty state instead of live data.
+              <ul className="health-list">
+                {feedIssues.slice(0, 4).map(issue => <li key={issue}>{issue}</li>)}
+              </ul>
+            </div>
+            <a className="health-link" href="/observe">Check Observe</a>
+          </div>
+        )}
 
         {/* Search hint */}
         <div className="search-hint" onClick={() => {
@@ -599,7 +644,11 @@ export default function DashboardPage() {
         {loading ? (
           <div className="empty-state">Loading…</div>
         ) : totalInsights === 0 ? (
-          <div className="empty-state">No open insights — everything is clear.</div>
+          <div className="empty-state">
+            {feedIssues.length > 0
+              ? <><strong>No insights rendered.</strong> The live feeds are degraded, so the dashboard is not trustworthy yet.</>
+              : 'No open insights — everything is clear.'}
+          </div>
         ) : (
           <div className="matrix">
             {QUADRANTS.map(q => {

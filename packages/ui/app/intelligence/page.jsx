@@ -12,6 +12,16 @@ async function fetchJson(path, fallback) {
   }
 }
 
+async function fetchJsonDetailed(path, fallback) {
+  try {
+    const res = await fetch(path)
+    if (!res.ok) return { data: fallback, error: `HTTP ${res.status}` }
+    return { data: await res.json(), error: null }
+  } catch (error) {
+    return { data: fallback, error: error?.message || 'request failed' }
+  }
+}
+
 function fmtAge(iso) {
   if (!iso) return null
   const d = new Date(iso)
@@ -75,20 +85,27 @@ export default function IntelligencePage() {
   const [stats, setStats] = useState(null)
   const [refresh, setRefresh] = useState(null)
   const [loading, setLoading] = useState(true)
+  const [loadIssues, setLoadIssues] = useState([])
   const [q, setQ] = useState('')
 
   async function load() {
     setLoading(true)
     const [attention, opportunities, searchStats, refreshStatus] = await Promise.all([
-      fetchJson('/api/intelligence/attention?limit=50', []),
-      fetchJson('/api/intelligence/opportunities?limit=50', []),
-      fetchJson('/api/search/stats', null),
-      fetchJson('/api/intelligence/refresh/status', null),
+      fetchJsonDetailed('/api/intelligence/attention?limit=50', []),
+      fetchJsonDetailed('/api/intelligence/opportunities?limit=50', []),
+      fetchJsonDetailed('/api/search/stats', null),
+      fetchJsonDetailed('/api/intelligence/refresh/status', null),
     ])
-    setItems(Array.isArray(attention) ? attention : [])
-    setOpps(Array.isArray(opportunities) ? opportunities : [])
-    setStats(searchStats)
-    setRefresh(refreshStatus)
+    setItems(Array.isArray(attention.data) ? attention.data : [])
+    setOpps(Array.isArray(opportunities.data) ? opportunities.data : [])
+    setStats(searchStats.data)
+    setRefresh(refreshStatus.data)
+    setLoadIssues([
+      attention.error && `attention: ${attention.error}`,
+      opportunities.error && `opportunities: ${opportunities.error}`,
+      searchStats.error && `search stats: ${searchStats.error}`,
+      refreshStatus.error && `refresh status: ${refreshStatus.error}`,
+    ].filter(Boolean))
     setLoading(false)
   }
 
@@ -110,6 +127,15 @@ export default function IntelligencePage() {
         .intel-head { display:flex; justify-content:space-between; gap:1rem; align-items:flex-start; margin-bottom:1.25rem; }
         .intel-head h1 { font-family:'Fraunces',serif; font-size:clamp(1.7rem,3vw,2.35rem); font-weight:300; letter-spacing:-.035em; margin:0; color:var(--text); }
         .intel-sub { color:var(--text-3); font-size:.86rem; margin-top:.35rem; line-height:1.5; }
+        .health-banner {
+          display:flex; align-items:flex-start; justify-content:space-between; gap:1rem;
+          border:1px solid var(--amber-border); background:var(--amber-bg); color:var(--amber);
+          border-radius:12px; padding:.9rem 1rem; margin:1rem 0 1.25rem; font-size:.82rem;
+        }
+        .health-banner strong { color:inherit; }
+        .health-banner ul { margin:.35rem 0 0; padding-left:1.1rem; }
+        .health-banner li + li { margin-top:.2rem; }
+        .health-link { color:inherit; font-weight:600; text-decoration:underline; white-space:nowrap; }
         .refresh-btn, .intel-actions button { border:1px solid var(--border); background:var(--surface); color:var(--text); border-radius:8px; padding:.45rem .7rem; cursor:pointer; font-size:.78rem; }
         .refresh-btn:hover, .intel-actions button:hover { border-color:var(--border-strong); background:var(--surface-2); }
         .intel-actions .ghost { color:var(--text-3); }
@@ -144,6 +170,18 @@ export default function IntelligencePage() {
         <button className="refresh-btn" onClick={load}>{loading ? 'Loading…' : 'Refresh'}</button>
       </div>
 
+      {loadIssues.length > 0 && (
+        <div className="health-banner">
+          <div>
+            <strong>Intelligence feeds degraded.</strong> Some slices fell back to empty/cache state.
+            <ul>
+              {loadIssues.slice(0, 4).map(issue => <li key={issue}>{issue}</li>)}
+            </ul>
+          </div>
+          <a className="health-link" href="/observe">Check Observe</a>
+        </div>
+      )}
+
       <div className="intel-stats">
         <div className="stat"><div className="stat-val">{items.length}</div><div className="stat-lbl">Attention items</div></div>
         <div className="stat"><div className="stat-val">{opps.length}</div><div className="stat-lbl">Open opportunities loaded</div></div>
@@ -156,7 +194,15 @@ export default function IntelligencePage() {
         <a className="api-link" href="/api/intelligence/attention?limit=50">API →</a>
       </div>
 
-      {loading ? <div className="empty">Loading intelligence…</div> : filtered.length === 0 ? <div className="empty">No intelligence items match this filter.</div> : (
+      {loading ? <div className="empty">Loading intelligence…</div> : filtered.length === 0 ? (
+        <div className="empty">
+          {loadIssues.length > 0
+            ? <>No live items rendered. The intelligence pipeline is degraded, so this surface is not trustworthy yet.</>
+            : refresh?.last?.status && refresh.last.status !== 'completed'
+              ? <>No items rendered. Last refresh is <strong>{refresh.last.status}</strong>; fix the refresh pipeline first.</>
+              : 'No intelligence items match this filter.'}
+        </div>
+      ) : (
         <div className="intel-list">
           {filtered.map(item => <ItemCard key={item.id} item={item} onRemove={id => setItems(prev => prev.filter(x => x.id !== id))} />)}
         </div>
