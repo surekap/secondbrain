@@ -1848,6 +1848,42 @@ app.get('/api/intelligence/opportunities', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// GET /api/intelligence/opportunities/:id/evidence — evidence basis for a single opportunity
+app.get('/api/intelligence/opportunities/:id/evidence', async (req, res) => {
+  if (!db) return res.status(503).json({ error: 'No database' });
+  const id = parseInt(req.params.id, 10);
+  if (isNaN(id)) return res.status(400).json({ error: 'Invalid id' });
+
+  try {
+    const limit = parsePositiveIntQuery(req.query.limit, 5, 20);
+    if (limit === null) return res.status(400).json({ error: 'Invalid limit' });
+
+    const { rows } = await db.query(`
+      SELECT
+        e.id,
+        e.source_table,
+        e.source_id,
+        e.source_ref,
+        e.occurred_at,
+        e.quote,
+        e.relevance,
+        e.metadata,
+        COALESCE(
+          NULLIF(TRIM(e.quote), ''),
+          NULLIF(TRIM(COALESCE(e.metadata->>'title', e.metadata->>'subject', e.metadata->>'body', '')), '')
+        ) AS excerpt
+      FROM intelligence.opportunity_evidence e
+      WHERE e.opportunity_id = $1
+      ORDER BY e.occurred_at DESC NULLS LAST, e.created_at DESC
+      LIMIT $2
+    `, [id, limit]);
+
+    res.json(rows);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // GET /api/intelligence/attention — highest-value open attention items
 app.get('/api/intelligence/attention', async (req, res) => {
   if (!db) return res.status(503).json({ error: 'No database' });

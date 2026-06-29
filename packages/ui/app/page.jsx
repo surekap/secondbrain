@@ -72,21 +72,33 @@ function InsightCard({ item, type, onAction, onDismiss, groupsMap }) {
   const color = PRIORITY_COLOR[item.priority] || 'var(--text-3)'
   const label = type === 'relationship' ? item.contact_name : item.project_name
   const href  = type === 'relationship'
-    ? `/relationships?contact=${item.contact_id}`
-    : `/projects?project=${item.project_id}`
+    ? (item.contact_id ? `/relationships?contact=${item.contact_id}` : null)
+    : (item.project_id ? `/projects?project=${item.project_id}` : null)
   const title = resolveGroupIds(item.title || item.content, groupsMap)
   const desc  = resolveGroupIds(item.description, groupsMap)
+  const body = (
+    <>
+      <div className="ic-top">
+        {label && <span className="ic-label">{label}</span>}
+        {!href && <span className="ic-label" style={{ color: 'var(--amber)' }}>unlinked</span>}
+        <span className="ic-type">{(item.insight_type || '').replace(/_/g, ' ')}</span>
+      </div>
+      <div className="ic-title">{title}</div>
+      {desc && <div className="ic-desc">{desc}</div>}
+    </>
+  )
   return (
     <div className="insight-card">
       <div className="ic-stripe" style={{ background: color }} />
-      <Link href={href} className="ic-body" style={{ textDecoration: 'none', color: 'inherit' }}>
-        <div className="ic-top">
-          {label && <span className="ic-label">{label}</span>}
-          <span className="ic-type">{(item.insight_type || '').replace(/_/g, ' ')}</span>
+      {href ? (
+        <Link href={href} className="ic-body" style={{ textDecoration: 'none', color: 'inherit' }}>
+          {body}
+        </Link>
+      ) : (
+        <div className="ic-body" style={{ cursor: 'default' }}>
+          {body}
         </div>
-        <div className="ic-title">{title}</div>
-        {desc && <div className="ic-desc">{desc}</div>}
-      </Link>
+      )}
       <div className="ic-actions">
         {onAction && (
           <button className="ic-btn" onClick={() => onAction(item.id)} title="Mark actioned">✓</button>

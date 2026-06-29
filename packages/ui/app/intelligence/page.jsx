@@ -42,7 +42,7 @@ function score(item) {
   return Number(item.attention_score ?? item.expected_value_score ?? 0).toFixed(0)
 }
 
-function ItemCard({ item, onRemove }) {
+function ItemCard({ item, onRemove, evidence, evidenceLoading, evidenceOpen, onToggleEvidence }) {
   async function setStatus(status) {
     await fetch(`/api/intelligence/opportunities/${item.id}`, {
       method: 'PATCH',
@@ -51,6 +51,8 @@ function ItemCard({ item, onRemove }) {
     }).catch(() => {})
     onRemove(item.id)
   }
+
+  const evidenceCount = Number(item.evidence_count || 0)
 
   return (
     <article className="intel-card">
@@ -70,6 +72,35 @@ function ItemCard({ item, onRemove }) {
           {item.why_now || 'No timing rationale recorded.'}
           {(item.source_last_seen_at || item.last_seen_at) && <span> · source updated {fmtAge(item.source_last_seen_at || item.last_seen_at)}</span>}
         </div>
+
+        {evidenceCount > 0 && (
+          <div className="evidence-panel">
+            <button className="evidence-toggle" onClick={() => onToggleEvidence(item.id)}>
+              {evidenceOpen ? 'Hide evidence' : `Show evidence (${evidenceCount})`}
+            </button>
+            {evidenceOpen && (
+              <div className="evidence-list">
+                {evidenceLoading ? (
+                  <div className="evidence-empty">Loading evidence…</div>
+                ) : evidence?.length ? (
+                  evidence.map(ev => (
+                    <div className="evidence-item" key={ev.id}>
+                      <div className="evidence-meta">
+                        <span className="evidence-source">{String(ev.source_table || 'evidence').replace(/_/g, ' ')}</span>
+                        {ev.occurred_at && <span>{fmtAge(ev.occurred_at)}</span>}
+                        {ev.relevance != null && <span>relevance {Number(ev.relevance).toFixed(2)}</span>}
+                        {ev.source_ref && <span className="evidence-ref">{ev.source_ref}</span>}
+                      </div>
+                      <div className="evidence-quote">{ev.excerpt || ev.quote || 'No excerpt recorded.'}</div>
+                    </div>
+                  ))
+                ) : (
+                  <div className="evidence-empty">No evidence rows returned.</div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
       </div>
       <div className="intel-actions">
         <button onClick={() => setStatus('actioned')}>Actioned</button>
@@ -87,6 +118,9 @@ export default function IntelligencePage() {
   const [loading, setLoading] = useState(true)
   const [loadIssues, setLoadIssues] = useState([])
   const [q, setQ] = useState('')
+  const [expandedEvidence, setExpandedEvidence] = useState({})
+  const [evidenceById, setEvidenceById] = useState({})
+  const [evidenceLoadingById, setEvidenceLoadingById] = useState({})
 
   async function load() {
     setLoading(true)
@@ -107,6 +141,16 @@ export default function IntelligencePage() {
       refreshStatus.error && `refresh status: ${refreshStatus.error}`,
     ].filter(Boolean))
     setLoading(false)
+  }
+
+  async function toggleEvidence(id) {
+    setExpandedEvidence(prev => ({ ...prev, [id]: !prev[id] }))
+    if (expandedEvidence[id] || evidenceById[id] || evidenceLoadingById[id]) return
+
+    setEvidenceLoadingById(prev => ({ ...prev, [id]: true }))
+    const data = await fetchJsonDetailed(`/api/intelligence/opportunities/${id}/evidence?limit=5`, [])
+    setEvidenceById(prev => ({ ...prev, [id]: Array.isArray(data.data) ? data.data : [] }))
+    setEvidenceLoadingById(prev => ({ ...prev, [id]: false }))
   }
 
   useEffect(() => { load() }, [])
@@ -158,6 +202,16 @@ export default function IntelligencePage() {
         .desc { color:var(--text-2); font-size:.82rem; line-height:1.5; margin:.35rem 0; display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden; }
         .next { color:var(--accent); font-size:.8rem; line-height:1.45; margin:.45rem 0; }
         .why { color:var(--text-3); font-size:.72rem; line-height:1.45; }
+        .evidence-panel { margin-top:.65rem; border-top:1px solid var(--border); padding-top:.65rem; }
+        .evidence-toggle { border:1px solid var(--border); background:var(--surface-2); color:var(--text); border-radius:8px; padding:.35rem .6rem; font-size:.72rem; cursor:pointer; }
+        .evidence-toggle:hover { border-color:var(--border-strong); }
+        .evidence-list { margin-top:.6rem; display:flex; flex-direction:column; gap:.5rem; }
+        .evidence-item { border:1px solid var(--border); border-radius:10px; background:var(--surface-2); padding:.65rem .75rem; }
+        .evidence-meta { display:flex; flex-wrap:wrap; gap:.35rem; color:var(--text-3); font-size:.68rem; margin-bottom:.35rem; }
+        .evidence-source { text-transform:capitalize; color:var(--accent); }
+        .evidence-ref { font-family:monospace; }
+        .evidence-quote { color:var(--text); font-size:.76rem; line-height:1.45; white-space:pre-wrap; }
+        .evidence-empty { color:var(--text-3); font-size:.72rem; }
         .intel-actions { display:flex; gap:.4rem; align-items:flex-start; }
         .empty { border:1px dashed var(--border); border-radius:12px; padding:2rem; color:var(--text-3); text-align:center; }
       `}</style>
@@ -204,7 +258,17 @@ export default function IntelligencePage() {
         </div>
       ) : (
         <div className="intel-list">
-          {filtered.map(item => <ItemCard key={item.id} item={item} onRemove={id => setItems(prev => prev.filter(x => x.id !== id))} />)}
+          {filtered.map(item => (
+            <ItemCard
+              key={item.id}
+              item={item}
+              onRemove={id => setItems(prev => prev.filter(x => x.id !== id))}
+              evidence={evidenceById[item.id]}
+              evidenceLoading={Boolean(evidenceLoadingById[item.id])}
+              evidenceOpen={Boolean(expandedEvidence[item.id])}
+              onToggleEvidence={toggleEvidence}
+            />
+          ))}
         </div>
       )}
     </div>
