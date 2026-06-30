@@ -19,6 +19,7 @@ const { resolveEntityAlias } = require('../agents/intelligence/services/entity-r
 const { auditDuplicateContacts, auditDuplicateOrganizations, auditDuplicateSummary } = require('../agents/intelligence/services/duplicate-auditor');
 const { upsertDuplicateDecision, listDuplicateDecisions } = require('../agents/intelligence/services/duplicate-decisions');
 const { runExactIdentityMerge } = require('../agents/relationships/services/exact-identity-backfill');
+const { createOpportunitySuppression } = require('../agents/intelligence/services/suppression-matcher');
 
 // ── Bootstrap ─────────────────────────────────────────────────────────────────
 
@@ -46,6 +47,77 @@ const intelligenceRefreshState = {
   last: null,
   history: [],
 };
+
+const EXPLICIT_OPPORTUNITY_ACTIONS = new Set([
+  'wrong_person',
+  'wrong_project',
+  'already_closed',
+  'not_useful',
+  'suppress_pattern',
+]);
+
+const ACTION_TO_REASON_CODE = {
+  wrong_person: 'wrong_person',
+  wrong_project: 'wrong_project',
+  already_closed: 'already_closed',
+  not_useful: 'not_useful',
+  suppress_pattern: 'suppress_pattern',
+};
+
+function compactText(value, max = 240) {
+  return String(value || '').replace(/\s+/g, ' ').trim().slice(0, max);
+}
+
+async function recordOpportunitySuppressionFromAction(opportunity, action, note) {
+  if (!opportunity || !EXPLICIT_OPPORTUNITY_ACTIONS.has(action)) return null;
+  if (!db) throw new Error('No database');
+
+  const reasonCode = ACTION_TO_REASON_CODE[action];
+  const scopeType = action === 'wrong_person' ? 'contact'
+    : action === 'wrong_project' ? 'project'
+    : action === 'suppress_pattern' ? 'pattern'
+    : 'opportunity';
+
+  const matchType = action === 'suppress_pattern'
+    ? 'pattern'
+    : action === 'already_closed'
+      ? 'exact'
+      : 'exact';
+
+  const scopeId = scopeType === 'contact'
+    ? (opportunity.primary_contact_id == null ? null : String(opportunity.primary_contact_id))
+    : scopeType === 'project'
+      ? (opportunity.primary_project_id == null ? null : String(opportunity.primary_project_id))
+      : scopeType === 'opportunity'
+        ? String(opportunity.id)
+        : null;
+
+  const matchValue = action === 'suppress_pattern'
+    ? compactText(opportunity.title || opportunity.description || '')
+    : scopeType === 'opportunity'
+      ? String(opportunity.id)
+      : scopeId;
+
+  if (!matchValue) return null;
+
+  return createOpportunitySuppression(db, {
+    scope_type: scopeType,
+    scope_id: scopeId,
+    match_type: action === 'suppress_pattern' ? 'pattern' : (action === 'already_closed' ? 'exact' : matchType),
+    match_value: action === 'suppress_pattern' ? `%${matchValue}%` : matchValue,
+    detector: opportunity.metadata?.detector || opportunity.source_system || 'ui',
+    source_system: opportunity.source_system || 'manual',
+    reason_code: reasonCode,
+    note: note || opportunity.feedback_note || null,
+    created_by: 'user',
+    metadata: {
+      opportunity_id: opportunity.id,
+      opportunity_type: opportunity.opportunity_type,
+      source_ref: opportunity.source_ref || null,
+      action,
+    },
+  });
+}
 
 function createIntelligenceRefreshRun(trigger = 'api') {
   return {
@@ -1905,9 +1977,48 @@ app.get('/api/intelligence/attention', async (req, res) => {
     }
     params.push(limit);
     const { rows } = await db.query(`
-      SELECT *
-      FROM intelligence.attention_queue
+      SELECT a.*,
+             CASE
+               WHEN a.primary_contact_id IS NOT NULL AND a.primary_project_id IS NOT NULL THEN 'linked:contact+project'
+               WHEN a.primary_contact_id IS NOT NULL THEN 'linked:contact'
+               WHEN a.primary_project_id IS NOT NULL THEN 'linked:project'
+               ELSE 'unlinked'
+             END AS linkage_state,
+             CASE
+               WHEN COALESCE(a.evidence_count, 0) = 0 THEN 'No supporting evidence yet.'
+               WHEN COALESCE(a.evidence_count, 0) = 1 THEN 'Single evidence item; keep under observation.'
+               ELSE CONCAT(COALESCE(a.evidence_count, 0), ' evidence items; last seen ', COALESCE(TO_CHAR(a.source_last_seen_at, 'YYYY-MM-DD'), 'unknown'))
+             END AS provenance_summary,
+             COALESCE((
+               SELECT jsonb_agg(jsonb_build_object(
+                 'source_table', e.source_table,
+                 'source_id', e.source_id,
+                 'source_ref', e.source_ref,
+                 'occurred_at', e.occurred_at,
+                 'quote', e.quote,
+                 'relevance', e.relevance
+               ) ORDER BY e.occurred_at DESC NULLS LAST, e.created_at DESC)
+               FROM (
+                 SELECT e.*
+                 FROM intelligence.opportunity_evidence e
+                 WHERE e.opportunity_id = a.id
+                 ORDER BY e.occurred_at DESC NULLS LAST, e.created_at DESC
+                 LIMIT 3
+               ) e
+             ), '[]'::jsonb) AS top_evidence,
+             COALESCE((
+               SELECT ARRAY_AGG(DISTINCT e.source_ref)
+               FROM intelligence.opportunity_evidence e
+               WHERE e.opportunity_id = a.id AND e.source_ref IS NOT NULL
+             ), ARRAY[]::text[]) AS source_refs
+      FROM intelligence.attention_queue a
       ${where}
+      ORDER BY
+        a.attention_score DESC NULLS LAST,
+        a.expected_value_score DESC NULLS LAST,
+        CASE a.priority WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END,
+        COALESCE(a.source_last_seen_at, a.last_seen_at, a.created_at) DESC NULLS LAST,
+        a.created_at DESC
       LIMIT $${params.length}
     `, params);
     res.json(rows);
@@ -1954,7 +2065,11 @@ app.patch('/api/intelligence/opportunities/:id', async (req, res) => {
   const allowed = ['status','priority','recommended_next_action','snoozed_until','expires_at','feedback','feedback_note'];
   const updates = {};
   for (const key of allowed) if (key in req.body) updates[key] = req.body[key];
-  if (!Object.keys(updates).length) return res.status(400).json({ error: 'Nothing to update' });
+  const feedbackAction = String(req.body?.feedback_action || req.body?.action || '').trim();
+  if (feedbackAction && !EXPLICIT_OPPORTUNITY_ACTIONS.has(feedbackAction)) {
+    return res.status(400).json({ error: 'Invalid feedback action' });
+  }
+  if (!Object.keys(updates).length && !feedbackAction) return res.status(400).json({ error: 'Nothing to update' });
 
   const validStatuses = new Set(['open','snoozed','actioned','dismissed','expired']);
   const validPriorities = new Set(['high','medium','low']);
@@ -1962,6 +2077,26 @@ app.patch('/api/intelligence/opportunities/:id', async (req, res) => {
   if (updates.status && !validStatuses.has(updates.status)) return res.status(400).json({ error: 'Invalid status' });
   if (updates.priority && !validPriorities.has(updates.priority)) return res.status(400).json({ error: 'Invalid priority' });
   if (updates.feedback && !validFeedback.has(updates.feedback)) return res.status(400).json({ error: 'Invalid feedback' });
+
+  const { rows: currentRows } = await db.query('SELECT * FROM intelligence.opportunities WHERE id = $1', [id]);
+  if (!currentRows.length) return res.status(404).json({ error: 'Not found' });
+
+  if (feedbackAction) {
+    delete updates.feedback_action;
+    delete updates.action;
+    if (!updates.feedback_note && req.body?.note) updates.feedback_note = req.body.note;
+    if (feedbackAction === 'already_closed') {
+      updates.status = 'actioned';
+      updates.feedback = updates.feedback || 'too_late';
+    } else if (feedbackAction === 'not_useful') {
+      updates.status = 'dismissed';
+      updates.feedback = updates.feedback || 'not_useful';
+    } else {
+      updates.status = 'dismissed';
+      updates.feedback = updates.feedback || 'false_positive';
+    }
+    updates.feedback_note = updates.feedback_note || compactText(req.body?.note || req.body?.feedback_note || '', 500) || null;
+  }
 
   const setClauses = [];
   const values = [];
@@ -1983,6 +2118,13 @@ app.patch('/api/intelligence/opportunities/:id', async (req, res) => {
       RETURNING *
     `, values);
     if (!rows.length) return res.status(404).json({ error: 'Not found' });
+    if (feedbackAction) {
+      try {
+        await recordOpportunitySuppressionFromAction(rows[0], feedbackAction, updates.feedback_note || null);
+      } catch (suppressionError) {
+        console.warn('[ui] suppression write failed:', suppressionError.message);
+      }
+    }
     res.json(rows[0]);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -1993,22 +2135,38 @@ app.post('/api/intelligence/opportunities/:id/feedback', async (req, res) => {
   const id = parseInt(req.params.id, 10);
   if (isNaN(id)) return res.status(400).json({ error: 'Invalid id' });
   const feedback = req.body?.feedback;
+  const action = String(req.body?.action || req.body?.feedback_action || '').trim();
   const note = req.body?.note || null;
   const validFeedback = new Set(['useful','not_useful','false_positive','too_late','too_low_value']);
   if (!feedback) return res.status(400).json({ error: 'feedback is required' });
   if (!validFeedback.has(feedback)) return res.status(400).json({ error: 'Invalid feedback' });
+  if (action && !EXPLICIT_OPPORTUNITY_ACTIONS.has(action)) return res.status(400).json({ error: 'Invalid feedback action' });
+
+  const recordedFeedback = action
+    ? (action === 'already_closed' ? 'too_late' : action === 'not_useful' ? 'not_useful' : 'false_positive')
+    : feedback;
 
   try {
     const { rows } = await db.query(`
       INSERT INTO intelligence.opportunity_feedback_events (opportunity_id, feedback, note)
       VALUES ($1, $2, $3)
       RETURNING *
-    `, [id, feedback, note]);
+    `, [id, recordedFeedback, note]);
     await db.query(`
       UPDATE intelligence.opportunities
       SET feedback = $2, feedback_note = COALESCE($3, feedback_note), updated_at = NOW()
       WHERE id = $1
-    `, [id, feedback, note]);
+    `, [id, recordedFeedback, note]);
+    if (action) {
+      const { rows: opportunityRows } = await db.query('SELECT * FROM intelligence.opportunities WHERE id = $1', [id]);
+      if (opportunityRows.length) {
+        try {
+          await recordOpportunitySuppressionFromAction(opportunityRows[0], action, note);
+        } catch (suppressionError) {
+          console.warn('[ui] suppression write failed:', suppressionError.message);
+        }
+      }
+    }
     res.json(rows[0]);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });

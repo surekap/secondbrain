@@ -11,6 +11,7 @@ const { buildSignalClusters, shouldPromoteCluster, opportunityFromCluster, clust
 const { recommendContactTiers } = require('./services/contact-tierer')
 const { extractAliases, normalized: normalizeAlias } = require('./services/alias-extractor')
 const { canonicalizeEntityId, canonicalizeEntityIds } = require('./services/canonical-ids')
+const { matchOpportunitySuppression } = require('./services/suppression-matcher')
 const { detectStaleEmailThreads } = require('./services/stale-email-thread-detector')
 const { detectCrossChannelProjectSignals } = require('./services/cross-channel-project-detector')
 const { detectRelationshipOpenLoops } = require('./services/relationship-open-loop-detector')
@@ -145,6 +146,16 @@ function dedupeKeyFor(sourceSystem, sourceRef, title) {
 
 async function upsertOpportunity(input) {
   await ensureSchema()
+  const suppression = await matchOpportunitySuppression(db, input)
+  if (suppression) {
+    console.log('[intelligence] opportunity suppressed', {
+      title: input.title,
+      source_ref: input.source_ref || null,
+      reason_code: suppression.reason_code,
+      match_type: suppression.match_type,
+    })
+    return null
+  }
   const scores = priorityScore(input.priority)
   const dedupeKey = input.dedupe_key || dedupeKeyFor(input.source_system, input.source_ref, input.title)
   const recommendedNextAction = deriveRecommendedNextAction(input)
@@ -511,6 +522,7 @@ async function upsertFromRelationshipInsight(insightId, contactId, insight) {
         source_refs: insight.source_refs || [],
       },
     })
+    if (!opportunityId) return null
     await linkContacts(opportunityId, contactIds, contactId)
     await addEvidence(opportunityId, {
       source_table: 'relationships.insights',
@@ -544,6 +556,7 @@ async function upsertFromProjectInsight(projectInsightId, projectId, insight) {
       surfaced_project_insight_id: projectInsightId,
       metadata: { project_insight_type: insight.insight_type },
     })
+    if (!opportunityId) return null
     await linkProject(opportunityId, projectId)
     await addEvidence(opportunityId, {
       source_table: 'projects.project_insights',
@@ -586,6 +599,7 @@ async function upsertFromGroupOpportunity(groupId, group, opportunity, index = 0
         index,
       },
     })
+    if (!opportunityId) return null
     await addEvidence(opportunityId, {
       source_table: 'relationships.groups',
       source_id: groupId,
@@ -666,6 +680,7 @@ async function upsertFromStaleEmailThread(thread) {
     primary_contact_id: contactId || null,
     metadata: thread.metadata || {},
   })
+  if (!opportunityId) return null
   await addEvidence(opportunityId, {
     source_table: 'email.emails',
     source_id: thread.latest_action_email_id,
@@ -916,6 +931,7 @@ async function runIntelligenceServices(pool, options = {}) {
     for (const candidate of crossChannel) {
       try {
         const opportunityId = await upsertOpportunity(candidate)
+        if (!opportunityId) continue
         await linkProject(opportunityId, candidate.primary_project_id, 'primary')
         await linkContacts(opportunityId, candidate.contact_ids || [], candidate.primary_contact_id)
         for (const evidence of candidate.evidence || []) await addEvidence(opportunityId, evidence)
@@ -976,6 +992,7 @@ async function runIntelligenceServices(pool, options = {}) {
     for (const candidate of relationshipOpenLoops) {
       try {
         const opportunityId = await upsertOpportunity(candidate)
+        if (!opportunityId) continue
         await linkContacts(opportunityId, candidate.contact_ids || [], candidate.primary_contact_id)
         for (const evidence of candidate.evidence || []) await addEvidence(opportunityId, evidence)
         relationshipOpenLoopCount++
@@ -1015,6 +1032,7 @@ async function runIntelligenceServices(pool, options = {}) {
     for (const candidate of homeImprovement) {
       try {
         const opportunityId = await upsertOpportunity(candidate)
+        if (!opportunityId) continue
         for (const evidence of candidate.evidence || []) await addEvidence(opportunityId, evidence)
         homeImprovementCount++
       } catch (error) {
@@ -1140,7 +1158,8 @@ async function runIntelligenceServices(pool, options = {}) {
           confidence: 0.5,
           metadata: { source: 'dormancy', threshold_days: opp.threshold_days, days_since_contact: opp.days_since_contact },
         }
-        await upsertOpportunity(oppInput)
+        const opportunityId = await upsertOpportunity(oppInput)
+        if (!opportunityId) continue
         dormancyCount++
       } catch (error) {
         log('error', 'Failed to create dormancy check-in', { contact_id: opp.contact_id, error: error.message })

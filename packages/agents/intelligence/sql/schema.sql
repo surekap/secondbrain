@@ -297,6 +297,34 @@ CREATE TABLE IF NOT EXISTS intelligence.opportunity_feedback_events (
 CREATE INDEX IF NOT EXISTS opportunity_feedback_opp_idx
   ON intelligence.opportunity_feedback_events (opportunity_id, created_at DESC);
 
+-- ── Suppressions / trust layer ───────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS intelligence.opportunity_suppressions (
+  id             BIGSERIAL PRIMARY KEY,
+  scope_type     TEXT NOT NULL CHECK (scope_type IN ('contact','project','opportunity','source_ref','pattern')),
+  scope_id       TEXT,
+  match_type     TEXT NOT NULL CHECK (match_type IN ('exact','normalized_title_hash','pattern')),
+  match_value    TEXT NOT NULL,
+  detector       TEXT,
+  source_system  TEXT,
+  reason_code    TEXT NOT NULL CHECK (reason_code IN ('wrong_person','wrong_project','already_closed','not_useful','suppress_pattern')),
+  note           TEXT,
+  created_by     TEXT DEFAULT 'user',
+  expires_at     TIMESTAMPTZ,
+  active         BOOLEAN NOT NULL DEFAULT TRUE,
+  metadata       JSONB DEFAULT '{}',
+  created_at     TIMESTAMPTZ DEFAULT NOW(),
+  updated_at     TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS opportunity_suppressions_active_idx
+  ON intelligence.opportunity_suppressions (active, scope_type, match_type);
+CREATE INDEX IF NOT EXISTS opportunity_suppressions_scope_idx
+  ON intelligence.opportunity_suppressions (scope_type, scope_id)
+  WHERE scope_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS opportunity_suppressions_match_idx
+  ON intelligence.opportunity_suppressions (match_type, match_value)
+  WHERE active = true;
+
 -- ── Attention queue ──────────────────────────────────────────────────────────
 -- Read-only daily surface: currently opportunities only. Future revisions can
 -- UNION relationship/project/group risks and events once scoring is normalized.
@@ -345,6 +373,23 @@ WITH scored_inputs AS (
   WHERE o.status = 'open'
     AND (o.snoozed_until IS NULL OR o.snoozed_until <= NOW())
     AND (o.expires_at IS NULL OR o.expires_at > NOW())
+    AND NOT EXISTS (
+      SELECT 1
+      FROM intelligence.opportunity_suppressions s
+      WHERE s.active = true
+        AND (s.expires_at IS NULL OR s.expires_at > NOW())
+        AND (
+          (s.scope_type = 'opportunity' AND s.scope_id = o.id::text)
+          OR (s.scope_type = 'source_ref' AND s.match_type = 'exact' AND s.match_value = COALESCE(o.source_ref, ''))
+          OR (s.scope_type = 'contact' AND s.match_type = 'exact' AND s.scope_id = o.primary_contact_id::text)
+          OR (s.scope_type = 'project' AND s.match_type = 'exact' AND s.scope_id = o.primary_project_id::text)
+          OR (s.scope_type = 'pattern' AND s.match_type = 'pattern' AND (
+            LOWER(COALESCE(o.title, '')) LIKE LOWER(s.match_value)
+            OR LOWER(COALESCE(o.description, '')) LIKE LOWER(s.match_value)
+            OR LOWER(COALESCE(o.source_ref, '')) LIKE LOWER(s.match_value)
+          ))
+        )
+    )
 ), scored AS (
   SELECT
     scored_inputs.*,
