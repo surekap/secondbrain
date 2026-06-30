@@ -34,15 +34,15 @@ async function matchOpportunitySuppression(pool, input = {}) {
     WHERE s.active = true
       AND (s.expires_at IS NULL OR s.expires_at > NOW())
       AND (
-        ($1 IS NOT NULL AND s.scope_type = 'opportunity' AND s.scope_id = $1)
-        OR ($2 <> '' AND s.scope_type = 'source_ref' AND s.match_type = 'exact' AND s.match_value = $2)
-        OR ($3 IS NOT NULL AND s.scope_type = 'contact' AND s.match_type = 'exact' AND s.scope_id = $3)
-        OR ($4 IS NOT NULL AND s.scope_type = 'project' AND s.match_type = 'exact' AND s.scope_id = $4)
-        OR ($5 IS NOT NULL AND s.match_type = 'normalized_title_hash' AND s.match_value = $5)
+        ($1::text IS NOT NULL AND s.scope_type = 'opportunity' AND s.scope_id = $1::text)
+        OR ($2::text <> '' AND s.scope_type = 'source_ref' AND s.match_type = 'exact' AND s.match_value = $2::text)
+        OR ($3::text IS NOT NULL AND s.scope_type = 'contact' AND s.match_type = 'exact' AND s.scope_id = $3::text)
+        OR ($4::text IS NOT NULL AND s.scope_type = 'project' AND s.match_type = 'exact' AND s.scope_id = $4::text)
+        OR ($5::text IS NOT NULL AND s.match_type = 'normalized_title_hash' AND s.match_value = $5::text)
         OR (s.match_type = 'pattern' AND (
-          ($6 <> '' AND $6 ILIKE s.match_value)
-          OR ($7 <> '' AND $7 ILIKE s.match_value)
-          OR ($2 <> '' AND $2 ILIKE s.match_value)
+          ($6::text <> '' AND $6::text ILIKE s.match_value)
+          OR ($7::text <> '' AND $7::text ILIKE s.match_value)
+          OR ($2::text <> '' AND $2::text ILIKE s.match_value)
         ))
       )
     ORDER BY

@@ -32,6 +32,13 @@ test('trust layer schema and wiring exist', () => {
   assert.match(serverSource, /feedback_action\s*\|\| req\.body\?\.action/)
 })
 
+test('suppression matcher casts nullable params so null candidates do not break query planning', () => {
+  const source = fs.readFileSync(path.join(repo, 'packages/agents/intelligence/services/suppression-matcher.js'), 'utf8')
+  assert.match(source, /\$1::text IS NOT NULL/)
+  assert.match(source, /\$2::text <> ''/)
+  assert.match(source, /\$5::text IS NOT NULL/)
+})
+
 test('suppression matcher blocks only matching candidates and preserves unrelated opportunities', async () => {
   const pool = {
     async query(_sql, params) {
