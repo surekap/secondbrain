@@ -49,12 +49,11 @@ test('attention-scoring: surfaces high-signal channels and explicit buckets', ()
   const schema = readSchema();
 
   assert.match(schema, /source_priority_bonus/, 'source-aware boosting should be present');
-  assert.match(schema, /source_hint_text LIKE '%sivaram%'/, 'sivaram should get elevated source priority');
-  assert.match(schema, /source_hint_text LIKE '%jjwala%'/, 'jjwala should get elevated source priority');
-  assert.match(schema, /surface_bucket = 'capital'/, 'capital surface should be exported');
-  assert.match(schema, /surface_bucket = 'internal'/, 'internal surface should be exported');
-  assert.match(schema, /surface_bucket = 'closure'/, 'closure surface should be exported');
-  assert.match(schema, /\bsurface_bucket,\n\s+evidence_count,/, 'attention queue should expose the surface bucket column');
+  assert.match(schema, /o\.opportunity_type IN \('project_match', 'project_opportunity'\) THEN 'project'/, 'project surface should be derived from opportunity type');
+  assert.match(schema, /o\.source_system IN \('manual', 'import'\) THEN 'internal'/, 'internal surface should be derived from source system');
+  assert.match(schema, /o\.opportunity_type IN \('follow_up', 'relationship_health', 'check_in'\) THEN 'closure'/, 'closure surface should be derived structurally');
+  assert.match(schema, /surface_bucket,\n\s+evidence_count,/, 'attention queue should expose the surface bucket column');
+  assert.doesNotMatch(schema, /source_hint_text LIKE '%/, 'surface and boost logic should not rely on hard-coded keyword matching');
 });
 
 test('attention-scoring: applies feedback-aware scoring penalties', () => {

@@ -17,8 +17,6 @@ const TOPIC_SEEDS = [
   ['distribution', /\b(distribution|distributor|dealer|channel|sales network)\b/i, 'operations'],
   ['supplier', /\b(supplier|vendor|procurement|sourcing|import|invoice)\b/i, 'operations'],
   ['Africa / Kenya / East Africa', /\b(africa|kenya|east africa|nairobi)\b/i, 'geography'],
-  ['YPO', /\bypo\b/i, 'personal'],
-  ['Hartex', /\bhartex\b/i, 'operations'],
   ['family office', /\b(family office|wealth|succession|governance)\b/i, 'domain'],
   ['travel', /\b(travel|flight|hotel|visa|trip|itinerary)\b/i, 'personal'],
   ['event', /\b(event|conference|summit|meeting|workshop)\b/i, 'event'],

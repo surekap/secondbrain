@@ -6,7 +6,7 @@ const {
   isHomeImprovementLifelog,
 } = require('../services/home-improvement-detector')
 
-test('detects Jxtapose home renovation evidence from emails', () => {
+test('detects home renovation evidence from emails', () => {
   const email = {
     id: 57354,
     subject: "Concept renders and services drawings for Prateek & Nanditha's residence",
@@ -18,14 +18,14 @@ test('detects Jxtapose home renovation evidence from emails', () => {
   assert.equal(isHomeImprovementEmail(email), true)
   const opportunities = detectHomeImprovementOpportunities({ emails: [email], lifelogs: [] })
   assert.equal(opportunities.length, 1)
-  assert.equal(opportunities[0].source_ref, 'home_improvement_project:jxtapose_residence')
+  assert.match(opportunities[0].source_ref, /^home_improvement_project:/)
   assert.equal(opportunities[0].metadata.email_count, 1)
   assert.equal(opportunities[0].evidence[0].source_table, 'email.emails')
   assert.match(opportunities[0].description, /concept renders/i)
-  assert.match(opportunities[0].recommended_next_action, /GFC drawings|site-documentation payment/i)
+  assert.match(opportunities[0].recommended_next_action, /home-renovation packet|GFC drawings/i)
 })
 
-test('combines Jxtapose lifelog and emails into one corroborated opportunity', () => {
+test('combines home renovation lifelog and emails into one corroborated opportunity', () => {
   const lifelog = {
     id: 'life-1',
     title: 'Discussion about house renovation',

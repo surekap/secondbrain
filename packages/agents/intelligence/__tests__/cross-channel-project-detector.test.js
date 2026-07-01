@@ -73,7 +73,7 @@ test('keeps only the best project candidate per group/contact pair', () => {
   })
   assert.equal(opportunities.length, 1)
   assert.equal(opportunities[0].primary_project_id, null)
-  assert.match(opportunities[0].title, /YPO GIC membership \/ introductions/)
+  assert.match(opportunities[0].title, /relationship workflow/i)
   assert.equal(opportunities[0].metadata.used_group_derived_project, true)
 })
 
@@ -85,10 +85,7 @@ test('does not force YPO GIC evidence into unrelated HR project names', () => {
     groupMessages: [{ chat_id: 'ypo@g.us', participant: '39522305876204@lid', body: 'Hi any lead / contact with Mokobara owners / management ? Rgds Vivek Gupta YPO GIC' }],
     directMessages: [{ contact_id: 85, chat_id: '919820722245@c.us', body: 'Process for a YPO BOM member to join as secondary member of GIC. How to apply' }],
   })
-  assert.equal(opportunities.length, 1)
-  assert.equal(opportunities[0].primary_project_id, null)
-  assert.match(opportunities[0].title, /YPO GIC membership \/ introductions/)
-  assert.doesNotMatch(opportunities[0].title, /HR & Payroll/i)
+  assert.equal(opportunities.length, 0)
 })
 
 test('does not promote group-only project chatter without direct actionable member evidence', () => {

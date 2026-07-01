@@ -1,16 +1,10 @@
 'use strict'
 
+const crypto = require('crypto')
+
 function compact(value, max = 700) {
   return String(value || '').replace(/\s+/g, ' ').trim().slice(0, max)
 }
-
-const JXTAPOSE_PATTERNS = [
-  /\bjxtapose\b/i,
-  /\bjx\s*tapose\b/i,
-  /\bjust\s+to\s+pose\b/i,
-  /\bjxp\s+designhouse\b/i,
-  /\bjxpdesignhouse@gmail\.com\b/i,
-]
 
 const HOME_PROJECT_PATTERNS = [
   /\bhouse\s+renovation\b/i,
@@ -51,22 +45,18 @@ function textForEmail(email = {}) {
     .join('\n')
 }
 
-function hasJxtapose(text) {
-  return JXTAPOSE_PATTERNS.some(p => p.test(text || ''))
-}
-
 function hasHomeProject(text) {
   return HOME_PROJECT_PATTERNS.some(p => p.test(text || ''))
 }
 
 function isHomeImprovementLifelog(lifelog = {}) {
   const text = textForLifelog(lifelog)
-  return Boolean(text && hasJxtapose(text) && hasHomeProject(text))
+  return Boolean(text && hasHomeProject(text))
 }
 
 function isHomeImprovementEmail(email = {}) {
   const text = textForEmail(email)
-  return Boolean(text && hasJxtapose(text) && hasHomeProject(text))
+  return Boolean(text && hasHomeProject(text))
 }
 
 function extractMembers(text) {
@@ -104,7 +94,7 @@ function detectHomeImprovementOpportunities(input = {}) {
   const members = extractMembers(allText)
   const latestEmail = emails[0]
   const latestEmailSummary = latestEmail
-    ? `${latestEmail.subject || 'Jxtapose email'} from ${latestEmail.from_address || latestEmail.sender_email || 'Jxtapose'} on ${emailOccurredAt(latestEmail) || 'unknown date'}`
+    ? `${latestEmail.subject || 'Home renovation email'} from ${latestEmail.from_address || latestEmail.sender_email || 'unknown sender'} on ${emailOccurredAt(latestEmail) || 'unknown date'}`
     : null
   const lifelog = lifelogs[0]
   const lifelogText = lifelog ? textForLifelog(lifelog) : ''
@@ -138,12 +128,14 @@ function detectHomeImprovementOpportunities(input = {}) {
     })
   }
 
+  const signature = crypto.createHash('sha256').update(allText || `${latestAt || ''}:${emails.length}:${lifelogs.length}`).digest('hex').slice(0, 16)
+
   return [{
     opportunity_type: 'project_opportunity',
-    title: 'Home renovation with Jxtapose: consolidate drawings, scope, payments, and next blocked decision',
-    description: compact(`Jxtapose home-renovation evidence now spans ${emails.length} email(s)${lifelogs.length ? ` plus ${lifelogs.length} lifelog(s)` : ''}. Latest email: ${latestEmailSummary || 'none'}. The thread covers concept renders, floor/brick-demolition/electrical/plumbing/HVAC/RCP layouts, window drawing intent, site documentation/measurements, contractor site visit before GFC drawings, and smart-home/lighting quotation context${members.length ? ` involving ${members.join(', ')}` : ''}.`, 1400),
-    recommended_next_action: 'Create a dedicated Home Renovation / Jxtapose project packet: confirm whether latest concept renders/window drawings are approved, whether site-documentation payment is closed, and what one decision blocks GFC drawings/contractor execution.',
-    why_now: latestAt ? `Jxtapose email/lifelog evidence last seen ${latestAt}; recent design drawings and site-documentation/payment asks are not linked to a dedicated project/contact.` : 'Jxtapose home-renovation evidence exists but is not surfaced as its own project/contact packet.',
+    title: 'Home renovation project: consolidate drawings, scope, payments, and the next blocked decision',
+    description: compact(`Home-renovation evidence now spans ${emails.length} email(s)${lifelogs.length ? ` plus ${lifelogs.length} lifelog(s)` : ''}. Latest email: ${latestEmailSummary || 'none'}. The thread covers concept renders, floor/brick-demolition/electrical/plumbing/HVAC/RCP layouts, window drawing intent, site documentation/measurements, contractor site visit before GFC drawings, and smart-home/lighting quotation context${members.length ? ` involving ${members.join(', ')}` : ''}.`, 1400),
+    recommended_next_action: 'Create a dedicated home-renovation packet: confirm whether the latest concept renders/window drawings are approved, whether site-documentation payment is closed, and what one decision blocks GFC drawings and contractor execution.',
+    why_now: latestAt ? `Home-renovation email/lifelog evidence was last seen ${latestAt}; recent design-drawing and site-documentation/payment asks are not linked to a dedicated project/contact.` : 'Home-renovation evidence exists but is not surfaced as its own project/contact packet.',
     priority: 'high',
     confidence: emails.length ? 0.92 : 0.86,
     impact_score: 76,
@@ -151,12 +143,12 @@ function detectHomeImprovementOpportunities(input = {}) {
     relationship_score: 62,
     expected_value_score: emails.length ? 82 : 74,
     source_system: 'signals',
-    source_ref: 'home_improvement_project:jxtapose_residence',
-    dedupe_key: 'home_improvement_project:jxtapose_residence',
+    source_ref: `home_improvement_project:${signature}`,
+    dedupe_key: `home_improvement_project:${signature}`,
     primary_project_id: null,
     metadata: {
       detector: 'home_improvement_project',
-      vendor: 'Jxtapose',
+      project_family: 'home_renovation',
       asr_aliases: ['just to pose'],
       members,
       email_count: emails.length,

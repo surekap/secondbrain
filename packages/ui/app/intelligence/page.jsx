@@ -350,7 +350,7 @@ export default function IntelligencePage() {
           ))}
         </div>
         <div className="toolbar-row">
-          <input className="search" value={q} onChange={e => setQ(e.target.value)} placeholder="Filter intelligence… e.g. Jxtapose, Hartex, Vikas" />
+          <input className="search" value={q} onChange={e => setQ(e.target.value)} placeholder="Filter intelligence… e.g. project, capital, follow-up" />
           <a className="api-link" href={`/api/intelligence/attention?limit=50${surface && surface !== 'all' ? `&surface=${encodeURIComponent(surface)}` : ''}`}>API →</a>
         </div>
       </div>

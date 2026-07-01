@@ -101,12 +101,11 @@ function isTierOneContact(contact = {}) {
 function isLowValueAdminCandidate({ projectLabel, group, relevantDms, contact }) {
   const text = [projectLabel, group?.name, groupText(group), ...((relevantDms || []).map(x => x.text || ''))]
     .filter(Boolean).join(' ').toLowerCase()
-  if (String(projectLabel || '').toLowerCase() === 'family-office finance/compliance workflow') return true
-  if (String(group?.name || '').toLowerCase() === 'sureka family office internal') return true
+  if (String(projectLabel || '').toLowerCase().includes('internal workflow')) return true
   const isAdmin = ADMIN_OPS_PATTERNS.some(pattern => pattern.test(text))
     && !STRATEGIC_PATTERNS.some(pattern => pattern.test(text))
   if (!isAdmin) return false
-  if (/\bgolden\s+visa\b|\bpersonal\s+needs?\b|\bvisa\s+(application|documents?|process)\b|\bfamily-office\s+finance\/compliance\s+workflow\b|\bsureka\s+family\s+office\s+internal\b/i.test(text)) return true
+  if (/\bgolden\s+visa\b|\bpersonal\s+needs?\b|\bvisa\s+(application|documents?|process)\b|\binternal\s+workflow\b/i.test(text)) return true
   return !isTierOneContact(contact)
 }
 
@@ -229,22 +228,22 @@ function addParticipantContact(participants, contact) {
 function groupDerivedProjectLabel(group = {}, relevantDms = []) {
   const name = String(group.name || group.wa_chat_id || 'WhatsApp group')
   const context = `${name} ${relevantDms.map(x => x.text || '').join(' ')}`.toLowerCase()
-  if (name.toLowerCase().includes('ypo india business corridor') || /\b(ypo|gic|secondary member|join as secondary|member to join)\b/i.test(context)) {
-    return 'YPO GIC membership / introductions'
+  if (/\b(family office|internal|finance|compliance|audit|ledger|invoice|reimbursement|tds|challan|funds?)\b/i.test(context)) {
+    return `${name}: internal workflow`
   }
-  if (name.toLowerCase().includes('sureka family office internal') || /\b(tds|challan|invoice|reimbursement|ledger|funds?|svtllp|allied properties|audit)\b/i.test(context)) {
-    return 'Family-office finance/compliance workflow'
+  if (/\b(member|membership|introductions?|secondary member|join as secondary|gic)\b/i.test(context)) {
+    return `${name}: relationship workflow`
   }
   return `${name}: group-sourced project`
 }
 
-function isKnownGroupDerivedProject(group = {}) {
-  const name = String(group.name || '').toLowerCase()
-  return name.includes('ypo india business corridor') || name.includes('sureka family office internal')
+function isKnownGroupDerivedProject(group = {}, relevantDms = []) {
+  const context = `${String(group.name || '')} ${relevantDms.map(x => x.text || '').join(' ')}`.toLowerCase()
+  return /\b(family office|internal|finance|compliance|audit|ledger|invoice|reimbursement|tds|challan|funds?|member|membership|introductions?|secondary member|join as secondary|gic)\b/i.test(context)
 }
 
 function shouldUseGroupDerivedProject(group = {}, projectGroupScore = 0, relevantDms = []) {
-  return isKnownGroupDerivedProject(group)
+  return isKnownGroupDerivedProject(group, relevantDms)
 }
 
 function detectCrossChannelProjectSignals(input = {}) {
