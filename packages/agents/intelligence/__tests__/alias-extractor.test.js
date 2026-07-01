@@ -37,6 +37,15 @@ test('alias-extractor: does not create empty or trivial aliases', () => {
   assert.equal(organizationAliases({ id: 11, name: 'AB' }).length, 0)
 })
 
+test('alias-extractor: normalizes punctuation and compound names for matching', () => {
+  assert.equal(normalized('Aditya Samby / Ambit Wealth LLP'), 'aditya samby ambit wealth llp')
+
+  const aliases = organizationAliases({ id: 12, name: 'Aditya Samby / Ambit Wealth LLP' })
+  const texts = aliases.map(a => a.alias)
+  assert.ok(texts.includes('Aditya Samby'))
+  assert.ok(texts.includes('Ambit Wealth'))
+})
+
 test('alias-extractor: batch extraction combines contacts and organizations', () => {
   const aliases = extractAliases(
     [{ id: 1, display_name: 'Rahul Kayan' }],

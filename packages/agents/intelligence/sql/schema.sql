@@ -357,6 +357,7 @@ WITH scored_inputs AS (
     ev.last_occurred_at AS source_last_seen_at,
     COALESCE(ev.evidence_count, 0)::int AS evidence_count,
     COALESCE(ev.last_occurred_at, o.first_seen_at, o.created_at, o.last_seen_at) AS scoring_source_at,
+    LOWER(COALESCE(o.title, '') || ' ' || COALESCE(o.description, '') || ' ' || COALESCE(o.recommended_next_action, '') || ' ' || COALESCE(o.source_ref, '') || ' ' || COALESCE(c.display_name, '') || ' ' || COALESCE(p.name, '')) AS source_hint_text,
     LOWER(COALESCE(o.title, '') || ' ' || COALESCE(o.description, '')) AS attention_text,
     LOWER(COALESCE(o.recommended_next_action, '')) AS action_text,
     LOWER(REGEXP_REPLACE(COALESCE(o.title, ''), '[[:space:]]+', ' ', 'g')) AS normalized_title
@@ -390,11 +391,96 @@ WITH scored_inputs AS (
           ))
         )
     )
-), scored AS (
+), classified_inputs AS (
   SELECT
     scored_inputs.*,
+    CASE
+      WHEN source_hint_text LIKE '%home renovation%'
+        OR source_hint_text LIKE '%jxtapose%'
+        OR source_hint_text LIKE '%construction%'
+        OR source_hint_text LIKE '%drawing%'
+        OR source_hint_text LIKE '%site documentation%'
+        OR source_hint_text LIKE '%gfc%'
+      THEN 'project'
+      WHEN source_hint_text LIKE '%adhar card%'
+        OR source_hint_text LIKE '%leave application%'
+        OR source_hint_text LIKE '%invoice%'
+        OR source_hint_text LIKE '%payment%'
+        OR source_hint_text LIKE '%certificate%'
+        OR source_hint_text LIKE '%travel%'
+        OR source_hint_text LIKE '%flight%'
+        OR source_hint_text LIKE '%hotel%'
+        OR source_hint_text LIKE '%visa%'
+        OR source_hint_text LIKE '%passport%'
+        OR source_hint_text LIKE '%reimbursement%'
+        OR source_hint_text LIKE '%challan%'
+      THEN 'admin'
+      WHEN source_hint_text LIKE '%sureka capital internal%'
+        OR source_hint_text LIKE '%family office internal%'
+        OR source_hint_text LIKE '%ypo gic excom%'
+        OR source_hint_text LIKE '%excom%'
+        OR source_hint_text LIKE '%governance%'
+        OR source_hint_text LIKE '%compliance%'
+        OR source_hint_text LIKE '%board%'
+      THEN 'internal'
+      WHEN source_hint_text LIKE '%capital%'
+        OR source_hint_text LIKE '%investment%'
+        OR source_hint_text LIKE '%stock%'
+        OR source_hint_text LIKE '%portfolio%'
+        OR source_hint_text LIKE '%fund%'
+        OR source_hint_text LIKE '%pms%'
+        OR source_hint_text LIKE '%jjwala%'
+        OR source_hint_text LIKE '%ambit%'
+        OR source_hint_text LIKE '%phi capital%'
+        OR source_hint_text LIKE '%stock bros%'
+      THEN 'capital'
+      WHEN source_hint_text LIKE '%open loop%'
+        OR source_hint_text LIKE '%follow up%'
+        OR source_hint_text LIKE '%pending%'
+        OR source_hint_text LIKE '%closure%'
+        OR source_hint_text LIKE '%conclusion%'
+        OR source_hint_text LIKE '%closing%'
+      THEN 'closure'
+      ELSE 'relationship'
+    END AS surface_bucket,
+    CASE
+      WHEN source_hint_text LIKE '%sivaram%'
+        OR source_hint_text LIKE '%phi capital%'
+        OR source_hint_text LIKE '%jjwala%'
+        OR source_hint_text LIKE '%ambit wealth%'
+        OR source_hint_text LIKE '%aditya samb%'
+        OR source_hint_text LIKE '%preya%'
+        OR source_hint_text LIKE '%radha%'
+        OR source_hint_text LIKE '%ypo gic excom%'
+        OR source_hint_text LIKE '%sudheer%'
+        OR source_hint_text LIKE '%ejjagiri%'
+        OR source_hint_text LIKE '%sid tilwalni%'
+        OR source_hint_text LIKE '%amritanshu khaitan%'
+        OR source_hint_text LIKE '%prachi kejriwal%'
+        OR source_hint_text LIKE '%anirudh modi%'
+      THEN 14
+      WHEN source_hint_text LIKE '%sureka capital internal%'
+        OR source_hint_text LIKE '%family office internal%'
+        OR source_hint_text LIKE '%ypo gic excom%'
+      THEN 12
+      WHEN source_hint_text LIKE '%home renovation%'
+        OR source_hint_text LIKE '%jxtapose%'
+      THEN 10
+      WHEN source_hint_text LIKE '%adhar card%'
+        OR source_hint_text LIKE '%leave application%'
+        OR source_hint_text LIKE '%invoice%'
+        OR source_hint_text LIKE '%payment%'
+        OR source_hint_text LIKE '%certificate%'
+      THEN 6
+      ELSE 0
+    END AS source_priority_bonus
+  FROM scored_inputs
+), scored AS (
+  SELECT
+    classified_inputs.*,
     GREATEST(0,
       COALESCE(expected_value_score, CASE priority WHEN 'high' THEN 80 WHEN 'low' THEN 30 ELSE 55 END)
+      + source_priority_bonus
       -- Boost genuinely current items; do not let newly backfilled old evidence float to the top.
       + CASE WHEN scoring_source_at >= NOW() - INTERVAL '3 days' THEN 8
              WHEN scoring_source_at >= NOW() - INTERVAL '7 days' THEN 4
@@ -454,6 +540,12 @@ WITH scored_inputs AS (
              ELSE 0 END
     )::numeric(8,2) AS attention_score,
     ARRAY_REMOVE(ARRAY[
+      CASE WHEN source_priority_bonus > 0 THEN 'high_signal_source' END,
+      CASE WHEN surface_bucket = 'capital' THEN 'capital_surface' END,
+      CASE WHEN surface_bucket = 'internal' THEN 'internal_surface' END,
+      CASE WHEN surface_bucket = 'project' THEN 'project_surface' END,
+      CASE WHEN surface_bucket = 'admin' THEN 'admin_surface' END,
+      CASE WHEN surface_bucket = 'closure' THEN 'closure_surface' END,
       CASE WHEN evidence_count = 0 THEN 'no_evidence' END,
       CASE WHEN evidence_count = 1 THEN 'single_evidence' END,
       CASE WHEN evidence_count = 1 AND scoring_source_at < NOW() - INTERVAL '14 days' THEN 'old_single_evidence' END,
@@ -498,7 +590,7 @@ WITH scored_inputs AS (
       CASE WHEN feedback = 'too_late' THEN 'feedback_too_late' END,
       CASE WHEN scoring_source_at >= NOW() - INTERVAL '3 days' THEN 'recent_source' END
     ], NULL)::text[] AS quality_flags
-  FROM scored_inputs
+  FROM classified_inputs
 ), deduped AS (
   SELECT
     scored.*,
@@ -530,6 +622,7 @@ SELECT
   first_seen_at,
   source_first_seen_at,
   source_last_seen_at,
+  surface_bucket,
   evidence_count,
   attention_score,
   quality_flags

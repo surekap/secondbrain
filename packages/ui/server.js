@@ -64,8 +64,56 @@ const ACTION_TO_REASON_CODE = {
   suppress_pattern: 'suppress_pattern',
 };
 
-function compactText(value, max = 240) {
-  return String(value || '').replace(/\s+/g, ' ').trim().slice(0, max);
+function attentionSurfaceSql(alias = 'a') {
+  return `CASE
+    WHEN LOWER(COALESCE(${alias}.title, '') || ' ' || COALESCE(${alias}.description, '') || ' ' || COALESCE(${alias}.recommended_next_action, '') || ' ' || COALESCE(${alias}.source_ref, '') || ' ' || COALESCE(${alias}.primary_contact_name, '') || ' ' || COALESCE(${alias}.primary_project_name, '')) LIKE '%home renovation%'
+      OR LOWER(COALESCE(${alias}.title, '') || ' ' || COALESCE(${alias}.description, '') || ' ' || COALESCE(${alias}.recommended_next_action, '') || ' ' || COALESCE(${alias}.source_ref, '') || ' ' || COALESCE(${alias}.primary_contact_name, '') || ' ' || COALESCE(${alias}.primary_project_name, '')) LIKE '%jxtapose%'
+      OR LOWER(COALESCE(${alias}.title, '') || ' ' || COALESCE(${alias}.description, '') || ' ' || COALESCE(${alias}.recommended_next_action, '') || ' ' || COALESCE(${alias}.source_ref, '') || ' ' || COALESCE(${alias}.primary_contact_name, '') || ' ' || COALESCE(${alias}.primary_project_name, '')) LIKE '%construction%'
+      OR LOWER(COALESCE(${alias}.title, '') || ' ' || COALESCE(${alias}.description, '') || ' ' || COALESCE(${alias}.recommended_next_action, '') || ' ' || COALESCE(${alias}.source_ref, '') || ' ' || COALESCE(${alias}.primary_contact_name, '') || ' ' || COALESCE(${alias}.primary_project_name, '')) LIKE '%drawing%'
+      OR LOWER(COALESCE(${alias}.title, '') || ' ' || COALESCE(${alias}.description, '') || ' ' || COALESCE(${alias}.recommended_next_action, '') || ' ' || COALESCE(${alias}.source_ref, '') || ' ' || COALESCE(${alias}.primary_contact_name, '') || ' ' || COALESCE(${alias}.primary_project_name, '')) LIKE '%site documentation%'
+      OR LOWER(COALESCE(${alias}.title, '') || ' ' || COALESCE(${alias}.description, '') || ' ' || COALESCE(${alias}.recommended_next_action, '') || ' ' || COALESCE(${alias}.source_ref, '') || ' ' || COALESCE(${alias}.primary_contact_name, '') || ' ' || COALESCE(${alias}.primary_project_name, '')) LIKE '%gfc%'
+    THEN 'project'
+    WHEN LOWER(COALESCE(${alias}.title, '') || ' ' || COALESCE(${alias}.description, '') || ' ' || COALESCE(${alias}.recommended_next_action, '') || ' ' || COALESCE(${alias}.source_ref, '') || ' ' || COALESCE(${alias}.primary_contact_name, '') || ' ' || COALESCE(${alias}.primary_project_name, '')) LIKE '%adhar card%'
+      OR LOWER(COALESCE(${alias}.title, '') || ' ' || COALESCE(${alias}.description, '') || ' ' || COALESCE(${alias}.recommended_next_action, '') || ' ' || COALESCE(${alias}.source_ref, '') || ' ' || COALESCE(${alias}.primary_contact_name, '') || ' ' || COALESCE(${alias}.primary_project_name, '')) LIKE '%leave application%'
+      OR LOWER(COALESCE(${alias}.title, '') || ' ' || COALESCE(${alias}.description, '') || ' ' || COALESCE(${alias}.recommended_next_action, '') || ' ' || COALESCE(${alias}.source_ref, '') || ' ' || COALESCE(${alias}.primary_contact_name, '') || ' ' || COALESCE(${alias}.primary_project_name, '')) LIKE '%invoice%'
+      OR LOWER(COALESCE(${alias}.title, '') || ' ' || COALESCE(${alias}.description, '') || ' ' || COALESCE(${alias}.recommended_next_action, '') || ' ' || COALESCE(${alias}.source_ref, '') || ' ' || COALESCE(${alias}.primary_contact_name, '') || ' ' || COALESCE(${alias}.primary_project_name, '')) LIKE '%payment%'
+      OR LOWER(COALESCE(${alias}.title, '') || ' ' || COALESCE(${alias}.description, '') || ' ' || COALESCE(${alias}.recommended_next_action, '') || ' ' || COALESCE(${alias}.source_ref, '') || ' ' || COALESCE(${alias}.primary_contact_name, '') || ' ' || COALESCE(${alias}.primary_project_name, '')) LIKE '%certificate%'
+      OR LOWER(COALESCE(${alias}.title, '') || ' ' || COALESCE(${alias}.description, '') || ' ' || COALESCE(${alias}.recommended_next_action, '') || ' ' || COALESCE(${alias}.source_ref, '') || ' ' || COALESCE(${alias}.primary_contact_name, '') || ' ' || COALESCE(${alias}.primary_project_name, '')) LIKE '%travel%'
+      OR LOWER(COALESCE(${alias}.title, '') || ' ' || COALESCE(${alias}.description, '') || ' ' || COALESCE(${alias}.recommended_next_action, '') || ' ' || COALESCE(${alias}.source_ref, '') || ' ' || COALESCE(${alias}.primary_contact_name, '') || ' ' || COALESCE(${alias}.primary_project_name, '')) LIKE '%flight%'
+      OR LOWER(COALESCE(${alias}.title, '') || ' ' || COALESCE(${alias}.description, '') || ' ' || COALESCE(${alias}.recommended_next_action, '') || ' ' || COALESCE(${alias}.source_ref, '') || ' ' || COALESCE(${alias}.primary_contact_name, '') || ' ' || COALESCE(${alias}.primary_project_name, '')) LIKE '%hotel%'
+      OR LOWER(COALESCE(${alias}.title, '') || ' ' || COALESCE(${alias}.description, '') || ' ' || COALESCE(${alias}.recommended_next_action, '') || ' ' || COALESCE(${alias}.source_ref, '') || ' ' || COALESCE(${alias}.primary_contact_name, '') || ' ' || COALESCE(${alias}.primary_project_name, '')) LIKE '%visa%'
+      OR LOWER(COALESCE(${alias}.title, '') || ' ' || COALESCE(${alias}.description, '') || ' ' || COALESCE(${alias}.recommended_next_action, '') || ' ' || COALESCE(${alias}.source_ref, '') || ' ' || COALESCE(${alias}.primary_contact_name, '') || ' ' || COALESCE(${alias}.primary_project_name, '')) LIKE '%passport%'
+      OR LOWER(COALESCE(${alias}.title, '') || ' ' || COALESCE(${alias}.description, '') || ' ' || COALESCE(${alias}.recommended_next_action, '') || ' ' || COALESCE(${alias}.source_ref, '') || ' ' || COALESCE(${alias}.primary_contact_name, '') || ' ' || COALESCE(${alias}.primary_project_name, '')) LIKE '%reimbursement%'
+      OR LOWER(COALESCE(${alias}.title, '') || ' ' || COALESCE(${alias}.description, '') || ' ' || COALESCE(${alias}.recommended_next_action, '') || ' ' || COALESCE(${alias}.source_ref, '') || ' ' || COALESCE(${alias}.primary_contact_name, '') || ' ' || COALESCE(${alias}.primary_project_name, '')) LIKE '%challan%'
+    THEN 'admin'
+    WHEN LOWER(COALESCE(${alias}.title, '') || ' ' || COALESCE(${alias}.description, '') || ' ' || COALESCE(${alias}.recommended_next_action, '') || ' ' || COALESCE(${alias}.source_ref, '') || ' ' || COALESCE(${alias}.primary_contact_name, '') || ' ' || COALESCE(${alias}.primary_project_name, '')) LIKE '%sureka capital internal%'
+      OR LOWER(COALESCE(${alias}.title, '') || ' ' || COALESCE(${alias}.description, '') || ' ' || COALESCE(${alias}.recommended_next_action, '') || ' ' || COALESCE(${alias}.source_ref, '') || ' ' || COALESCE(${alias}.primary_contact_name, '') || ' ' || COALESCE(${alias}.primary_project_name, '')) LIKE '%family office internal%'
+      OR LOWER(COALESCE(${alias}.title, '') || ' ' || COALESCE(${alias}.description, '') || ' ' || COALESCE(${alias}.recommended_next_action, '') || ' ' || COALESCE(${alias}.source_ref, '') || ' ' || COALESCE(${alias}.primary_contact_name, '') || ' ' || COALESCE(${alias}.primary_project_name, '')) LIKE '%ypo gic excom%'
+      OR LOWER(COALESCE(${alias}.title, '') || ' ' || COALESCE(${alias}.description, '') || ' ' || COALESCE(${alias}.recommended_next_action, '') || ' ' || COALESCE(${alias}.source_ref, '') || ' ' || COALESCE(${alias}.primary_contact_name, '') || ' ' || COALESCE(${alias}.primary_project_name, '')) LIKE '%excom%'
+      OR LOWER(COALESCE(${alias}.title, '') || ' ' || COALESCE(${alias}.description, '') || ' ' || COALESCE(${alias}.recommended_next_action, '') || ' ' || COALESCE(${alias}.source_ref, '') || ' ' || COALESCE(${alias}.primary_contact_name, '') || ' ' || COALESCE(${alias}.primary_project_name, '')) LIKE '%governance%'
+      OR LOWER(COALESCE(${alias}.title, '') || ' ' || COALESCE(${alias}.description, '') || ' ' || COALESCE(${alias}.recommended_next_action, '') || ' ' || COALESCE(${alias}.source_ref, '') || ' ' || COALESCE(${alias}.primary_contact_name, '') || ' ' || COALESCE(${alias}.primary_project_name, '')) LIKE '%compliance%'
+      OR LOWER(COALESCE(${alias}.title, '') || ' ' || COALESCE(${alias}.description, '') || ' ' || COALESCE(${alias}.recommended_next_action, '') || ' ' || COALESCE(${alias}.source_ref, '') || ' ' || COALESCE(${alias}.primary_contact_name, '') || ' ' || COALESCE(${alias}.primary_project_name, '')) LIKE '%board%'
+    THEN 'internal'
+    WHEN LOWER(COALESCE(${alias}.title, '') || ' ' || COALESCE(${alias}.description, '') || ' ' || COALESCE(${alias}.recommended_next_action, '') || ' ' || COALESCE(${alias}.source_ref, '') || ' ' || COALESCE(${alias}.primary_contact_name, '') || ' ' || COALESCE(${alias}.primary_project_name, '')) LIKE '%capital%'
+      OR LOWER(COALESCE(${alias}.title, '') || ' ' || COALESCE(${alias}.description, '') || ' ' || COALESCE(${alias}.recommended_next_action, '') || ' ' || COALESCE(${alias}.source_ref, '') || ' ' || COALESCE(${alias}.primary_contact_name, '') || ' ' || COALESCE(${alias}.primary_project_name, '')) LIKE '%investment%'
+      OR LOWER(COALESCE(${alias}.title, '') || ' ' || COALESCE(${alias}.description, '') || ' ' || COALESCE(${alias}.recommended_next_action, '') || ' ' || COALESCE(${alias}.source_ref, '') || ' ' || COALESCE(${alias}.primary_contact_name, '') || ' ' || COALESCE(${alias}.primary_project_name, '')) LIKE '%stock%'
+      OR LOWER(COALESCE(${alias}.title, '') || ' ' || COALESCE(${alias}.description, '') || ' ' || COALESCE(${alias}.recommended_next_action, '') || ' ' || COALESCE(${alias}.source_ref, '') || ' ' || COALESCE(${alias}.primary_contact_name, '') || ' ' || COALESCE(${alias}.primary_project_name, '')) LIKE '%portfolio%'
+      OR LOWER(COALESCE(${alias}.title, '') || ' ' || COALESCE(${alias}.description, '') || ' ' || COALESCE(${alias}.recommended_next_action, '') || ' ' || COALESCE(${alias}.source_ref, '') || ' ' || COALESCE(${alias}.primary_contact_name, '') || ' ' || COALESCE(${alias}.primary_project_name, '')) LIKE '%fund%'
+      OR LOWER(COALESCE(${alias}.title, '') || ' ' || COALESCE(${alias}.description, '') || ' ' || COALESCE(${alias}.recommended_next_action, '') || ' ' || COALESCE(${alias}.source_ref, '') || ' ' || COALESCE(${alias}.primary_contact_name, '') || ' ' || COALESCE(${alias}.primary_project_name, '')) LIKE '%pms%'
+      OR LOWER(COALESCE(${alias}.title, '') || ' ' || COALESCE(${alias}.description, '') || ' ' || COALESCE(${alias}.recommended_next_action, '') || ' ' || COALESCE(${alias}.source_ref, '') || ' ' || COALESCE(${alias}.primary_contact_name, '') || ' ' || COALESCE(${alias}.primary_project_name, '')) LIKE '%jjwala%'
+      OR LOWER(COALESCE(${alias}.title, '') || ' ' || COALESCE(${alias}.description, '') || ' ' || COALESCE(${alias}.recommended_next_action, '') || ' ' || COALESCE(${alias}.source_ref, '') || ' ' || COALESCE(${alias}.primary_contact_name, '') || ' ' || COALESCE(${alias}.primary_project_name, '')) LIKE '%ambit%'
+      OR LOWER(COALESCE(${alias}.title, '') || ' ' || COALESCE(${alias}.description, '') || ' ' || COALESCE(${alias}.recommended_next_action, '') || ' ' || COALESCE(${alias}.source_ref, '') || ' ' || COALESCE(${alias}.primary_contact_name, '') || ' ' || COALESCE(${alias}.primary_project_name, '')) LIKE '%phi capital%'
+      OR LOWER(COALESCE(${alias}.title, '') || ' ' || COALESCE(${alias}.description, '') || ' ' || COALESCE(${alias}.recommended_next_action, '') || ' ' || COALESCE(${alias}.source_ref, '') || ' ' || COALESCE(${alias}.primary_contact_name, '') || ' ' || COALESCE(${alias}.primary_project_name, '')) LIKE '%stock bros%'
+    THEN 'capital'
+    WHEN LOWER(COALESCE(${alias}.title, '') || ' ' || COALESCE(${alias}.description, '') || ' ' || COALESCE(${alias}.recommended_next_action, '') || ' ' || COALESCE(${alias}.source_ref, '') || ' ' || COALESCE(${alias}.primary_contact_name, '') || ' ' || COALESCE(${alias}.primary_project_name, '')) LIKE '%open loop%'
+      OR LOWER(COALESCE(${alias}.title, '') || ' ' || COALESCE(${alias}.description, '') || ' ' || COALESCE(${alias}.recommended_next_action, '') || ' ' || COALESCE(${alias}.source_ref, '') || ' ' || COALESCE(${alias}.primary_contact_name, '') || ' ' || COALESCE(${alias}.primary_project_name, '')) LIKE '%follow up%'
+      OR LOWER(COALESCE(${alias}.title, '') || ' ' || COALESCE(${alias}.description, '') || ' ' || COALESCE(${alias}.recommended_next_action, '') || ' ' || COALESCE(${alias}.source_ref, '') || ' ' || COALESCE(${alias}.primary_contact_name, '') || ' ' || COALESCE(${alias}.primary_project_name, '')) LIKE '%pending%'
+      OR LOWER(COALESCE(${alias}.title, '') || ' ' || COALESCE(${alias}.description, '') || ' ' || COALESCE(${alias}.recommended_next_action, '') || ' ' || COALESCE(${alias}.source_ref, '') || ' ' || COALESCE(${alias}.primary_contact_name, '') || ' ' || COALESCE(${alias}.primary_project_name, '')) LIKE '%closure%'
+      OR LOWER(COALESCE(${alias}.title, '') || ' ' || COALESCE(${alias}.description, '') || ' ' || COALESCE(${alias}.recommended_next_action, '') || ' ' || COALESCE(${alias}.source_ref, '') || ' ' || COALESCE(${alias}.primary_contact_name, '') || ' ' || COALESCE(${alias}.primary_project_name, '')) LIKE '%conclusion%'
+      OR LOWER(COALESCE(${alias}.title, '') || ' ' || COALESCE(${alias}.description, '') || ' ' || COALESCE(${alias}.recommended_next_action, '') || ' ' || COALESCE(${alias}.source_ref, '') || ' ' || COALESCE(${alias}.primary_contact_name, '') || ' ' || COALESCE(${alias}.primary_project_name, '')) LIKE '%closing%'
+    THEN 'closure'
+    ELSE 'relationship'
+  END`
 }
 
 async function recordOpportunitySuppressionFromAction(opportunity, action, note) {
@@ -1964,6 +2012,11 @@ app.get('/api/intelligence/attention', async (req, res) => {
     if (limit === null) return res.status(400).json({ error: 'Invalid limit' });
     const params = [];
     const q = String(req.query.q || '').trim();
+    const surface = String(req.query.surface || '').trim().toLowerCase();
+    const validSurfaces = new Set(['all', 'capital', 'relationship', 'internal', 'project', 'admin', 'closure']);
+    if (surface && !validSurfaces.has(surface)) {
+      return res.status(400).json({ error: 'Invalid surface' });
+    }
     let where = '';
     if (q) {
       params.push(`%${q.toLowerCase()}%`);
@@ -1975,9 +2028,13 @@ app.get('/api/intelligence/attention', async (req, res) => {
         OR LOWER(COALESCE(primary_project_name, '')) LIKE $${params.length}
       )`;
     }
+    if (surface && surface !== 'all') {
+      params.push(surface);
+      where += (where ? ' AND ' : 'WHERE ') + `(${attentionSurfaceSql('a')}) = $${params.length}`;
+    }
     params.push(limit);
     const { rows } = await db.query(`
-      SELECT a.*,
+      SELECT a.*, (${attentionSurfaceSql('a')}) AS surface_bucket,
              CASE
                WHEN a.primary_contact_id IS NOT NULL AND a.primary_project_id IS NOT NULL THEN 'linked:contact+project'
                WHEN a.primary_contact_id IS NOT NULL THEN 'linked:contact'
@@ -2033,7 +2090,7 @@ app.get('/api/intelligence/things-to-ignore', async (req, res) => {
     if (limit === null) return res.status(400).json({ error: 'Invalid limit' });
     const { rows } = await db.query(`
       SELECT id, item_type, title, description, recommended_next_action, priority,
-             opportunity_type, attention_score, quality_flags, source_last_seen_at, last_seen_at,
+             opportunity_type, (${attentionSurfaceSql('a')}) AS surface_bucket, attention_score, quality_flags, source_last_seen_at, last_seen_at,
              CASE
                WHEN 'low_value_admin' = ANY(quality_flags) THEN 'Operational/admin; delegate or ignore unless escalated.'
                WHEN 'generic_next_action' = ANY(quality_flags) THEN 'Action is too generic; needs stronger evidence or a concrete owner.'
@@ -2041,7 +2098,7 @@ app.get('/api/intelligence/things-to-ignore', async (req, res) => {
                WHEN 'missing_why_now' = ANY(quality_flags) THEN 'No timing case; not worth interrupting yet.'
                ELSE 'Below attention threshold.'
              END AS ignore_reason
-      FROM intelligence.attention_queue
+      FROM intelligence.attention_queue a
       WHERE attention_score < 50
          OR 'low_value_admin' = ANY(quality_flags)
          OR 'generic_next_action' = ANY(quality_flags)

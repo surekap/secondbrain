@@ -2,9 +2,26 @@
 
 const TITLE_RE = /^(?:dr\.?|mr\.?|mrs\.?|ms\.?|prof\.?|shri|smt\.?|sri)\s+/i
 const COMPANY_SUFFIX_RE = /\b(pvt\.\s*ltd\.?|private\s+limited|limited|ltd\.?|llp|inc\.?|corp\.?|corporation|gmbh|llc|plc)\b/gi
+const COMPOUND_SPLIT_RE = /\s*(?:\/|\||&|\s-\s|,|;|\u2013|\u2014)\s*/
 
 function normalized(name) {
-  return String(name || '').trim().toLowerCase().replace(/\s+/g, ' ')
+  return String(name || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[’'`]/g, '')
+    .replace(/[\/|&;,\u2013\u2014]+/g, ' ')
+    .replace(/[^a-z0-9]+/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function compoundAliases(text) {
+  const value = String(text || '').trim()
+  if (!value) return []
+  return value
+    .split(COMPOUND_SPLIT_RE)
+    .map(part => part.trim())
+    .filter(part => part.length >= 2 && part !== value)
 }
 
 function contactAliases(contact = {}) {
@@ -17,6 +34,8 @@ function contactAliases(contact = {}) {
 
   aliases.add(display)
   if (withoutTitle !== display) aliases.add(withoutTitle)
+
+  for (const segment of compoundAliases(withoutTitle)) aliases.add(segment)
 
   if (parts.length >= 2) {
     aliases.add(parts[0])
@@ -51,6 +70,8 @@ function organizationAliases(org = {}) {
 
   aliases.add(name)
   if (short !== name && short.length >= 3) aliases.add(short)
+
+  for (const segment of compoundAliases(short)) aliases.add(segment)
 
   const parts = name.split(/\s+/)
   if (parts.length >= 3) {
