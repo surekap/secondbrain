@@ -29,6 +29,10 @@ const STRATEGIC_PATTERNS = [
   /\bacquisition|investment|capital|ipo|strategic|customer lead|distribution|partnership|board|fundrais/i,
 ]
 
+const SOCIAL_GROUP_PATTERNS = [
+  /\b(cousin|cousins|family banter|banter|jokes?|humor|humorous|pickup coordination|pickleball|reels?|songs?|casual chatter|everyday domestic chatter|friends?)\b/i,
+]
+
 const SOCIAL_NOISE_PATTERNS = [
   /\bsongs?\b/i,
   /\bfacebook\.com\/share\b/i,
@@ -110,6 +114,12 @@ function isLowValueSocialCandidate({ relevantDms }) {
   const directText = (relevantDms || []).map(x => x.text || '').join(' ').toLowerCase()
   if (!directText) return false
   return SOCIAL_NOISE_PATTERNS.some(pattern => pattern.test(directText))
+}
+
+function isLowValueSocialGroup(group = {}, knownGroupDerived = false) {
+  if (knownGroupDerived) return false
+  const text = groupText(group).toLowerCase()
+  return SOCIAL_GROUP_PATTERNS.some(pattern => pattern.test(text))
 }
 
 function canonicalContactId(contact, canonicalContactMap = {}) {
@@ -347,6 +357,7 @@ function detectCrossChannelProjectSignals(input = {}) {
         const projectRef = useGroupDerivedProject ? 'group-derived' : project.id
         const title = `${projectLabel}: direct follow-up with ${contactName} from ${group.name || group.wa_chat_id}`
         if (isLowValueAdminCandidate({ projectLabel, group, relevantDms, contact })) continue
+        if (isLowValueSocialGroup(group, knownGroupDerived)) continue
         if (isLowValueSocialCandidate({ relevantDms })) continue
         out.push({
           opportunity_type: 'meeting_action',
