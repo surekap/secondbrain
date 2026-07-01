@@ -45,6 +45,18 @@ test('attention-scoring: penalizes low-value admin, generic next actions, and mi
   assert.match(schema, /THEN 'missing_why_now'/, 'items with no why-now should be flagged');
 });
 
+test('attention-scoring: surfaces high-signal channels and explicit buckets', () => {
+  const schema = readSchema();
+
+  assert.match(schema, /source_priority_bonus/, 'source-aware boosting should be present');
+  assert.match(schema, /source_hint_text LIKE '%sivaram%'/, 'sivaram should get elevated source priority');
+  assert.match(schema, /source_hint_text LIKE '%jjwala%'/, 'jjwala should get elevated source priority');
+  assert.match(schema, /surface_bucket = 'capital'/, 'capital surface should be exported');
+  assert.match(schema, /surface_bucket = 'internal'/, 'internal surface should be exported');
+  assert.match(schema, /surface_bucket = 'closure'/, 'closure surface should be exported');
+  assert.match(schema, /\bsurface_bucket,\n\s+evidence_count,/, 'attention queue should expose the surface bucket column');
+});
+
 test('attention-scoring: applies feedback-aware scoring penalties', () => {
   const schema = readSchema();
 

@@ -1964,6 +1964,11 @@ app.get('/api/intelligence/attention', async (req, res) => {
     if (limit === null) return res.status(400).json({ error: 'Invalid limit' });
     const params = [];
     const q = String(req.query.q || '').trim();
+    const surface = String(req.query.surface || '').trim().toLowerCase();
+    const validSurfaces = new Set(['all', 'capital', 'relationship', 'internal', 'project', 'admin', 'closure']);
+    if (surface && !validSurfaces.has(surface)) {
+      return res.status(400).json({ error: 'Invalid surface' });
+    }
     let where = '';
     if (q) {
       params.push(`%${q.toLowerCase()}%`);
@@ -1974,6 +1979,10 @@ app.get('/api/intelligence/attention', async (req, res) => {
         OR LOWER(COALESCE(primary_contact_name, '')) LIKE $${params.length}
         OR LOWER(COALESCE(primary_project_name, '')) LIKE $${params.length}
       )`;
+    }
+    if (surface && surface !== 'all') {
+      params.push(surface);
+      where += (where ? ' AND ' : 'WHERE ') + `a.surface_bucket = $${params.length}`;
     }
     params.push(limit);
     const { rows } = await db.query(`
@@ -2033,7 +2042,7 @@ app.get('/api/intelligence/things-to-ignore', async (req, res) => {
     if (limit === null) return res.status(400).json({ error: 'Invalid limit' });
     const { rows } = await db.query(`
       SELECT id, item_type, title, description, recommended_next_action, priority,
-             opportunity_type, attention_score, quality_flags, source_last_seen_at, last_seen_at,
+             opportunity_type, surface_bucket, attention_score, quality_flags, source_last_seen_at, last_seen_at,
              CASE
                WHEN 'low_value_admin' = ANY(quality_flags) THEN 'Operational/admin; delegate or ignore unless escalated.'
                WHEN 'generic_next_action' = ANY(quality_flags) THEN 'Action is too generic; needs stronger evidence or a concrete owner.'

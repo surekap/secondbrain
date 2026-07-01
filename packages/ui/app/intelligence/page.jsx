@@ -3,6 +3,8 @@
 import Link from 'next/link'
 import { useEffect, useState } from 'react'
 
+const SURFACE_OPTIONS = ['all', 'capital', 'relationship', 'internal', 'project', 'admin', 'closure']
+
 async function fetchJson(path, fallback) {
   try {
     const res = await fetch(path)
@@ -111,6 +113,7 @@ function ItemCard({ item, onRemove, evidence, evidenceLoading, evidenceOpen, onT
         <div className="intel-meta">
           <span className="pill primary">attention {score(item)}</span>
           <span className="pill">{String(item.opportunity_type || item.item_type || 'opportunity').replace(/_/g, ' ')}</span>
+          {item.surface_bucket && <span className="pill">{String(item.surface_bucket).replace(/_/g, ' ')}</span>}
           {item.evidence_count != null && <span className="pill">{Number(item.evidence_count)} evidence</span>}
           {item.primary_contact_name && <span className="pill muted">{item.primary_contact_name}</span>}
           {item.primary_project_name && <span className="pill muted">{item.primary_project_name}</span>}
@@ -189,14 +192,18 @@ export default function IntelligencePage() {
   const [loading, setLoading] = useState(true)
   const [loadIssues, setLoadIssues] = useState([])
   const [q, setQ] = useState('')
+  const [surface, setSurface] = useState('all')
   const [expandedEvidence, setExpandedEvidence] = useState({})
   const [evidenceById, setEvidenceById] = useState({})
   const [evidenceLoadingById, setEvidenceLoadingById] = useState({})
 
   async function load() {
     setLoading(true)
+    const attentionPath = surface && surface !== 'all'
+      ? `/api/intelligence/attention?limit=50&surface=${encodeURIComponent(surface)}`
+      : '/api/intelligence/attention?limit=50'
     const [attention, opportunities, searchStats, refreshStatus] = await Promise.all([
-      fetchJsonDetailed('/api/intelligence/attention?limit=50', []),
+      fetchJsonDetailed(attentionPath, []),
       fetchJsonDetailed('/api/intelligence/opportunities?limit=50', []),
       fetchJsonDetailed('/api/search/stats', null),
       fetchJsonDetailed('/api/intelligence/refresh/status', null),
@@ -224,7 +231,7 @@ export default function IntelligencePage() {
     setEvidenceLoadingById(prev => ({ ...prev, [id]: false }))
   }
 
-  useEffect(() => { load() }, [])
+  useEffect(() => { load() }, [surface])
 
   const filtered = items.filter(item => {
     const needle = q.trim().toLowerCase()
@@ -259,9 +266,14 @@ export default function IntelligencePage() {
         .stat { background:var(--surface); border:1px solid var(--border); border-radius:10px; padding:.85rem 1rem; }
         .stat-val { font-family:'Fraunces',serif; font-size:1.45rem; color:var(--text); line-height:1; }
         .stat-lbl { margin-top:.25rem; color:var(--text-3); font-size:.68rem; text-transform:uppercase; letter-spacing:.07em; font-weight:700; }
-        .toolbar { display:flex; justify-content:space-between; gap:.75rem; align-items:center; margin-bottom:1rem; }
+        .toolbar { display:flex; flex-direction:column; gap:.55rem; align-items:stretch; margin-bottom:1rem; }
+        .toolbar-row { display:flex; gap:.75rem; align-items:center; }
+        .surface-bar { display:flex; flex-wrap:wrap; gap:.4rem; }
+        .surface-chip { border:1px solid var(--border); background:var(--surface); color:var(--text-3); border-radius:999px; padding:.32rem .65rem; font-size:.68rem; cursor:pointer; text-transform:capitalize; }
+        .surface-chip.active { color:var(--accent); border-color:color-mix(in oklab, var(--accent) 30%, var(--border)); background:color-mix(in oklab, var(--accent) 8%, var(--surface)); }
+        .surface-chip:hover { border-color:var(--border-strong); }
         .search { flex:1; border:1px solid var(--border); background:var(--surface); border-radius:10px; padding:.65rem .8rem; color:var(--text); }
-        .api-link { color:var(--accent); font-size:.78rem; text-decoration:none; }
+        .api-link { color:var(--accent); font-size:.78rem; text-decoration:none; white-space:nowrap; }
         .intel-list { display:flex; flex-direction:column; gap:.75rem; }
         .intel-card { display:grid; grid-template-columns:1fr auto; gap:1rem; background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:1rem; }
         .intel-card h2 { margin:.35rem 0 .35rem; font-size:1rem; line-height:1.35; color:var(--text); }
@@ -325,8 +337,22 @@ export default function IntelligencePage() {
       </div>
 
       <div className="toolbar">
-        <input className="search" value={q} onChange={e => setQ(e.target.value)} placeholder="Filter intelligence… e.g. Jxtapose, Hartex, Vikas" />
-        <a className="api-link" href="/api/intelligence/attention?limit=50">API →</a>
+        <div className="surface-bar" role="tablist" aria-label="Attention surfaces">
+          {SURFACE_OPTIONS.map(option => (
+            <button
+              key={option}
+              type="button"
+              className={`surface-chip ${surface === option ? 'active' : ''}`}
+              onClick={() => setSurface(option)}
+            >
+              {option === 'all' ? 'All' : option.replace(/_/g, ' ')}
+            </button>
+          ))}
+        </div>
+        <div className="toolbar-row">
+          <input className="search" value={q} onChange={e => setQ(e.target.value)} placeholder="Filter intelligence… e.g. Jxtapose, Hartex, Vikas" />
+          <a className="api-link" href={`/api/intelligence/attention?limit=50${surface && surface !== 'all' ? `&surface=${encodeURIComponent(surface)}` : ''}`}>API →</a>
+        </div>
       </div>
 
       {loading ? <div className="empty">Loading intelligence…</div> : filtered.length === 0 ? (
