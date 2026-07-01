@@ -191,3 +191,37 @@ test('does not promote a project join when the direct DM only matches unrelated 
   })
   assert.equal(opportunities.length, 0)
 })
+
+test('does not promote Radhika Pitti / CA Toppers banter into a project join', () => {
+  const opportunities = detectCrossChannelProjectSignals({
+    projects: [{ id: 64, name: 'Real Estate and Investment Review', description: 'Review and evaluation of real estate investment opportunities including Dubai property, family real estate business proposals, and broader investment strategy discussions with advisors.' }],
+    groups: [{ id: 15231, wa_chat_id: '120363426696797016@g.us', name: 'CA Toppers - JJwala India Cousins', ai_summary: 'Humorous cousin/friends banter, pickup coordination, jokes, and everyday chatter; no serious work discussions.' }],
+    contacts: [{ id: 99, display_name: 'Radhika Pitti', relationship_tier: 'tier_2', strategic_importance_score: 50, wa_jids: ['917702412323@c.us'] }],
+    groupMessages: [
+      { chat_id: '120363426696797016@g.us', participant: '917702412323@c.us', body: 'Radhika visited Mumbai and Nandita needed something picked up so she coordinated it', ts: '2026-06-25T11:13:10Z' },
+      { chat_id: '120363426696797016@g.us', participant: '917702412323@c.us', body: 'lol', ts: '2026-06-25T11:14:10Z' },
+    ],
+    directMessages: [{ contact_id: 99, chat_id: '917702412323@c.us', body: 'Pl send contact to buy', ts: '2026-03-21T03:31:28Z' }],
+  })
+  assert.equal(opportunities.length, 0)
+})
+
+test('uses longer adjacent context to keep real project follow-ups alive', () => {
+  const opportunities = detectCrossChannelProjectSignals({
+    projects: [{ id: 64, name: 'Real Estate and Investment Review', description: 'Review and evaluation of real estate investment opportunities including Dubai property and investment strategy discussions.' }],
+    groups: [{ id: 15231, wa_chat_id: '120363426696797016@g.us', name: 'Real Estate Review', ai_summary: 'Context about Dubai property review and investment decisions.' }],
+    contacts: [{ id: 99, display_name: 'Radhika Pitti', relationship_tier: 'tier_2', strategic_importance_score: 50, wa_jids: ['917702412323@c.us'] }],
+    groupMessages: [
+      { chat_id: '120363426696797016@g.us', participant: '917702412323@c.us', body: 'Dubai property investment review: maintenance charges and next decision', ts: '2026-06-25T11:10:10Z' },
+      { chat_id: '120363426696797016@g.us', participant: '917702412323@c.us', body: 'Please confirm the property review and investment details', ts: '2026-06-25T11:11:10Z' },
+    ],
+    directMessages: [
+      { contact_id: 99, chat_id: '917702412323@c.us', body: 'Need one contact to buy', ts: '2026-06-25T11:12:10Z' },
+      { contact_id: 99, chat_id: '917702412323@c.us', body: 'Review the investment property notes', ts: '2026-06-25T11:13:10Z' },
+      { contact_id: 99, chat_id: '917702412323@c.us', body: 'Send the latest property details', ts: '2026-06-25T11:14:10Z' },
+    ],
+  })
+  assert.equal(opportunities.length, 1)
+  assert.equal(opportunities[0].primary_contact_id, 99)
+  assert.equal(opportunities[0].primary_project_id, 64)
+})

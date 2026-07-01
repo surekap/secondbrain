@@ -138,6 +138,34 @@ function messageText(message) {
   return compactText(message.body || message.content || message.content_snippet || message.text || '', 1000)
 }
 
+function toTime(value) {
+  const ts = value ? new Date(value).getTime() : NaN
+  return Number.isFinite(ts) ? ts : null
+}
+
+function collectNearbyMessageText(messages = [], target, { before = 2, after = 2, windowMs = 7 * 24 * 60 * 60 * 1000 } = {}) {
+  if (!Array.isArray(messages) || !target) return ''
+  const targetTs = toTime(target.occurred_at || target.ts || target.created_at)
+  const targetText = messageText(target)
+  if (targetTs == null) return targetText
+  const sorted = messages
+    .map((message, index) => ({ message, index, ts: toTime(message.occurred_at || message.ts || message.created_at) }))
+    .filter(item => item.ts != null)
+    .sort((a, b) => a.ts - b.ts)
+  const targetIndex = sorted.findIndex(item => item.message === target)
+  if (targetIndex < 0) return targetText
+  const parts = [targetText]
+  for (let i = Math.max(0, targetIndex - before); i < targetIndex; i++) {
+    const item = sorted[i]
+    if (Math.abs(item.ts - targetTs) <= windowMs) parts.push(messageText(item.message))
+  }
+  for (let i = targetIndex + 1; i < Math.min(sorted.length, targetIndex + after + 1); i++) {
+    const item = sorted[i]
+    if (Math.abs(item.ts - targetTs) <= windowMs) parts.push(messageText(item.message))
+  }
+  return parts.filter(Boolean).join(' ')
+}
+
 function isActionable(text) {
   return ACTION_PATTERNS.some(pattern => pattern.test(text || ''))
 }
@@ -237,6 +265,9 @@ function detectCrossChannelProjectSignals(input = {}) {
     if (!directByContact.has(key)) directByContact.set(key, [])
     directByContact.get(key).push(m)
   }
+  for (const messages of directByContact.values()) {
+    messages.sort((a, b) => (toTime(a.occurred_at || a.ts || a.created_at) || 0) - (toTime(b.occurred_at || b.ts || b.created_at) || 0))
+  }
 
   for (const project of projects) {
     if (isGenericProject(project)) continue
@@ -269,27 +300,35 @@ function detectCrossChannelProjectSignals(input = {}) {
         const relevantDms = dms
           .map(dm => {
             const text = messageText(dm)
+            const contextText = knownGroupDerived ? collectNearbyMessageText(dms, dm, { before: 2, after: 2 }) : collectNearbyMessageText(dms, dm, { before: 3, after: 3 })
             const projectScore = overlapScore(pText, text)
             const contextScore = overlapScore(dmContext, text)
+            const contextualProjectScore = overlapScore(pText, `${text} ${contextText} ${gText}`)
             const projectTerms = sharedTerms(pText, text)
             const contextTerms = sharedTerms(dmContext, text)
+            const contextualProjectTerms = sharedTerms(pText, `${text} ${contextText} ${gText}`)
             return {
               dm,
               text,
-              score: Math.max(projectScore, contextScore),
+              context_text: compactText(contextText, 1000),
+              score: Math.max(projectScore, contextScore, contextualProjectScore),
               projectScore,
               contextScore,
+              contextualProjectScore,
               project_terms: projectTerms,
               context_terms: contextTerms,
-              shared_terms: Array.from(new Set([...projectTerms, ...contextTerms])),
+              contextual_project_terms: contextualProjectTerms,
+              shared_terms: Array.from(new Set([...projectTerms, ...contextTerms, ...contextualProjectTerms])),
             }
           })
           .filter(x => {
             if (x.score < dmThreshold || x.shared_terms.length < minSharedProjectDmTerms || !isActionable(x.text)) return false
-            // For real project joins, the direct DM must carry at least one project term itself.
-            // Otherwise a mixed-purpose/social group can make an unrelated DM look project-relevant
-            // just because it matches group context words like "share", "songs", or links.
-            if (!knownGroupDerived && x.project_terms.length < minSharedProjectDmTerms) return false
+            // For real project joins, the direct DM must carry enough project language in the broader local context.
+            // This prevents a casual social DM like "send contact to buy" from inheriting unrelated group/project words.
+            if (!knownGroupDerived) {
+              const projectSignalCount = Math.max(x.project_terms.length, x.contextual_project_terms.length)
+              if (projectSignalCount < 2) return false
+            }
             return true
           })
           .sort((a, b) => b.score - a.score)
