@@ -43,10 +43,42 @@ function score(item) {
   return Number(item.attention_score ?? item.expected_value_score ?? 0).toFixed(0)
 }
 
-function traceHref(item) {
-  if (item?.primary_contact_id) return `/relationships?contact=${encodeURIComponent(item.primary_contact_id)}`
-  if (item?.primary_project_id) return `/projects?project=${encodeURIComponent(item.primary_project_id)}`
-  return null
+function parseCrossChannelSourceRef(sourceRef) {
+  if (typeof sourceRef !== 'string') return {}
+  if (!sourceRef.startsWith('cross_channel_project:')) return {}
+  const parts = sourceRef.split(':')
+  return {
+    projectId: parts[1] || null,
+    groupId: parts[2] || null,
+    contactId: parts[3] || null,
+  }
+}
+
+function traceTargets(item) {
+  const targets = []
+  const seen = new Set()
+  const add = (href, label) => {
+    if (!href || seen.has(href)) return
+    seen.add(href)
+    targets.push({ href, label })
+  }
+
+  const refs = Array.isArray(item?.source_refs) && item.source_refs.length > 0
+    ? item.source_refs
+    : (item?.source_ref ? [item.source_ref] : [])
+
+  for (const ref of refs) {
+    if (typeof ref !== 'string') continue
+    const parsed = parseCrossChannelSourceRef(ref)
+    if (parsed.groupId) add(`/groups?group=${encodeURIComponent(parsed.groupId)}`, 'Trace group')
+    if (parsed.contactId) add(`/relationships?contact=${encodeURIComponent(parsed.contactId)}`, 'Trace contact')
+    if (ref.startsWith('group:')) add(`/groups?group=${encodeURIComponent(ref.slice(6))}`, 'Trace group')
+    if (ref.startsWith('project:')) add(`/projects?project=${encodeURIComponent(ref.slice(8))}`, 'Trace project')
+  }
+
+  if (item?.primary_contact_id) add(`/relationships?contact=${encodeURIComponent(item.primary_contact_id)}`, 'Open contact')
+  if (item?.primary_project_id) add(`/projects?project=${encodeURIComponent(item.primary_project_id)}`, 'Open project')
+  return targets
 }
 
 function evidenceTraceHref(ev, item) {
@@ -92,11 +124,13 @@ function ItemCard({ item, onRemove, evidence, evidenceLoading, evidenceOpen, onT
           {(item.source_last_seen_at || item.last_seen_at) && <span> · source updated {fmtAge(item.source_last_seen_at || item.last_seen_at)}</span>}
         </div>
 
-        {traceHref(item) && (
+        {traceTargets(item).length > 0 && (
           <div className="trace-row">
-            <Link className="trace-pill" href={traceHref(item)}>
-              Trace source communication
-            </Link>
+            {traceTargets(item).map(target => (
+              <Link key={target.href} className="trace-pill" href={target.href}>
+                {target.label}
+              </Link>
+            ))}
           </div>
         )}
 
