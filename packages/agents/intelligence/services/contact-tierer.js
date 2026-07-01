@@ -23,7 +23,7 @@ function contactText(contact = {}) {
 function isOperationalContact(contact = {}) {
   const text = contactText(contact)
   return [
-    'operations', 'operation', 'accounts staff', 'accounting', 'admin staff', 'staff',
+    'operations', 'operation', 'accounts staff', 'accounting', 'admin', 'admin staff', 'staff',
     'executive assistant', 'assistant', 'hr', 'electrician', 'employee', 'branch manager',
     'bank relationship manager', 'portfolio updates', 'institutional desk'
   ].some(term => text.includes(term))

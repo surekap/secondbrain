@@ -1,5 +1,6 @@
 'use client'
-import { useState, useEffect } from 'react'
+import { Suspense, useState, useEffect, useRef } from 'react'
+import { useSearchParams } from 'next/navigation'
 import ResizablePanes from '../../components/ResizablePanes'
 
 async function apiFetch(method, path, body) {
@@ -47,7 +48,7 @@ const TYPE_COLOR = {
   unknown:     'var(--text-3)',
 }
 
-export default function GroupsPage() {
+function GroupsPageContent() {
   const [groups, setGroups]       = useState([])
   const [filtered, setFiltered]   = useState([])
   const [selected, setSelected]   = useState(null)
@@ -70,6 +71,17 @@ export default function GroupsPage() {
     if (q) result = result.filter(g => (g.name || g.wa_chat_id || '').toLowerCase().includes(q))
     setFiltered(result)
   }, [search, typeFilter, groups])
+
+  const autoSelectedRef = useRef(false)
+  const searchParams = useSearchParams()
+
+  useEffect(() => {
+    if (autoSelectedRef.current || !groups.length) return
+    const id = parseInt(searchParams.get('group'), 10)
+    if (!id) return
+    autoSelectedRef.current = true
+    selectGroup(id)
+  }, [groups, searchParams])
 
   async function selectGroup(id) {
     const g = groups.find(x => x.id === id)
@@ -393,5 +405,13 @@ export default function GroupsPage() {
         </div>
       </ResizablePanes>
     </>
+  )
+}
+
+export default function GroupsPage() {
+  return (
+    <Suspense fallback={<div className="loading">Loading groups…</div>}>
+      <GroupsPageContent />
+    </Suspense>
   )
 }

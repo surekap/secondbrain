@@ -1,5 +1,6 @@
 'use client'
 
+import Link from 'next/link'
 import { useEffect, useState } from 'react'
 
 async function fetchJson(path, fallback) {
@@ -42,6 +43,24 @@ function score(item) {
   return Number(item.attention_score ?? item.expected_value_score ?? 0).toFixed(0)
 }
 
+function traceHref(item) {
+  if (item?.primary_contact_id) return `/relationships?contact=${encodeURIComponent(item.primary_contact_id)}`
+  if (item?.primary_project_id) return `/projects?project=${encodeURIComponent(item.primary_project_id)}`
+  return null
+}
+
+function evidenceTraceHref(ev, item) {
+  const meta = ev?.metadata || {}
+  if (ev?.source_table === 'relationships.groups') {
+    const groupId = meta.group_id || ev.source_id
+    if (groupId) return `/groups?group=${encodeURIComponent(groupId)}`
+  }
+  if (meta.contact_id) return `/relationships?contact=${encodeURIComponent(meta.contact_id)}`
+  if (item?.primary_contact_id) return `/relationships?contact=${encodeURIComponent(item.primary_contact_id)}`
+  if (item?.primary_project_id) return `/projects?project=${encodeURIComponent(item.primary_project_id)}`
+  return null
+}
+
 function ItemCard({ item, onRemove, evidence, evidenceLoading, evidenceOpen, onToggleEvidence }) {
   async function setStatus(status) {
     await fetch(`/api/intelligence/opportunities/${item.id}`, {
@@ -73,6 +92,14 @@ function ItemCard({ item, onRemove, evidence, evidenceLoading, evidenceOpen, onT
           {(item.source_last_seen_at || item.last_seen_at) && <span> · source updated {fmtAge(item.source_last_seen_at || item.last_seen_at)}</span>}
         </div>
 
+        {traceHref(item) && (
+          <div className="trace-row">
+            <Link className="trace-pill" href={traceHref(item)}>
+              Trace source communication
+            </Link>
+          </div>
+        )}
+
         {evidenceCount > 0 && (
           <div className="evidence-panel">
             <button className="evidence-toggle" onClick={() => onToggleEvidence(item.id)}>
@@ -83,7 +110,9 @@ function ItemCard({ item, onRemove, evidence, evidenceLoading, evidenceOpen, onT
                 {evidenceLoading ? (
                   <div className="evidence-empty">Loading evidence…</div>
                 ) : evidence?.length ? (
-                  evidence.map(ev => (
+                  evidence.map(ev => {
+                    const href = evidenceTraceHref(ev, item)
+                    return (
                     <div className="evidence-item" key={ev.id}>
                       <div className="evidence-meta">
                         <span className="evidence-source">{String(ev.source_table || 'evidence').replace(/_/g, ' ')}</span>
@@ -92,8 +121,16 @@ function ItemCard({ item, onRemove, evidence, evidenceLoading, evidenceOpen, onT
                         {ev.source_ref && <span className="evidence-ref">{ev.source_ref}</span>}
                       </div>
                       <div className="evidence-quote">{ev.excerpt || ev.quote || 'No excerpt recorded.'}</div>
+                      {href && (
+                        <div className="trace-row">
+                          <Link className="trace-link" href={href}>
+                            Trace communication
+                          </Link>
+                        </div>
+                      )}
                     </div>
-                  ))
+                    )
+                  })
                 ) : (
                   <div className="evidence-empty">No evidence rows returned.</div>
                 )}
@@ -210,6 +247,16 @@ export default function IntelligencePage() {
         .evidence-meta { display:flex; flex-wrap:wrap; gap:.35rem; color:var(--text-3); font-size:.68rem; margin-bottom:.35rem; }
         .evidence-source { text-transform:capitalize; color:var(--accent); }
         .evidence-ref { font-family:monospace; }
+        .evidence-link { color:var(--accent); text-decoration:none; font-weight:600; }
+        .evidence-link:hover { text-decoration:underline; }
+        .trace-link { color:var(--accent); text-decoration:none; font-size:.72rem; font-weight:600; }
+        .trace-link:hover { text-decoration:underline; }
+        .trace-row { display:flex; gap:.55rem; flex-wrap:wrap; margin-top:.35rem; }
+        .trace-pill { display:inline-flex; align-items:center; gap:.25rem; padding:.12rem .45rem; border-radius:999px; border:1px solid color-mix(in oklab, var(--accent) 30%, var(--border)); background:color-mix(in oklab, var(--accent) 6%, var(--surface-2)); color:var(--accent); text-decoration:none; font-size:.66rem; font-weight:600; }
+        .trace-pill:hover { text-decoration:underline; }
+        .trace-pill.secondary { color:var(--text-2); border-color:var(--border); background:var(--surface-2); }
+        .trace-pill.secondary:hover { text-decoration:none; border-color:var(--border-strong); }
+        .trace-note { color:var(--text-3); font-size:.66rem; }
         .evidence-quote { color:var(--text); font-size:.76rem; line-height:1.45; white-space:pre-wrap; }
         .evidence-empty { color:var(--text-3); font-size:.72rem; }
         .intel-actions { display:flex; gap:.4rem; align-items:flex-start; }

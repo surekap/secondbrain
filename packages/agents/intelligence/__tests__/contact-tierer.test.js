@@ -92,6 +92,24 @@ test('contact-tierer: operational staff do not create relationship cadence oblig
   assert.equal(rec.obligation_reason, 'operational_contact');
 });
 
+test('contact-tierer: plain admin titles do not become tier_1 relationship obligations', () => {
+  const rec = recommendContactTier({
+    id: 93,
+    display_name: 'Radha Muralidhar',
+    company: 'YPO',
+    job_title: 'Admin',
+    relationship_type: 'professional_contact',
+    relationship_strength: 'moderate',
+    comm_count: 100,
+    insight_count: 10,
+    last_interaction_at: '2026-03-27T05:51:55.497Z',
+  });
+
+  assert.notEqual(rec.relationship_tier, 'tier_1');
+  assert.equal(rec.next_suggested_touch_at, null);
+  assert.equal(rec.obligation_reason, 'operational_contact');
+});
+
 test('contact-tierer: service providers are not monthly relationship obligations without manual override', () => {
   const rec = recommendContactTier({
     id: 25,

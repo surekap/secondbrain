@@ -11,6 +11,12 @@ function resolveGroupIds(text, groupsMap) {
     .replace(/(\d{5,})@c\.us/g, (_, num) => '+' + num)
 }
 
+function traceHref(item) {
+  if (item?.primary_contact_id) return `/relationships?contact=${encodeURIComponent(item.primary_contact_id)}`
+  if (item?.primary_project_id) return `/projects?project=${encodeURIComponent(item.primary_project_id)}`
+  return null
+}
+
 function fmtDate(iso) {
   if (!iso) return ''
   const d = new Date(iso)
@@ -369,6 +375,9 @@ export default function DashboardPage() {
         .attention-title { font-size:.875rem; font-weight:600; color:var(--text); line-height:1.35; }
         .attention-desc { font-size:.75rem; color:var(--text-2); line-height:1.45; margin-top:.2rem; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
         .attention-action { font-size:.72rem; color:var(--accent); margin-top:.3rem; }
+        .attention-trace { margin-top:.35rem; }
+        .attention-trace-link { color:var(--accent); font-size:.72rem; text-decoration:none; font-weight:600; }
+        .attention-trace-link:hover { text-decoration:underline; }
         .attention-actions { display:flex; gap:.35rem; }
 
         /* Identity resolution */
@@ -636,6 +645,11 @@ export default function DashboardPage() {
                     <div className="attention-title">{resolveGroupIds(item.title, groupsMap)}</div>
                     {item.description && <div className="attention-desc">{resolveGroupIds(item.description, groupsMap)}</div>}
                     {item.recommended_next_action && <div className="attention-action">Next: {item.recommended_next_action}</div>}
+                    {traceHref(item) && (
+                      <div className="attention-trace">
+                        <Link href={traceHref(item)} className="attention-trace-link">Trace source communication</Link>
+                      </div>
+                    )}
                   </div>
                   <div className="attention-actions">
                     <button className="ic-btn" onClick={() => updateOpportunityStatus(item.id, 'actioned')} title="Mark actioned">✓</button>
