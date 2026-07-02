@@ -60,7 +60,34 @@ setInterval(async () => {
   }
 }, 5000)
 
-// ── Slow loop: ollama ps + vm_stat every 15s ──────────────────────────────────
+// ── Slow loop: ollama ps + memory pressure every 15s ──────────────────────────
+
+function getMemUsedMb(cb) {
+  if (process.platform === 'darwin') {
+    exec('vm_stat', (err, stdout) => {
+      if (err) return cb(null)
+      const freeMatch   = stdout.match(/Pages free:\s+(\d+)/)
+      const activeMatch = stdout.match(/Pages active:\s+(\d+)/)
+      const wiredMatch  = stdout.match(/Pages wired down:\s+(\d+)/)
+      if (!freeMatch) return cb(null)
+      const pageSize = 16384  // bytes on Apple Silicon
+      const active   = parseInt(activeMatch?.[1] || '0', 10) * pageSize
+      const wired    = parseInt(wiredMatch?.[1]  || '0', 10) * pageSize
+      const usedMb   = Math.round((active + wired) / 1048576)
+      cb(usedMb)
+    })
+    return
+  }
+
+  exec('free -m', (err, stdout) => {
+    if (err) return cb(null)
+    const line = stdout.split('\n').find(l => l.toLowerCase().startsWith('mem:'))
+    if (!line) return cb(null)
+    const parts = line.trim().split(/\s+/)
+    const usedMb = parseInt(parts[2], 10)
+    cb(Number.isFinite(usedMb) ? usedMb : null)
+  })
+}
 
 let knownModels = new Set()
 
@@ -93,17 +120,9 @@ setInterval(async () => {
     }
     knownModels = loadedNames
 
-    // vm_stat for memory pressure
-    exec('vm_stat', (err, stdout) => {
-      if (err) return
-      const freeMatch   = stdout.match(/Pages free:\s+(\d+)/)
-      const activeMatch = stdout.match(/Pages active:\s+(\d+)/)
-      const wiredMatch  = stdout.match(/Pages wired down:\s+(\d+)/)
-      if (!freeMatch) return
-      const pageSize = 16384  // bytes on Apple Silicon
-      const active   = parseInt(activeMatch?.[1] || '0', 10) * pageSize
-      const wired    = parseInt(wiredMatch?.[1]  || '0', 10) * pageSize
-      const usedMb   = Math.round((active + wired) / 1048576)
+    // Memory pressure: vm_stat on macOS, free on Linux.
+    getMemUsedMb(usedMb => {
+      if (!Number.isFinite(usedMb)) return
       db.query(`
         UPDATE telemetry.system_samples SET mem_used_mb = $1
         WHERE sample_id = (SELECT MAX(sample_id) FROM telemetry.system_samples)

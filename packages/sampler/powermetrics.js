@@ -45,6 +45,12 @@ function _parseSample(doc) {
 
 function start() {
   if (running) return
+  if (process.platform !== 'darwin') {
+    // powermetrics is macOS-only. On Linux/other hosts we keep the sampler
+    // alive and let index.js write null power fields plus CPU/memory telemetry.
+    running = true
+    return
+  }
   running = true
   child = spawn('powermetrics', [
     '--samplers', 'cpu_power,gpu_power',
@@ -69,7 +75,10 @@ function start() {
     if (msg) console.warn('[sampler:powermetrics]', msg)
   })
 
-  child.on('error', err => console.error('[sampler:powermetrics] spawn error:', err.message))
+  child.on('error', err => {
+    if (err?.code === 'ENOENT') return
+    console.error('[sampler:powermetrics] spawn error:', err.message)
+  })
   child.on('close', code => {
     running = false
     if (code && code !== 0) console.warn('[sampler:powermetrics] exited with code', code)

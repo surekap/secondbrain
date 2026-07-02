@@ -339,6 +339,12 @@ const AGENTS = {
     description: 'Bridges WhatsApp Web to Postgres — saves messages and fans out to webhook subscribers',
     entrypoint:  path.resolve(__dirname, '../agents/whatsapp/src/app.js'),
   },
+  sampler: {
+    id:          'sampler',
+    name:        'System Sampler',
+    description: 'Collects system telemetry samples for observability and freshness checks',
+    entrypoint:  path.resolve(__dirname, '../sampler/index.js'),
+  },
   'apple-contacts': {
     id:              'apple-contacts',
     name:            'Apple Contacts',
@@ -3315,6 +3321,9 @@ async function startServer() {
     if (db) {
       indexer.start(db);
       observeAlerts.start(db);
+      startAgent('sampler').catch(err => {
+        console.error('[server] sampler auto-start failed:', err.message);
+      });
     }
   });
 }
