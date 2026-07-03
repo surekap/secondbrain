@@ -255,7 +255,6 @@ async function loadCommunicationRows(pool, days = 30) {
         m.id::text AS source_id,
         m.chat_id,
         m.ts,
-        m.created_at,
         COALESCE(m.data->>'body', m.data->>'caption', m.data->>'text', m.data->>'message') AS body,
         COALESCE(m.data->'_data'->>'notifyName', m.data->>'notifyName') AS subject,
         NULL::bigint AS source_contact_id,
@@ -263,9 +262,9 @@ async function loadCommunicationRows(pool, days = 30) {
         COALESCE(m.data->'id'->>'_serialized', 'whatsapp:' || m.id::text) AS source_ref
       FROM public.messages m
       WHERE m.event IN ('message', 'message_create', 'message_historical')
-        AND COALESCE(m.ts, m.created_at) >= $1::timestamptz
+        AND m.ts >= $1::timestamptz
         AND COALESCE(m.data->>'body', m.data->>'caption', m.data->>'text', m.data->>'message') IS NOT NULL
-      ORDER BY COALESCE(m.ts, m.created_at) DESC
+      ORDER BY m.ts DESC
       LIMIT 10000
     `, [cutoff]),
     pool.query(`
