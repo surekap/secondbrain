@@ -16,6 +16,7 @@ const { detectStaleEmailThreads } = require('./services/stale-email-thread-detec
 const { detectCrossChannelProjectSignals } = require('./services/cross-channel-project-detector')
 const { detectRelationshipOpenLoops } = require('./services/relationship-open-loop-detector')
 const { detectHomeImprovementOpportunities } = require('./services/home-improvement-detector')
+const { backfillCommunicationEvents } = require('./services/communication-event-extractor')
 const { extractRelationshipFactsFromText, inferContactMention } = require('../relationships/services/fact-extractor')
 
 let schemaReady = false
@@ -721,6 +722,7 @@ async function runIntelligenceServices(pool, options = {}) {
     cross_channel_project_opportunities: 0,
     relationship_open_loop_opportunities: 0,
     home_improvement_opportunities: 0,
+    communication_events_backfilled: 0,
     relationship_facts_extracted: 0,
   }
   log('info', 'Starting intelligence pipeline')
@@ -1041,6 +1043,11 @@ async function runIntelligenceServices(pool, options = {}) {
     }
     stats.home_improvement_opportunities = homeImprovementCount
     log('info', 'Home-improvement project promotion complete', { count: homeImprovementCount })
+
+    log('info', 'Backfilling communication events')
+    const communicationEventStats = await backfillCommunicationEvents(pool, { days: 30, log })
+    stats.communication_events_backfilled = communicationEventStats.inserted
+    log('info', 'Communication event backfill complete', communicationEventStats)
 
     log('info', 'Extracting durable relationship facts')
     let relationshipFactCount = 0

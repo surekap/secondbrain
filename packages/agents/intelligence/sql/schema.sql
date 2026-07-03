@@ -250,6 +250,40 @@ CREATE INDEX IF NOT EXISTS opportunity_evidence_source_idx
 CREATE INDEX IF NOT EXISTS opportunity_evidence_occurred_idx
   ON intelligence.opportunity_evidence (occurred_at DESC NULLS LAST);
 
+-- ── Communication event extraction ───────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS intelligence.communication_events (
+  id                 BIGSERIAL PRIMARY KEY,
+  event_key          TEXT NOT NULL UNIQUE,
+  event_kind         TEXT NOT NULL CHECK (event_kind IN (
+                         'event','conference','zoom_call','webinar','meeting','call',
+                         'workshop','summit','panel','roundtable','launch','other'
+                       )),
+  title              TEXT NOT NULL,
+  description        TEXT,
+  communicated_at    TIMESTAMPTZ NOT NULL,
+  starts_at          TIMESTAMPTZ,
+  ends_at            TIMESTAMPTZ,
+  source_table       TEXT NOT NULL,
+  source_id          TEXT NOT NULL,
+  source_ref         TEXT,
+  source_contact_id  BIGINT REFERENCES relationships.contacts(id) ON DELETE SET NULL,
+  source_project_id  BIGINT REFERENCES projects.projects(id) ON DELETE SET NULL,
+  source_subject     TEXT,
+  source_excerpt     TEXT,
+  confidence         NUMERIC(4,3) DEFAULT 0.700 CHECK (confidence >= 0 AND confidence <= 1),
+  metadata           JSONB DEFAULT '{}',
+  created_at         TIMESTAMPTZ DEFAULT NOW(),
+  updated_at         TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS communication_events_kind_idx
+  ON intelligence.communication_events (event_kind, communicated_at DESC);
+CREATE INDEX IF NOT EXISTS communication_events_source_idx
+  ON intelligence.communication_events (source_table, source_id);
+CREATE INDEX IF NOT EXISTS communication_events_start_idx
+  ON intelligence.communication_events (starts_at DESC NULLS LAST);
+
 -- ── Weak-signal accumulator ──────────────────────────────────────────────────
 
 CREATE TABLE IF NOT EXISTS intelligence.signals (
