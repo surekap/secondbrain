@@ -3,6 +3,7 @@
 
 const db = require('@secondbrain/db')
 const { ollamaRequest } = require('./ollama')
+const { getProfilePolicy, credentialFromEnv } = require('./model-profiles')
 
 let telemetry = null
 function getTelemetry() {
@@ -19,15 +20,22 @@ const RATES = {
     'claude-sonnet-4-6': { in: 0.003,   out: 0.015  },
     'claude-opus-4-6':   { in: 0.005,   out: 0.025  },
     'claude-haiku-4-5':  { in: 0.001,   out: 0.005  },
+    'claude-sonnet-5':   { in: 0.003,   out: 0.015  },
+    'claude-opus-4-8':   { in: 0.005,   out: 0.025  },
+    'claude-fable-5':    { in: 0.010,   out: 0.050  },
   },
   openai: {
     'gpt-4o':       { in: 0.0025,   out: 0.010  },
     'gpt-4o-mini':  { in: 0.00015,  out: 0.0006 },
     'gpt-5.4-mini': { in: 0.00075,  out: 0.0045 },
+    'gpt-5.6-luna': { in: 0.001,    out: 0.006  },
+    'gpt-5.6-sol':  { in: 0.005,    out: 0.030  },
   },
   gemini: {
     'gemini-2.0-flash':   { in: 0.0001,  out: 0.0004 },
     'gemini-2.5-flash':   { in: 0.0003,  out: 0.0025 },
+    'gemini-3.1-flash-lite': { in: 0.00025, out: 0.0015 },
+    'gemini-3.5-flash':      { in: 0.0015,  out: 0.009  },
   },
   kimi: {
     'kimi-k2.5': { in: 0.00042, out: 0.0022 },
@@ -67,10 +75,43 @@ function _markProviderDead(providerId) {
 const CACHE_TTL_MS = 60 * 1000
 const _priorityCache = new Map()  // agentId → { providers, expiresAt }
 
-async function getPriorityList(agentId) {
+async function getPriorityList(agentId, profile) {
   const now = Date.now()
-  const cached = _priorityCache.get(agentId)
+  const cacheKey = `${agentId}:${profile || 'legacy'}`
+  const cached = _priorityCache.get(cacheKey)
   if (cached && cached.expiresAt > now) return cached.providers
+
+  const policy = getProfilePolicy(profile)
+  if (policy) {
+    const { rows } = await db.query(`
+      SELECT id, name, provider_type, api_key, base_url, model,
+             is_enabled, has_credits, last_error_at
+      FROM system.llm_providers
+      ORDER BY has_credits DESC, id ASC
+    `)
+    const providers = []
+    for (const route of policy) {
+      const rowsForType = rows.filter(p => p.provider_type === route.provider_type)
+      const eligible = rowsForType.filter(p =>
+        p.is_enabled && (p.has_credits || !p.last_error_at || new Date(p.last_error_at).getTime() < now - 30 * 60 * 1000)
+      )
+      const configured = eligible.find(p => p.model === route.model) || eligible[0]
+      if (configured) {
+        providers.push({ ...configured, ...route, configured_model: configured.model })
+      } else if (rowsForType.length === 0 && credentialFromEnv(route.provider_type)) {
+        providers.push({
+          id: null,
+          name: `${route.provider_type}-env`,
+          provider_type: route.provider_type,
+          api_key: credentialFromEnv(route.provider_type),
+          base_url: null,
+          ...route,
+        })
+      }
+    }
+    _priorityCache.set(cacheKey, { providers, expiresAt: now + CACHE_TTL_MS })
+    return providers
+  }
 
   const { rows } = await db.query(`
     SELECT p.id, p.name, p.provider_type, p.api_key, p.base_url, p.model,
@@ -79,17 +120,22 @@ async function getPriorityList(agentId) {
     JOIN system.llm_providers p ON p.id = alp.provider_id
     WHERE alp.agent_id = $1
       AND p.is_enabled = true
-      AND p.has_credits = true
+      AND (p.has_credits = true OR p.last_error_at < NOW() - INTERVAL '30 minutes')
     ORDER BY alp.priority ASC
   `, [agentId])
 
-  _priorityCache.set(agentId, { providers: rows, expiresAt: now + CACHE_TTL_MS })
+  _priorityCache.set(cacheKey, { providers: rows, expiresAt: now + CACHE_TTL_MS })
   return rows
 }
 
 function invalidatePriorityCache(agentId) {
-  if (agentId) _priorityCache.delete(agentId)
-  else _priorityCache.clear()
+  if (!agentId) {
+    _priorityCache.clear()
+    return
+  }
+  for (const key of _priorityCache.keys()) {
+    if (key === agentId || key.startsWith(`${agentId}:`)) _priorityCache.delete(key)
+  }
 }
 
 // ── Credit error detection ────────────────────────────────────────────────────
@@ -108,13 +154,14 @@ function isCreditError(err) {
 
 // ── Usage logging ─────────────────────────────────────────────────────────────
 
-async function logUsage({ providerId, agentId, tokensIn, tokensOut, costUsd, error }) {
+async function logUsage({ providerId, agentId, model, profile, taskType, tokensIn, tokensOut, costUsd, error }) {
   try {
     await db.query(
-      `INSERT INTO system.llm_usage (provider_id, agent_id, tokens_in, tokens_out, cost_usd, error)
-       VALUES ($1, $2, $3, $4, $5, $6)`,
-      [providerId || null, agentId, tokensIn || null, tokensOut || null,
-       costUsd != null ? costUsd.toFixed(6) : null, error || null]
+      `INSERT INTO system.llm_usage
+         (provider_id, agent_id, model, profile, task_type, tokens_in, tokens_out, cost_usd, error)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+      [providerId || null, agentId, model || null, profile || null, taskType || null,
+       tokensIn || null, tokensOut || null, costUsd != null ? costUsd.toFixed(6) : null, error || null]
     )
   } catch (e) {
     console.warn('[llm] usage log failed:', e.message)
@@ -122,6 +169,7 @@ async function logUsage({ providerId, agentId, tokensIn, tokensOut, costUsd, err
 }
 
 async function markCreditsFailed(providerId, errorMsg) {
+  if (!providerId) return
   try {
     await db.query(
       `UPDATE system.llm_providers
@@ -132,6 +180,20 @@ async function markCreditsFailed(providerId, errorMsg) {
     invalidatePriorityCache()
   } catch (e) {
     console.warn('[llm] markCreditsFailed error:', e.message)
+  }
+}
+
+async function markProviderHealthy(providerId) {
+  if (!providerId) return
+  try {
+    await db.query(
+      `UPDATE system.llm_providers
+       SET has_credits = true, last_error = NULL, last_error_at = NULL
+       WHERE id = $1 AND (has_credits = false OR last_error IS NOT NULL)`,
+      [providerId]
+    )
+  } catch (e) {
+    console.warn('[llm] provider health reset failed:', e.message)
   }
 }
 
@@ -187,10 +249,81 @@ async function callAnthropic(provider, { system, messages, tools, max_tokens }) 
   return parseAnthropicResponse(response)
 }
 
+function toResponsesInput(messages) {
+  const input = []
+  for (const message of messages) {
+    if (Array.isArray(message.provider_items) && message.provider_items.length) {
+      input.push(...message.provider_items)
+      continue
+    }
+    if (message.role === 'tool') {
+      input.push({ type: 'function_call_output', call_id: message.tool_call_id, output: message.content || '' })
+      continue
+    }
+    if (message.role === 'assistant' && message.tool_calls?.length) {
+      if (message.content) input.push({ role: 'assistant', content: message.content })
+      for (const tc of message.tool_calls) {
+        input.push({ type: 'function_call', call_id: tc.id, name: tc.name, arguments: JSON.stringify(tc.input || {}) })
+      }
+      continue
+    }
+    if (message.role === 'system') continue
+    if (Array.isArray(message.content)) {
+      const content = message.content.map(block => block.type === 'text'
+        ? { type: 'input_text', text: block.text }
+        : { type: 'input_image', image_url: `data:${block.source?.media_type};base64,${block.source?.data}`, detail: 'low' })
+      input.push({ role: message.role, content })
+    } else {
+      input.push({ role: message.role, content: message.content || '' })
+    }
+  }
+  return input
+}
+
+function parseResponsesResponse(response) {
+  const tool_calls = (response.output || [])
+    .filter(item => item.type === 'function_call')
+    .map(item => {
+      let parsed = {}
+      try { parsed = JSON.parse(item.arguments || '{}') } catch (_) {}
+      return { id: item.call_id, name: item.name, input: parsed }
+    })
+  let stop_reason = tool_calls.length ? 'tool_use' : 'end_turn'
+  if (response.status === 'incomplete' && response.incomplete_details?.reason === 'max_output_tokens') stop_reason = 'max_tokens'
+  return {
+    text: response.output_text || null,
+    tool_calls,
+    stop_reason,
+    tokensIn: response.usage?.input_tokens,
+    tokensOut: response.usage?.output_tokens,
+    provider_items: response.output || [],
+    provider_response_id: response.id,
+    model: response.model,
+  }
+}
+
 async function callOpenAI(provider, { system, messages, tools, max_tokens }) {
   const OpenAI = require('openai')
   if (!provider.api_key) throw Object.assign(new Error('OpenAI API key not configured'), { status: 402 })
   const openai = new OpenAI.default({ apiKey: provider.api_key })
+  if (String(provider.model || '').startsWith('gpt-5.6')) {
+    const systemMessage = messages.find(message => message.role === 'system')
+    const params = {
+      model: provider.model,
+      input: toResponsesInput(messages),
+      max_output_tokens: max_tokens || 4096,
+      reasoning: { effort: provider.reasoning_effort || 'none' },
+      store: false,
+      include: ['reasoning.encrypted_content'],
+    }
+    if (system || systemMessage?.content) params.instructions = system || systemMessage.content
+    if (tools?.length) {
+      params.tools = tools.map(t => ({
+        type: 'function', name: t.name, description: t.description, parameters: t.input_schema,
+      }))
+    }
+    return parseResponsesResponse(await openai.responses.create(params))
+  }
   const oaiMessages = messages.map(m => {
     if (m.role === 'tool') return { role: 'tool', tool_call_id: m.tool_call_id, content: m.content }
     if (m.role === 'assistant' && m.tool_calls?.length > 0) {
@@ -456,15 +589,18 @@ const CALL_FNS = {
  * @param {object} opts      { messages, system?, tools?, max_tokens? }
  * @returns {{ text, tool_calls, stop_reason, provider }}
  */
-async function create(agentId, { system, messages, tools, max_tokens, _taskType, _workflowName, _runId } = {}) {
-  const providers = await getPriorityList(agentId)
+async function create(agentId, { system, messages, tools, max_tokens, profile, task_type, workflow_name, run_id, _taskType, _workflowName, _runId } = {}) {
+  const effectiveTaskType = task_type || _taskType || null
+  const effectiveWorkflow = workflow_name || _workflowName || null
+  const effectiveRunId = run_id || _runId || null
+  const providers = await getPriorityList(agentId, profile)
 
   if (providers.length === 0) {
     // Fallback: env-var credentials for backward compat during transition
     if (process.env.ANTHROPIC_API_KEY) {
       console.warn(`[llm] no DB providers for ${agentId}, falling back to env ANTHROPIC_API_KEY`)
       const result = await callAnthropic(
-        { api_key: process.env.ANTHROPIC_API_KEY, model: 'claude-sonnet-4-6' },
+        { api_key: process.env.ANTHROPIC_API_KEY, model: 'claude-sonnet-5' },
         { system, messages, tools, max_tokens }
       )
       return { ...result, provider: 'anthropic-env' }
@@ -479,22 +615,24 @@ async function create(agentId, { system, messages, tools, max_tokens, _taskType,
     const fn = CALL_FNS[prov.provider_type]
     if (!fn) continue
 
-    console.log(`[llm:${agentId}] trying ${prov.name} (${prov.provider_type})`)
+    const effectiveProv = { ...prov, api_key: credentialFromEnv(prov.provider_type) || prov.api_key }
+    console.log(`[llm:${agentId}] trying ${prov.name} (${prov.provider_type}/${prov.model}${profile ? ` profile=${profile}` : ''})`)
     const t   = getTelemetry()
     const req = t ? t.startRequest({
       agentId,
-      runId:        _runId        || null,
-      taskType:     _taskType     || null,
+      runId:        effectiveRunId,
+      taskType:     effectiveTaskType,
       model:        prov.model,
       providerType: prov.provider_type,
       prompt:       messages,
-      workflowName: _workflowName || null,
+      workflowName: effectiveWorkflow,
     }) : null
 
     try {
-      const result = await fn(prov, { system, messages, tools, max_tokens })
+      const result = await fn(effectiveProv, { system, messages, tools, max_tokens })
       const cost   = calcCost(prov.provider_type, prov.model, result.tokensIn, result.tokensOut)
-      await logUsage({ providerId: prov.id, agentId, tokensIn: result.tokensIn, tokensOut: result.tokensOut, costUsd: cost })
+      await logUsage({ providerId: prov.id, agentId, model: result.model || prov.model, profile, taskType: effectiveTaskType, tokensIn: result.tokensIn, tokensOut: result.tokensOut, costUsd: cost })
+      await markProviderHealthy(prov.id)
       if (req) req.finish({
         tokensIn:   result.tokensIn,
         tokensOut:  result.tokensOut,
@@ -505,9 +643,9 @@ async function create(agentId, { system, messages, tools, max_tokens, _taskType,
       // Automatic structural quality check for JSON-expecting task types
       const t2 = getTelemetry()
       if (t2 && req && result.text) {
-        const expectJson = (_taskType || '').toLowerCase().includes('extract') ||
-                           (_taskType || '').toLowerCase().includes('classify') ||
-                           (_taskType || '').toLowerCase().includes('json')
+        const expectJson = (effectiveTaskType || '').toLowerCase().includes('extract') ||
+                           (effectiveTaskType || '').toLowerCase().includes('classify') ||
+                           (effectiveTaskType || '').toLowerCase().includes('json')
         if (expectJson) {
           let qModule = null
           try { qModule = require('@secondbrain/telemetry/quality') } catch (_) {}
@@ -524,7 +662,7 @@ async function create(agentId, { system, messages, tools, max_tokens, _taskType,
           }
         }
       }
-      return { text: result.text, tool_calls: result.tool_calls, stop_reason: result.stop_reason, provider: prov.name }
+      return { ...result, provider: prov.name, profile: profile || null }
     } catch (err) {
       if (req) req.finish({ success: false, errorType: err.constructor?.name || 'Error' })
       const isConnRefused = err.code === 'ECONNREFUSED' || (err.message || '').includes('ECONNREFUSED')
@@ -538,7 +676,7 @@ async function create(agentId, { system, messages, tools, max_tokens, _taskType,
         await markCreditsFailed(prov.id, err.message)
         console.warn(`[llm:${agentId}] marked ${prov.name} credits exhausted, trying next`)
       }
-      await logUsage({ providerId: prov.id, agentId, error: err.message })
+      await logUsage({ providerId: prov.id, agentId, model: prov.model, profile, taskType: effectiveTaskType, error: err.message })
       errors.push(`${prov.name}: ${err.message}`)
     }
   }
@@ -559,7 +697,7 @@ async function embed(agentId, text) {
 
   const { GoogleGenerativeAI } = require('@google/generative-ai')
   const genAI = new GoogleGenerativeAI(apiKey)
-  const model = genAI.getGenerativeModel({ model: 'gemini-embedding-2-preview' })
+  const model = genAI.getGenerativeModel({ model: 'gemini-embedding-2' })
   const result = await model.embedContent({
     content: { parts: [{ text: text.slice(0, 8000) }], role: 'user' },
     taskType: 'RETRIEVAL_DOCUMENT',
@@ -567,4 +705,9 @@ async function embed(agentId, text) {
   return result.embedding.values
 }
 
-module.exports = { create, embed, invalidatePriorityCache }
+module.exports = {
+  create,
+  embed,
+  invalidatePriorityCache,
+  _internals: { toResponsesInput, parseResponsesResponse, calcCost },
+}

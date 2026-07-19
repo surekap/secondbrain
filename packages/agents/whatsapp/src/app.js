@@ -4,12 +4,22 @@ const path = require('path');
 const dotenv = require('dotenv');
 dotenv.config({ path: path.resolve(__dirname, '../../../.env.local') });
 const fs = require('fs');
+const { execFileSync } = require('child_process');
 const express = require('express');
 const { Client, Events, LocalAuth } = require('whatsapp-web.js');
 const PostgresStore = require('./lib/PostgresStore');
 const dispatcher = require('./lib/dispatcher');
 const { startHistoricalSync, getHistoricalSyncStatus } = require('./lib/sync');
+const { recoverMissingMedia, getMediaRecoveryStatus } = require('./lib/mediaDownloader');
 const pool = require('./lib/db');
+const {
+    processPendingMedia,
+    getMediaAnalysisStatus,
+    getMediaAnalysisCounts,
+    resumeMediaAnalysis,
+    startMediaAnalysisWorker,
+    stopMediaAnalysisWorker,
+} = require('./lib/mediaAnalyzer');
 const { cleanupOrphanedRuns, killDuplicateProcesses } = require('../../shared/cleanup');
 
 let telemetry = null;
@@ -54,6 +64,32 @@ app.use('/api/subscribers', subscribersRouter);
 app.use('/api/messages', messagesRouter);
 app.use('/api/status', statusRouter);
 
+app.get('/api/media/analysis/status', async (req, res) => {
+    try {
+        res.json({ ...getMediaAnalysisStatus(), counts: await getMediaAnalysisCounts() });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post('/api/media/analysis/run', (req, res) => {
+    const limit = Math.max(1, Math.min(Number(req.body?.limit || 5), 50));
+    resumeMediaAnalysis();
+    setImmediate(() => { processPendingMedia(limit).catch(err => console.warn('[media-analysis] manual run failed:', err.message)); });
+    res.status(202).json({ ok: true, limit, status: getMediaAnalysisStatus() });
+});
+
+app.get('/api/media/recovery/status', (req, res) => {
+    res.json(getMediaRecoveryStatus());
+});
+
+app.post('/api/media/recovery/run', (req, res) => {
+    const days = Math.max(1, Math.min(Number(req.body?.days || 90), 365));
+    const limit = Math.max(1, Math.min(Number(req.body?.limit || 500), 2000));
+    setImmediate(() => { recoverMissingMedia(client, { days, limit }).catch(err => console.warn('[media] targeted recovery failed:', err.message)); });
+    res.status(202).json({ ok: true, days, limit, status: getMediaRecoveryStatus() });
+});
+
 app.get('/api/sync/historical/status', (req, res) => {
     res.json(getHistoricalSyncStatus());
 });
@@ -74,10 +110,64 @@ app.post('/api/sync/historical', (req, res) => {
     }
 });
 
+// Pairing codes let a remote operator relink the connector from the same phone
+// that is running WhatsApp, without needing a second screen to scan a QR code.
+app.post('/api/pairing-code', async (req, res) => {
+    const phoneNumber = String(req.body?.phoneNumber || '').replace(/\D/g, '');
+    if (phoneNumber.length < 8 || phoneNumber.length > 15) {
+        return res.status(400).json({ ok: false, error: 'phoneNumber must contain 8-15 digits including country code' });
+    }
+    try {
+        const code = await client.requestPairingCode(phoneNumber);
+        setWaState('AWAITING_PAIRING_CODE');
+        res.json({ ok: true, code });
+    } catch (err) {
+        res.status(500).json({ ok: false, error: err.message });
+    }
+});
+
 const PORT = parseInt(process.env.PORT ?? '3000', 10);
 
 // ── WhatsApp client ───────────────────────────────────────────────────────────
 const store = new PostgresStore(process.env.CLIENT_ID);
+
+const authDataPath = path.resolve(__dirname, '..', '.wwebjs_auth');
+const sessionProfilePath = path.join(authDataPath, `session-${process.env.CLIENT_ID}`);
+
+function isPidAlive(pid) {
+    try { process.kill(pid, 0); return true; } catch (_) { return false; }
+}
+
+async function cleanupStaleSessionLock() {
+    const lockPath = path.join(sessionProfilePath, 'SingletonLock');
+    // existsSync follows symlinks and returns false for Chrome's intentionally
+    // dangling SingletonLock target. lstat detects the lock entry itself.
+    try { fs.lstatSync(lockPath); } catch (_) { return; }
+
+    let chromePid = null;
+    try {
+        const target = fs.readlinkSync(lockPath);
+        chromePid = Number(target.match(/-(\d+)$/)?.[1] || 0) || null;
+    } catch (_) {}
+
+    if (chromePid && isPidAlive(chromePid)) {
+        let command = '';
+        try { command = execFileSync('ps', ['-p', String(chromePid), '-o', 'command='], { encoding: 'utf8' }); } catch (_) {}
+        if (!command.includes(`--user-data-dir=${sessionProfilePath}`)) {
+            throw new Error(`session profile is locked by unexpected pid ${chromePid}`);
+        }
+        console.warn(`[wa] terminating orphaned session Chrome (pid ${chromePid})`);
+        process.kill(chromePid, 'SIGTERM');
+        for (let attempt = 0; attempt < 20 && isPidAlive(chromePid); attempt++) {
+            await new Promise(resolve => setTimeout(resolve, 250));
+        }
+        if (isPidAlive(chromePid)) process.kill(chromePid, 'SIGKILL');
+    }
+
+    for (const filename of ['SingletonLock', 'SingletonSocket', 'SingletonCookie', 'DevToolsActivePort']) {
+        try { fs.unlinkSync(path.join(sessionProfilePath, filename)); } catch (_) {}
+    }
+}
 
 // Get Chrome executable path with fallbacks
 let executablePath;
@@ -133,7 +223,7 @@ const CHROME_UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/5
 const client = new Client({
     authStrategy: new LocalAuth({
         clientId: process.env.CLIENT_ID,
-        dataPath: path.resolve(__dirname, '..', '.wwebjs_auth'),
+        dataPath: authDataPath,
     }),
     userAgent: CHROME_UA,
     puppeteer: {
@@ -149,11 +239,36 @@ const client = new Client({
     },
 });
 
-// Keep statusRouter informed of WA state changes
-client.on(Events.AUTHENTICATED,      () => { console.log('[wa] authenticated'); setWaState('AUTHENTICATED'); });
-client.on(Events.AUTH_FAILURE,       (msg) => { console.log('[wa] auth failure:', msg); setWaState('AUTH_FAILURE'); });
-client.on(Events.READY, async () => {
-    console.log('[wa] ready');
+let shuttingDown = false;
+async function shutdown(reason, exitCode = 0) {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.log(`[boot] shutting down (${reason})`);
+    stopMediaAnalysisWorker();
+    try { await client.destroy(); } catch (err) { console.warn('[wa] browser cleanup failed:', err.message); }
+    try { await pool.end(); } catch (_) {}
+    process.exit(exitCode);
+}
+
+process.once('SIGINT', () => { shutdown('SIGINT'); });
+process.once('SIGTERM', () => { shutdown('SIGTERM'); });
+process.once('uncaughtException', err => {
+    console.error('[boot] uncaught exception:', err);
+    shutdown('uncaught exception', 1);
+});
+process.once('unhandledRejection', err => {
+    console.error('[boot] unhandled rejection:', err);
+    shutdown('unhandled rejection', 1);
+});
+
+// Keep statusRouter informed of WA state changes. Newer WhatsApp Web builds can
+// reach a connected socket without whatsapp-web.js emitting READY, so verify the
+// underlying state after authentication as a compatibility fallback.
+let connectedHandled = false;
+async function markConnected(source) {
+    if (connectedHandled) return;
+    connectedHandled = true;
+    console.log(`[wa] ready (${source})`);
     setWaState('CONNECTED');
     if (telemetry) _runId = await telemetry.startRun({ agentId: 'whatsapp', workflowName: 'message_bridge' });
     if (process.env.WHATSAPP_AUTO_SYNC_ON_READY === '1') {
@@ -161,9 +276,30 @@ client.on(Events.READY, async () => {
     } else {
         console.log('[sync] startup historical sync skipped; use POST /api/sync/historical for manual backfills');
     }
+}
+
+async function waitForConnectedState() {
+    for (let attempt = 0; attempt < 60 && !connectedHandled; attempt++) {
+        try {
+            if (await client.getState() === 'CONNECTED') {
+                await markConnected('socket state');
+                return;
+            }
+        } catch (_) {}
+        await new Promise(resolve => setTimeout(resolve, 2000));
+    }
+}
+
+client.on(Events.AUTHENTICATED, () => {
+    console.log('[wa] authenticated');
+    setWaState('AUTHENTICATED');
+    setImmediate(() => { waitForConnectedState().catch(err => console.warn('[wa] readiness check failed:', err.message)); });
 });
+client.on(Events.AUTH_FAILURE,       (msg) => { console.log('[wa] auth failure:', msg); setWaState('AUTH_FAILURE'); });
+client.on(Events.READY, () => { markConnected('ready event').catch(err => console.error('[wa] ready handler failed:', err.message)); });
 client.on(Events.DISCONNECTED, async (reason) => {
     console.log('[wa] disconnected:', reason);
+    connectedHandled = false;
     setWaState('DISCONNECTED');
     if (telemetry && _runId) { await telemetry.endRun(_runId, { status: 'completed' }); _runId = null; }
 });
@@ -175,8 +311,7 @@ client.on('qr', qr => {
 client.on(Events.REMOTE_SESSION_SAVED, () => console.log('[wa] session saved to store'));
 
 // Handle all WhatsApp events
-Object.keys(Events).forEach(eventKey => {
-    const eventName = Events[eventKey];
+for (const eventName of new Set(Object.values(Events))) {
     client.on(eventName, async (data) => {
         try {
             const result = await store.event(eventName, data);
@@ -200,7 +335,8 @@ Object.keys(Events).forEach(eventKey => {
             }
 
             // Download media for new messages (fire-and-forget)
-            if ((eventName === 'message' || eventName === 'message_create') && data.hasMedia) {
+            if ((eventName === 'message' || eventName === 'message_create') &&
+                data.hasMedia && data.id?._serialized && typeof data.downloadMedia === 'function') {
                 const { downloadAndStore } = require('./lib/mediaDownloader');
                 downloadAndStore(data).catch(() => {});
             }
@@ -224,7 +360,7 @@ Object.keys(Events).forEach(eventKey => {
             console.error('[app] event handler error:', err.message);
         }
     });
-});
+}
 
 // ── Boot sequence ─────────────────────────────────────────────────────────────
 (async () => {
@@ -232,8 +368,13 @@ Object.keys(Events).forEach(eventKey => {
         killDuplicateProcesses();
         await cleanupOrphanedRuns(pool, 'whatsapp');
         await runMigrations();
+        await cleanupStaleSessionLock();
+        startMediaAnalysisWorker();
         app.listen(PORT, () => console.log(`[http] listening on http://localhost:${PORT}/admin/`));
-        client.initialize();
+        client.initialize().catch(err => {
+            console.error('[wa] initialization failed:', err);
+            shutdown('initialization failure', 1);
+        });
         console.log('[wa] initializing…');
     } catch (err) {
         console.error('[boot] fatal error:', err);

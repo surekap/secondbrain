@@ -3,6 +3,7 @@
 const llm = require('../../shared/llm')
 const db = require('@secondbrain/db')
 const { extractText } = require('../../shared/docParser')
+const fs = require('fs')
 
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms))
@@ -131,17 +132,29 @@ Return ONLY valid JSON:
 Set is_noise=true for: bots, spam, automated alerts, OTP services, delivery notifications, bank alerts, unknown contacts with only automated messages.
 relationship_strength=noise means this contact is not meaningful (same as is_noise).`
 
-    // Build multi-modal content: include up to 3 images for vision analysis
+    // Build multi-modal content from complete downloaded files. Message bodies
+    // may contain captions or truncated thumbnails and are not valid image data.
     let userContent
     if (imageMessages.length > 0) {
       const contentBlocks = []
       for (const imgMsg of imageMessages) {
-        const b64 = imgMsg.body || ''
-        if (b64.length > 200) {
-          contentBlocks.push({
-            type: 'image',
-            source: { type: 'base64', media_type: 'image/jpeg', data: b64 }
-          })
+        if (!imgMsg.wa_msg_id) continue
+        const { rows } = await db.query(
+          `SELECT file_path, mime_type FROM public.media_files
+           WHERE wa_msg_id = $1 AND mime_type LIKE 'image/%'
+           LIMIT 1`,
+          [imgMsg.wa_msg_id]
+        )
+        const media = rows[0]
+        if (media?.file_path && fs.existsSync(media.file_path)) {
+          const stat = fs.statSync(media.file_path)
+          if (stat.size > 0 && stat.size <= 15 * 1024 * 1024) {
+            const b64 = fs.readFileSync(media.file_path).toString('base64')
+            contentBlocks.push({
+              type: 'image',
+              source: { type: 'base64', media_type: media.mime_type, data: b64 }
+            })
+          }
         }
       }
       contentBlocks.push({ type: 'text', text: prompt })
@@ -151,6 +164,9 @@ relationship_strength=noise means this contact is not meaningful (same as is_noi
     }
 
     const response = await llm.create('relationships', {
+      profile: 'bulk_structured',
+      task_type: 'relationship_contact_extract_json',
+      workflow_name: 'relationship_analysis',
       max_tokens: 600,
       messages: [{ role: 'user', content: userContent }],
     })
@@ -270,6 +286,9 @@ Definitions:
 - is_noise: true only for spam/broadcast/automated groups with no real human conversation`
 
     const response = await llm.create('relationships', {
+      profile: 'bulk_structured',
+      task_type: 'relationship_group_extract_json',
+      workflow_name: 'relationship_analysis',
       max_tokens: 2048,
       messages: [{ role: 'user', content: prompt }],
     })
@@ -322,6 +341,9 @@ Return ONLY a JSON array:
 Only include real named people. Skip generic terms like "someone", "they", etc.`
 
     const response = await llm.create('relationships', {
+      profile: 'bulk_structured',
+      task_type: 'relationship_participant_extract_json',
+      workflow_name: 'relationship_analysis',
       max_tokens: 1000,
       messages: [{ role: 'user', content: prompt }],
     })
@@ -370,6 +392,9 @@ Return ONLY a JSON array of insights (max 3):
 Only return insights that are genuinely actionable. Empty array if nothing notable.`
 
     const response = await llm.create('relationships', {
+      profile: 'reasoning_synthesis',
+      task_type: 'relationship_insight_synthesis_json',
+      workflow_name: 'relationship_analysis',
       max_tokens: 600,
       messages: [{ role: 'user', content: prompt }],
     })

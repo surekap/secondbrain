@@ -32,6 +32,7 @@
  */
 
 const { Client } = require('@notionhq/client');
+const llm = require('../../shared/llm');
 
 class NotionMCP {
   constructor() {
@@ -163,11 +164,6 @@ class NotionMCP {
 
   async generateSchema(type, purpose) {
     try {
-      const Anthropic = require('@anthropic-ai/sdk');
-      const anthropic = new Anthropic({
-        apiKey: process.env.ANTHROPIC_API_KEY,
-      });
-
       const prompt = `Generate a Notion database schema for decision-making purposes.
 
 TYPE: ${type}
@@ -204,13 +200,15 @@ Return ONLY valid JSON in this exact format:
 
 Focus on what someone needs to make smart decisions about ${type}.`;
 
-      const response = await anthropic.messages.create({
-        model: 'claude-sonnet-4-20250514',
+      const response = await llm.create('limitless', {
+        profile: 'bulk_structured',
+        task_type: 'notion_schema_generation_json',
+        workflow_name: 'lifelog_processing',
         max_tokens: 2000,
         messages: [{ role: 'user', content: prompt }]
       });
 
-      const schemaText = response.content[0].text;
+      const schemaText = response.text || '';
       
       // Extract JSON from Claude's response
       const jsonMatch = schemaText.match(/\{[\s\S]*\}/);
@@ -433,11 +431,6 @@ Focus on what someone needs to make smart decisions about ${type}.`;
     try {
       if (databases.length === 0) return [];
 
-      const Anthropic = require('@anthropic-ai/sdk');
-      const anthropic = new Anthropic({
-        apiKey: process.env.ANTHROPIC_API_KEY,
-      });
-
       const databaseList = databases.map(db => `"${db.title}"`).join(', ');
       const searchTerm = name || type || '';
 
@@ -465,13 +458,15 @@ Examples:
 - Search: "audio" → "Home Theater Systems"
 - Search: "random" → NO_MATCH`;
 
-      const response = await anthropic.messages.create({
-        model: 'claude-sonnet-4-20250514',
+      const response = await llm.create('limitless', {
+        profile: 'bulk_structured',
+        task_type: 'notion_database_match',
+        workflow_name: 'lifelog_processing',
         max_tokens: 200,
         messages: [{ role: 'user', content: prompt }]
       });
 
-      const aiResponse = response.content[0].text.trim();
+      const aiResponse = (response.text || '').trim();
       
       if (aiResponse === 'NO_MATCH') {
         console.log('🤖 AI found no clear matches');

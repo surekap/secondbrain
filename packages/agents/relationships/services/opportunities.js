@@ -91,6 +91,9 @@ Rules:
 - Return {"action_items": []} if no clear action items exist`
 
         const response = await llm.create('relationships', {
+          profile: 'bulk_structured',
+          task_type: 'meeting_action_extract_json',
+          workflow_name: 'opportunity_swarm',
           max_tokens: 800,
           messages: [{ role: 'user', content: prompt }],
         })
@@ -214,6 +217,9 @@ Return low urgency / needs_response=false for casual statements, FYI messages, o
 
       try {
         const response = await llm.create('relationships', {
+          profile: 'bulk_structured',
+          task_type: 'urgent_message_classify_json',
+          workflow_name: 'opportunity_swarm',
           max_tokens: 800,
           messages: [{ role: 'user', content: prompt }],
         })
@@ -411,6 +417,9 @@ Rules:
 - If no strong opportunities, return []`
 
     const response = await llm.create('relationships', {
+      profile: 'reasoning_synthesis',
+      task_type: 'cross_person_opportunity_synthesis_json',
+      workflow_name: 'opportunity_swarm',
       max_tokens: 1500,
       messages: [{ role: 'user', content: prompt }],
     })
@@ -523,6 +532,9 @@ Return ONLY a JSON array of the best 3 matches (empty array if none are strong m
 Only include genuinely strong matches where the contact has relevant expertise or connections.`
 
     const response = await llm.create('relationships', {
+      profile: 'reasoning_synthesis',
+      task_type: 'project_relationship_match_json',
+      workflow_name: 'opportunity_swarm',
       max_tokens: 1200,
       messages: [{ role: 'user', content: prompt }],
     })
@@ -605,6 +617,9 @@ Return ONLY a JSON object (or null if no strong opportunity):
 
       try {
         const response = await llm.create('relationships', {
+          profile: 'reasoning_synthesis',
+          task_type: 'research_opportunity_synthesis_json',
+          workflow_name: 'opportunity_swarm',
           max_tokens: 300,
           messages: [{ role: 'user', content: prompt }],
         })

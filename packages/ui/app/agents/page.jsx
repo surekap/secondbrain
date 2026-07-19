@@ -59,7 +59,7 @@ function ModelSelector({ label, providerType, model, onModelChange, apiKey, erro
           ))}
         </select>
       ) : (
-        <input type="text" value={model} onChange={e => onModelChange(e.target.value)} placeholder="Paste model ID (e.g., claude-sonnet-4-6)" style={{ width: '100%' }} />
+        <input type="text" value={model} onChange={e => onModelChange(e.target.value)} placeholder="Paste model ID (e.g., claude-sonnet-5)" style={{ width: '100%' }} />
       )}
       {localError && <div style={{ marginTop: '0.35rem', fontSize: '0.72rem', color: '#f59e0b' }}>{localError}</div>}
     </div>
@@ -347,17 +347,17 @@ function QuickModelSwitcher({ onSwitch }) {
     latest: {
       label: 'Latest',
       tooltip: 'Newest available models',
-      models: { anthropic: 'claude-opus-4-8', openai: 'gpt-4o' }
+      models: { anthropic: 'claude-fable-5', openai: 'gpt-5.6-sol' }
     },
     balanced: {
       label: 'Balanced',
       tooltip: 'Good speed/quality tradeoff',
-      models: { anthropic: 'claude-sonnet-4-6', openai: 'gpt-4o' }
+      models: { anthropic: 'claude-sonnet-5', openai: 'gpt-5.6-luna' }
     },
     budget: {
       label: 'Budget',
       tooltip: 'Fastest/cheapest',
-      models: { anthropic: 'claude-haiku-4-5-20251001', openai: 'gpt-4o-mini' }
+      models: { anthropic: 'claude-haiku-4-5-20251001', openai: 'gpt-5.6-luna' }
     },
   }
 
@@ -983,7 +983,7 @@ export default function AgentsPage() {
     provider_type: 'anthropic',
     api_key: '',
     base_url: DEFAULT_OLLAMA_BASE_URL,
-    model: 'claude-sonnet-4-6',
+    model: 'claude-sonnet-5',
   })
   const [providerModelOptions, setProviderModelOptions] = useState([])
   const [providerModelError, setProviderModelError] = useState('')
@@ -1194,7 +1194,7 @@ export default function AgentsPage() {
         name: providerForm.name.trim() || `${providerForm.provider_type}:${providerForm.model || 'default'}`,
       })
       setShowAddProvider(false)
-      setProviderForm({ name: '', provider_type: 'anthropic', api_key: '', base_url: DEFAULT_OLLAMA_BASE_URL, model: 'claude-sonnet-4-6' })
+      setProviderForm({ name: '', provider_type: 'anthropic', api_key: '', base_url: DEFAULT_OLLAMA_BASE_URL, model: 'claude-sonnet-5' })
       await loadProviders()
       showToast('Provider added')
     } catch (err) { showToast(err.message || 'Failed to add provider') }

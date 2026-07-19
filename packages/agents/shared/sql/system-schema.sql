@@ -60,6 +60,9 @@ CREATE TABLE IF NOT EXISTS system.llm_usage (
   error       TEXT,
   created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+ALTER TABLE system.llm_usage ADD COLUMN IF NOT EXISTS model TEXT;
+ALTER TABLE system.llm_usage ADD COLUMN IF NOT EXISTS profile TEXT;
+ALTER TABLE system.llm_usage ADD COLUMN IF NOT EXISTS task_type TEXT;
 CREATE INDEX IF NOT EXISTS llm_usage_provider_time
   ON system.llm_usage (provider_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS llm_usage_agent_time

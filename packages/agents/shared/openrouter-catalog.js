@@ -17,9 +17,9 @@ const PROVIDER_ALIASES = {
 // Used only if OpenRouter has never been successfully fetched (e.g. first
 // run with no network access). Kept intentionally tiny.
 const FALLBACK_MODELS = [
-  { label: 'Claude Sonnet 4.6', value: 'anthropic/claude-sonnet-4-6', provider_type: 'anthropic', capabilities: ['chat'] },
-  { label: 'GPT-5.4 Mini', value: 'openai/gpt-5.4-mini', provider_type: 'openai', capabilities: ['chat'] },
-  { label: 'Gemini 2.5 Flash', value: 'google/gemini-2.5-flash', provider_type: 'gemini', capabilities: ['chat'] },
+  { label: 'Claude Sonnet 5', value: 'anthropic/claude-sonnet-5', provider_type: 'anthropic', capabilities: ['chat'] },
+  { label: 'GPT-5.6 Luna', value: 'openai/gpt-5.6-luna', provider_type: 'openai', capabilities: ['chat'] },
+  { label: 'Gemini 3.1 Flash Lite', value: 'google/gemini-3.1-flash-lite', provider_type: 'gemini', capabilities: ['chat'] },
 ]
 
 let cache = { models: null, fetchedAt: 0 }

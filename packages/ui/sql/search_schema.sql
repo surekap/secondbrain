@@ -12,7 +12,7 @@ CREATE TABLE IF NOT EXISTS search.embeddings (
   source_id   TEXT NOT NULL,   -- primary key from the source table
   content     TEXT NOT NULL,   -- the text that was embedded
   embedding   vector,          -- variable dimensions; must match embedding_model at query time
-  embedding_model TEXT NOT NULL DEFAULT 'gemini-embedding-2-preview',
+  embedding_model TEXT NOT NULL DEFAULT 'gemini-embedding-2',
   metadata    JSONB DEFAULT '{}',
   indexed_at  TIMESTAMPTZ DEFAULT NOW(),
   UNIQUE (source, source_id, embedding_model)
@@ -25,11 +25,11 @@ ALTER TABLE search.embeddings
   ADD COLUMN IF NOT EXISTS embedding_model TEXT;
 
 UPDATE search.embeddings
-SET embedding_model = 'gemini-embedding-2-preview'
+SET embedding_model = 'gemini-embedding-2'
 WHERE embedding_model IS NULL;
 
 ALTER TABLE search.embeddings
-  ALTER COLUMN embedding_model SET DEFAULT 'gemini-embedding-2-preview';
+  ALTER COLUMN embedding_model SET DEFAULT 'gemini-embedding-2';
 
 ALTER TABLE search.embeddings
   ALTER COLUMN embedding_model SET NOT NULL;

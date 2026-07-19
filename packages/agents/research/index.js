@@ -98,6 +98,9 @@ Write ONLY the dossier paragraph, no preamble.`
 
   try {
     const response = await llm.create('research', {
+      profile: 'reasoning_synthesis',
+      task_type: 'contact_research_synthesis',
+      workflow_name: 'contact_research',
       max_tokens: 400,
       messages: [{ role: 'user', content: prompt }],
     })

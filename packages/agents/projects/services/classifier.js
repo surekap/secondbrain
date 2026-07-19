@@ -49,6 +49,9 @@ Return ONLY the JSON array, no explanation.`
 
   try {
     const response = await llm.create('projects', {
+      profile: 'bulk_structured',
+      task_type: 'project_communication_classify_json',
+      workflow_name: 'project_classification',
       messages: [{ role: 'user', content: prompt }],
       max_tokens: 2048,
     })

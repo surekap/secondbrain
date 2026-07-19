@@ -7,12 +7,12 @@ const fs         = require('fs');
 const path       = require('path');
 const dotenv     = require('dotenv');
 const { Pool }   = require('pg');
-const Anthropic  = require('@anthropic-ai/sdk');
 const indexer    = require('./services/indexer');
 const { embedBatch, toSql, getEmbeddingConfig } = require('./services/embedder');
 const { getProviderDefinitions, DEFAULT_OLLAMA_BASE_URL } = require('../agents/shared/model-catalog');
 const { listOllamaModelOptions } = require('../agents/shared/ollama');
 const { getAvailableModels } = require('../agents/shared/model-fetcher');
+const llm = require('../agents/shared/llm');
 const { createObserveRouter } = require('../observe/routes');
 const observeAlerts = require('../observe/alerts');
 const { resolveEntityAlias } = require('../agents/intelligence/services/entity-resolver');
@@ -248,7 +248,7 @@ async function migrateEnvToDb() {
   if (accounts.length > 0) await seed('email.gmail_accounts', accounts);
 
   // ── Non-secret defaults: always seed on fresh install ──────────────────────
-  await seed('system.EMBEDDING_MODEL', 'gemini-embedding-2-preview');
+  await seed('system.EMBEDDING_MODEL', 'gemini-embedding-2');
   await seed('system.EMBEDDING_PROVIDER', 'gemini');
   await seed('system.OLLAMA_BASE_URL', DEFAULT_OLLAMA_BASE_URL);
 
@@ -2477,14 +2477,15 @@ Return ONLY valid JSON:
   "is_noise": false
 }`;
 
-    const anthropic = new Anthropic.default({ apiKey: process.env.ANTHROPIC_API_KEY });
-    const response  = await anthropic.messages.create({
-      model: 'claude-sonnet-4-6',
+    const response = await llm.create('relationships', {
+      profile: 'bulk_structured',
+      task_type: 'manual_contact_extract_json',
+      workflow_name: 'manual_contact_analysis',
       max_tokens: 600,
       messages: [{ role: 'user', content: prompt }],
     });
 
-    const raw = response.content[0]?.text || '{}';
+    const raw = response.text || '{}';
     const clean = raw.replace(/^```(?:json)?\n?/m,'').replace(/\n?```$/m,'').trim();
     const result = JSON.parse(clean);
 
@@ -3112,7 +3113,7 @@ app.get('/api/search/stats', async (req, res) => {
   if (!db) return res.status(503).json({ error: 'No database' });
   try {
     const { getConfig } = require('../agents/shared/config')
-    const embeddingModel = await getConfig('system.EMBEDDING_MODEL') || 'gemini-embedding-2-preview'
+    const embeddingModel = await getConfig('system.EMBEDDING_MODEL') || 'gemini-embedding-2'
     const pending = await indexer.getPendingCounts(embeddingModel)
     res.json({ sources: pending, indexer: indexer.getStatus(), batchPerRun: indexer.BATCH_PER_RUN });
   } catch (e) {

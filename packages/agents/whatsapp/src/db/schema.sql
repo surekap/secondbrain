@@ -92,3 +92,15 @@ CREATE TABLE IF NOT EXISTS media_files (
   UNIQUE (wa_msg_id)
 );
 CREATE INDEX IF NOT EXISTS idx_media_files_wa_msg_id ON media_files(wa_msg_id);
+
+-- Derived text keeps media searchable without mutating the raw WhatsApp event.
+ALTER TABLE media_files ADD COLUMN IF NOT EXISTS extracted_text TEXT;
+ALTER TABLE media_files ADD COLUMN IF NOT EXISTS semantic_text TEXT;
+ALTER TABLE media_files ADD COLUMN IF NOT EXISTS analysis_kind TEXT;
+ALTER TABLE media_files ADD COLUMN IF NOT EXISTS analysis_status TEXT NOT NULL DEFAULT 'pending';
+ALTER TABLE media_files ADD COLUMN IF NOT EXISTS analysis_provider TEXT;
+ALTER TABLE media_files ADD COLUMN IF NOT EXISTS analysis_model TEXT;
+ALTER TABLE media_files ADD COLUMN IF NOT EXISTS analysis_error TEXT;
+ALTER TABLE media_files ADD COLUMN IF NOT EXISTS analysis_attempts INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE media_files ADD COLUMN IF NOT EXISTS analyzed_at TIMESTAMPTZ;
+CREATE INDEX IF NOT EXISTS idx_media_files_analysis_status ON media_files(analysis_status);

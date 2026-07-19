@@ -159,6 +159,9 @@ class LifelogAgent {
       console.log(`🔄 Turn ${turnCount}: Calling AI...`);
 
       const response = await llm.create('limitless', {
+        profile: 'autonomous_tools',
+        task_type: 'lifelog_tool_execution',
+        workflow_name: 'lifelog_processing',
         system: systemPrompt,
         messages,
         tools: toolDefinitions.length > 0 ? toolDefinitions : undefined,
@@ -174,6 +177,7 @@ class LifelogAgent {
         role: "assistant",
         content: response.text || null,
         tool_calls: response.tool_calls,
+        provider_items: response.provider_items || null,
       };
       messages.push(assistantMsg);
 

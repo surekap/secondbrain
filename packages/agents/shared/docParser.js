@@ -16,10 +16,15 @@ async function extractText(filePath, mimeType, maxChars = 3000) {
 
     // PDF
     if (mime.includes('pdf')) {
-      const pdfParse = require('pdf-parse')
+      const { PDFParse } = require('pdf-parse')
       const buf = fs.readFileSync(filePath)
-      const data = await pdfParse(buf)
-      return (data.text || '').slice(0, maxChars)
+      const parser = new PDFParse({ data: buf })
+      try {
+        const data = await parser.getText()
+        return (data.text || '').slice(0, maxChars)
+      } finally {
+        await parser.destroy()
+      }
     }
 
     // Excel / spreadsheet

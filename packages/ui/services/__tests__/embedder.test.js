@@ -10,7 +10,7 @@ test('embedding fallback uses provider default model when configured model belon
 
   assert.equal(embeddingAttemptConfig(config, 'jina').model, 'jina-embeddings-v2-base-en')
   assert.equal(embeddingAttemptConfig(config, 'openai').model, 'text-embedding-3-small')
-  assert.equal(embeddingAttemptConfig(config, 'gemini').model, 'gemini-embedding-2-preview')
+  assert.equal(embeddingAttemptConfig(config, 'gemini').model, 'gemini-embedding-2')
 })
 
 test('embedding fallback preserves custom model when it is not the configured provider default', () => {

@@ -118,7 +118,7 @@ async function fetchOpenAIModels(apiKey) {
 
 const FALLBACK_GEMINI_EMBEDDING_MODEL = {
   label: 'Gemini Embedding 2',
-  value: 'gemini-embedding-2-preview',
+  value: 'gemini-embedding-2',
   provider_type: 'gemini',
   capabilities: ['embeddings'],
 }

@@ -131,6 +131,9 @@ Rules:
 
   try {
     const response = await llm.create('projects', {
+      profile: 'reasoning_synthesis',
+      task_type: 'project_status_synthesis_json',
+      workflow_name: 'project_analysis',
       max_tokens: 2000,
       messages: [{ role: 'user', content: prompt }],
     })

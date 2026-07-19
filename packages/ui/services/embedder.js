@@ -8,12 +8,12 @@ const {
 const { ollamaRequest } = require("../../agents/shared/ollama");
 
 const DEFAULT_PROVIDER = "gemini";
-const DEFAULT_MODEL = "gemini-embedding-2-preview";
+const DEFAULT_MODEL = "gemini-embedding-2";
 
 // ── Provider configs ──────────────────────────────────────────────────────────
 
 const PROVIDER_DEFAULTS = {
-  gemini: { model: "gemini-embedding-2-preview", dims: 3072 },
+  gemini: { model: "gemini-embedding-2", dims: 3072 },
   ollama: { model: "nomic-embed-text", dims: 768 },
   openai: { model: "text-embedding-3-small", dims: 1536 },
   jina: { model: "jina-embeddings-v2-base-en", dims: 768 },
@@ -241,7 +241,7 @@ async function embedBatchWithFallback(texts, taskType = "RETRIEVAL_DOCUMENT") {
       return {
         embeddings,
         providerUsed: providerType,
-        modelUsed: PROVIDER_DEFAULTS[providerType]?.model || config.model,
+        modelUsed: attemptConfig.model,
       };
     } catch (err) {
       const msg = `[embed:${providerType}] ${err.message}`;

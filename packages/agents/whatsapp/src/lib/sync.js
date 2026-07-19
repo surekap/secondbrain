@@ -93,10 +93,14 @@ async function _runSync(client, clientId, runId, options = {}) {
         }
     }
     if (!chats) {
-        const message = 'could not load chats after 3 attempts, aborting';
-        console.error(`[sync] ${message}`);
-        syncState.errors.push({ chat: null, error: message, ts: new Date().toISOString() });
-        throw new Error(message);
+        console.warn('[sync] bulk getChats failed; loading chats individually');
+        chats = await _loadChatsIndividually(client);
+        if (!chats.length) {
+            const message = 'could not load chats after bulk and individual attempts, aborting';
+            console.error(`[sync] ${message}`);
+            syncState.errors.push({ chat: null, error: message, ts: new Date().toISOString() });
+            throw new Error(message);
+        }
     }
 
     // Filter out chat types that don't support fetchMessages:
@@ -162,6 +166,74 @@ async function _runSync(client, clientId, runId, options = {}) {
     console.log(`[sync] done — ${totalSaved} saved, ${totalSkipped} already existed`);
 }
 
+async function _loadChatsIndividually(client) {
+    const entries = await client.pupPage.evaluate(() => {
+        const models = window.require('WAWebCollections').Chat.getModelsArray();
+        return models.map(chat => {
+            const id = chat.id?._serialized || String(chat.id || '');
+            return {
+                id,
+                name: chat.formattedTitle || chat.name || null,
+                isGroup: id.endsWith('@g.us'),
+                isBroadcast: Boolean(chat.isBroadcast || id.endsWith('@broadcast')),
+            };
+        }).filter(chat => chat.id);
+    });
+
+    const chats = [];
+    let rawFallbacks = 0;
+    for (const entry of entries) {
+        try {
+            const chat = await client.getChatById(entry.id);
+            if (chat) chats.push(chat);
+        } catch (_) {
+            rawFallbacks++;
+            chats.push({
+                id: { _serialized: entry.id },
+                name: entry.name,
+                isGroup: entry.isGroup,
+                isBroadcast: entry.isBroadcast,
+                client,
+                fetchMessages: ({ limit }) => _fetchRawChatMessages(client, entry.id, limit),
+            });
+        }
+    }
+    console.log(`[sync] individual chat load recovered ${chats.length}/${entries.length} chats (${rawFallbacks} using raw fallback)`);
+    return chats;
+}
+
+async function _fetchRawChatMessages(client, chatId, msgLimit) {
+    return client.pupPage.evaluate(async (id, limit) => {
+        const chatCollection = window.require('WAWebCollections').Chat;
+        const chat = chatCollection.get(id) || await chatCollection.find(id);
+        if (!chat) return [];
+        const msgFilter = message => !message.isNotification;
+        let messages = chat.msgs?.getModelsArray ? chat.msgs.getModelsArray().filter(msgFilter) : [];
+        while (limit > 0 && messages.length < limit) {
+            try {
+                const earlier = await window.require('WAWebChatLoadMessages').loadEarlierMsgs({ chat });
+                if (!earlier?.length) break;
+                messages = [...earlier.filter(msgFilter), ...messages];
+            } catch (_) {
+                break;
+            }
+        }
+        messages.sort((a, b) => (a.t > b.t ? 1 : -1));
+        if (limit > 0 && messages.length > limit) messages = messages.slice(messages.length - limit);
+        return messages.map(message => {
+            const data = window.WWebJS.getMessageModel(message);
+            // Current WhatsApp Web exposes the Unix timestamp as `t`; the
+            // whatsapp-web.js Message wrapper normally renames it to timestamp.
+            // Raw fallbacks must do that normalization themselves.
+            if (data.timestamp == null) data.timestamp = data.t ?? message.t;
+            if (data.id && data.id._serialized == null) {
+                data.id._serialized = data.id.$1 ?? message.id?._serialized ?? message.id?.$1;
+            }
+            return data;
+        });
+    }, chatId, msgLimit);
+}
+
 async function _fetchChatMessages(chat, msgLimit) {
     try {
         // fetchMessages with a high limit normally calls loadEarlierMsgs internally.
@@ -196,7 +268,10 @@ async function _syncChat(chat, cutoff, clientId, { msgLimit, downloadMedia }) {
     const messages = await _fetchChatMessages(chat, msgLimit);
 
     // Messages come back sorted oldest-first. Filter to our window.
-    const inWindow = messages.filter(m => new Date(m.timestamp * 1000) >= cutoff);
+    const inWindow = messages.filter(m => {
+        const timestamp = Number(m.timestamp ?? m.t);
+        return Number.isFinite(timestamp) && new Date(timestamp * 1000) >= cutoff;
+    });
 
     let saved = 0;
     let skipped = 0;
@@ -208,11 +283,12 @@ async function _syncChat(chat, cutoff, clientId, { msgLimit, downloadMedia }) {
     }
 
     if (downloadMedia) {
-        // Background media download for messages with media (fire-and-forget)
+        // Keep media recovery bounded. The analyzer runs separately in small,
+        // resumable batches after each file is safely persisted.
         const { downloadAndStore } = require('./mediaDownloader');
         for (const msg of inWindow) {
             if (msg.hasMedia) {
-                downloadAndStore(msg).catch(() => {});
+                await downloadAndStore(msg);
             }
         }
     }
@@ -221,7 +297,7 @@ async function _syncChat(chat, cutoff, clientId, { msgLimit, downloadMedia }) {
 }
 
 async function _saveMessage(msg, clientId) {
-    const waId = msg.id?._serialized ?? null;
+    const waId = msg.id?._serialized ?? msg.id?.$1 ?? null;
 
     // For group messages, the chat ID is msg.id.remote (the group JID).
     // For DMs, it's msg.from (for incoming) or msg.to (for outgoing).
@@ -249,7 +325,7 @@ async function _saveMessage(msg, clientId) {
                 groupId,
                 msg.type ?? null,
                 waId,
-                new Date(msg.timestamp * 1000),
+                new Date(Number(msg.timestamp ?? msg.t) * 1000),
             ]
         );
 

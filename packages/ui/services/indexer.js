@@ -8,6 +8,7 @@
  *   email          → email.emails
  *   lifelog        → limitless.lifelogs
  *   whatsapp       → public.messages
+ *   whatsapp_media → public.media_files semantic descriptions and PDF summaries
  *   contact        → relationships.contacts
  *   insight        → relationships.insights
  *   project        → projects.projects
@@ -180,6 +181,35 @@ async function indexWhatsApp(embeddingModel) {
   }
 }
 
+async function indexWhatsAppMedia(embeddingModel) {
+  try {
+    const { rows } = await _db.query(`
+      SELECT wa_msg_id, chat_id, mime_type, analysis_kind, analyzed_at,
+             semantic_text, LEFT(COALESCE(extracted_text, ''), 8000) AS extracted_text
+      FROM public.media_files m
+      WHERE analysis_status = 'completed'
+        AND semantic_text IS NOT NULL
+        AND NOT EXISTS (
+          SELECT 1 FROM search.embeddings s
+          WHERE s.source = 'whatsapp_media'
+            AND s.source_id = m.wa_msg_id
+            AND s.embedding_model = $1
+        )
+      ORDER BY analyzed_at DESC
+      LIMIT $2
+    `, [embeddingModel, BATCH_PER_RUN]);
+    return await indexSource('whatsapp_media', rows,
+      r => [r.semantic_text, r.extracted_text].filter(Boolean).join('\n\nExtracted text:\n'),
+      r => r.wa_msg_id,
+      r => ({ chat_id: r.chat_id, mime_type: r.mime_type, analysis_kind: r.analysis_kind, analyzed_at: r.analyzed_at }),
+      embeddingModel,
+    );
+  } catch (e) {
+    if (!e.message.includes('does not exist')) console.warn('[indexer] whatsapp_media:', e.message);
+    return 0;
+  }
+}
+
 async function indexContacts(embeddingModel) {
   try {
     const { rows } = await _db.query(`
@@ -305,6 +335,7 @@ async function runOnce() {
       ['email',           () => indexEmails(embeddingModel)],
       ['lifelog',         () => indexLifelogs(embeddingModel)],
       ['whatsapp',        () => indexWhatsApp(embeddingModel)],
+      ['whatsapp_media',  () => indexWhatsAppMedia(embeddingModel)],
       ['contact',         () => indexContacts(embeddingModel)],
       ['insight',         () => indexInsights(embeddingModel)],
       ['project',         () => indexProjects(embeddingModel)],
@@ -371,6 +402,11 @@ async function getPendingCounts(embeddingModel) {
            WHERE event IN ('message','message_create','message_historical')
              AND msg_type='chat' AND data->>'body' IS NOT NULL AND LENGTH(data->>'body')>8)::int,
           (SELECT COUNT(*) FROM search.embeddings WHERE source='whatsapp'     AND embedding_model=$1)::int
+        UNION ALL
+        SELECT 'whatsapp_media',
+          (SELECT COUNT(*) FROM public.media_files
+           WHERE analysis_status='completed' AND semantic_text IS NOT NULL)::int,
+          (SELECT COUNT(*) FROM search.embeddings WHERE source='whatsapp_media' AND embedding_model=$1)::int
         UNION ALL
         SELECT 'lifelog',
           (SELECT COUNT(*) FROM limitless.lifelogs)::int,

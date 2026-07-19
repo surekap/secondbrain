@@ -172,6 +172,9 @@ Guidelines:
 
   try {
     const response = await llm.create('projects', {
+      profile: 'reasoning_synthesis',
+      task_type: 'project_discovery_json',
+      workflow_name: 'project_discovery',
       max_tokens: 4096,
       messages: [{ role: 'user', content: prompt }],
     })
