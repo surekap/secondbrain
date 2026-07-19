@@ -39,6 +39,12 @@ CREATE TABLE IF NOT EXISTS projects.project_insights (
   content      TEXT NOT NULL,
   priority     TEXT DEFAULT 'medium' CHECK (priority IN ('high','medium','low')),
   is_resolved  BOOLEAN DEFAULT FALSE,
+  resolution_status TEXT NOT NULL DEFAULT 'open' CHECK (resolution_status IN ('open','inferred_resolved','confirmed_resolved','dismissed')),
+  resolution_basis TEXT,
+  resolution_evidence_refs JSONB DEFAULT '[]',
+  resolution_confidence NUMERIC(4,3) CHECK (resolution_confidence IS NULL OR (resolution_confidence >= 0 AND resolution_confidence <= 1)),
+  resolved_at  TIMESTAMPTZ,
+  resolved_by  TEXT,
   created_at   TIMESTAMPTZ DEFAULT NOW(),
   updated_at   TIMESTAMPTZ DEFAULT NOW()
 );
@@ -75,3 +81,17 @@ CREATE INDEX IF NOT EXISTS idx_analysis_runs_status ON projects.analysis_runs(st
 -- Stores fields that were manually set in the UI. Agents must not overwrite these.
 -- Structure: { "field_name": { "value": ..., "set_at": "ISO timestamp" }, ... }
 ALTER TABLE projects.projects ADD COLUMN IF NOT EXISTS manual_overrides JSONB DEFAULT '{}';
+
+-- Insight lifecycle metadata is additive so existing installations retain history.
+ALTER TABLE projects.project_insights ADD COLUMN IF NOT EXISTS resolution_status TEXT NOT NULL DEFAULT 'open';
+ALTER TABLE projects.project_insights ADD COLUMN IF NOT EXISTS resolution_basis TEXT;
+ALTER TABLE projects.project_insights ADD COLUMN IF NOT EXISTS resolution_evidence_refs JSONB DEFAULT '[]';
+ALTER TABLE projects.project_insights ADD COLUMN IF NOT EXISTS resolution_confidence NUMERIC(4,3);
+ALTER TABLE projects.project_insights ADD COLUMN IF NOT EXISTS resolved_at TIMESTAMPTZ;
+ALTER TABLE projects.project_insights ADD COLUMN IF NOT EXISTS resolved_by TEXT;
+ALTER TABLE projects.project_insights DROP CONSTRAINT IF EXISTS project_insights_resolution_status_check;
+ALTER TABLE projects.project_insights ADD CONSTRAINT project_insights_resolution_status_check
+  CHECK (resolution_status IN ('open','inferred_resolved','confirmed_resolved','dismissed'));
+ALTER TABLE projects.project_insights DROP CONSTRAINT IF EXISTS project_insights_resolution_confidence_check;
+ALTER TABLE projects.project_insights ADD CONSTRAINT project_insights_resolution_confidence_check
+  CHECK (resolution_confidence IS NULL OR (resolution_confidence >= 0 AND resolution_confidence <= 1));

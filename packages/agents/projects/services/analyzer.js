@@ -13,6 +13,42 @@ function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms))
 }
 
+function buildResolvedInsightContext(insights = []) {
+  const resolved = insights.filter(insight => insight && insight.content)
+  if (!resolved.length) return ''
+
+  const items = resolved.slice(0, 10).map(insight => {
+    const status = insight.resolution_status && insight.resolution_status !== 'open'
+      ? insight.resolution_status
+      : 'inferred_resolved'
+    const basis = insight.resolution_basis || 'Previously resolved by an operator.'
+    return `- [${status}] ${insight.content} Basis: ${basis}`
+  })
+  return `\nPreviously resolved insights (do not reopen unless later communications contain specific contradictory evidence):\n${items.join('\n')}\n`
+}
+
+async function getResolvedInsights(projectId) {
+  try {
+    const { rows } = await db.query(`
+      SELECT content,
+        CASE
+          WHEN resolution_status IS NULL OR resolution_status = 'open' THEN 'inferred_resolved'
+          ELSE resolution_status
+        END AS resolution_status,
+        resolution_basis,
+        resolved_at
+      FROM projects.project_insights
+      WHERE project_id = $1 AND is_resolved = TRUE
+      ORDER BY COALESCE(resolved_at, updated_at, created_at) DESC
+      LIMIT 10
+    `, [projectId])
+    return rows
+  } catch (err) {
+    console.warn('[analyzer] getResolvedInsights error:', err.message)
+    return []
+  }
+}
+
 /**
  * Analyze a single project and generate a status report with insights.
  * Updates project record and inserts insights into DB.
@@ -34,10 +70,12 @@ async function analyzeProject(project, communications) {
     ? `\nUser-confirmed facts (treat as ground truth, do not contradict):\n${overrideKeys.map(k => `- ${k}: ${JSON.stringify(overrides[k].value)}`).join('\n')}\n`
     : ''
 
+  const resolvedInsightContext = buildResolvedInsightContext(await getResolvedInsights(project.id))
+
   const prompt = `You are analyzing a project from this person's communications. Be specific — name actual people, companies, amounts, and dates from the communications. Do not use vague language.
 
 Project: ${project.name}${project.description ? ` — ${project.description}` : ''}
-${overrideContext}Communications (newest first):
+${overrideContext}${resolvedInsightContext}Communications (newest first):
 ${commList || '(no communications found)'}
 
 Return JSON:
@@ -55,7 +93,8 @@ Rules:
 - "on_track" = active progress with no blockers. "at_risk" = delays, unresolved issues, or inaction despite active topic. "blocked" = something actively preventing progress.
 - insight_type guide: "opportunity" = actionable upside or deal to pursue, "risk" = something that could go wrong, "blocker" = preventing progress now, "decision" = a choice pending, "next_action" = concrete step needed, "status" = current state
 - For investment/financial projects: name the specific companies, funds, or deals discussed; include amounts if mentioned; note whether follow-up has occurred
-- For operational projects: name the specific system, vendor, or person causing the issue
+- For operational issues, a historical exception is not a current risk solely because its original communication exists. Treat it as inferred resolved when a correction/acknowledgement is followed by a normal reporting cadence without a specific recurrence; reopen only on later contradictory evidence.
+- Do not re-surface a previously resolved insight unless a later communication names the same issue, system, entity, or amount and contradicts its resolution basis.
 - Prioritize "high" only for time-sensitive or high financial/operational impact items
 - Generate 3-5 insights. Specific always beats generic.
 - If there are no communications, set health=unknown, status=unknown, ai_summary to null, insights to []`
@@ -142,4 +181,4 @@ async function getProjectCommunications(projectId, limit) {
   }
 }
 
-module.exports = { analyzeProject, getProjectCommunications, sleep }
+module.exports = { analyzeProject, getProjectCommunications, getResolvedInsights, buildResolvedInsightContext, sleep }

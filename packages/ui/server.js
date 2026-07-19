@@ -2817,11 +2817,37 @@ app.get('/api/projects/:id/communications', async (req, res) => {
 app.post('/api/projects/insights/:id/resolve', async (req, res) => {
   if (!db) return res.status(503).json({ error: 'No database' });
   try {
-    await db.query(
-      'UPDATE projects.project_insights SET is_resolved = TRUE, updated_at = NOW() WHERE id = $1',
-      [req.params.id]
-    );
-    res.json({ ok: true });
+    const allowedStatuses = new Set(['inferred_resolved', 'confirmed_resolved', 'dismissed']);
+    const resolutionStatus = req.body?.resolution_status || 'inferred_resolved';
+    if (!allowedStatuses.has(resolutionStatus)) {
+      return res.status(400).json({ error: 'Invalid resolution_status' });
+    }
+    const confidence = req.body?.resolution_confidence == null ? null : Number(req.body.resolution_confidence);
+    if (confidence != null && (!Number.isFinite(confidence) || confidence < 0 || confidence > 1)) {
+      return res.status(400).json({ error: 'resolution_confidence must be between 0 and 1' });
+    }
+    const evidenceRefs = Array.isArray(req.body?.resolution_evidence_refs)
+      ? req.body.resolution_evidence_refs
+      : [];
+    await db.query(`
+      UPDATE projects.project_insights
+      SET is_resolved = TRUE,
+          resolution_status = $2,
+          resolution_basis = $3,
+          resolution_evidence_refs = $4::jsonb,
+          resolution_confidence = $5,
+          resolved_at = NOW(),
+          resolved_by = 'user',
+          updated_at = NOW()
+      WHERE id = $1
+    `, [
+      req.params.id,
+      resolutionStatus,
+      req.body?.resolution_basis || null,
+      JSON.stringify(evidenceRefs),
+      confidence,
+    ]);
+    res.json({ ok: true, resolution_status: resolutionStatus });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 

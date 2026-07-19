@@ -63,6 +63,30 @@ test('stale-email-thread-detector: promotes old external request with no later c
   assert.match(stale[0].recommended_next_action, /Reply or delegate/)
 })
 
+test('stale-email-thread-detector: treats corrected operational reporting as closure', () => {
+  const emails = [
+    {
+      id: 31,
+      thread_id: 'oem-may-collections',
+      subject: 'Re: Collection report up to 14-06-2026',
+      from_address: 'Navneet Chabra <navneet.chabra@hartex.in>',
+      date: '2026-06-16T22:19:27.000Z',
+      body_text: 'OEM collections for May are reflected as ₹5.80 Cr although actual collections exceed ₹12 Cr. Kindly rectify.',
+    },
+    {
+      id: 32,
+      thread_id: 'oem-may-collections',
+      subject: 'Re: Collection report up to 16-06-2026',
+      from_address: 'Raja Sudhakar <raja.sudhakar@hartex.in>',
+      date: '2026-06-17T08:44:16.000Z',
+      body_text: 'The observation for May 2026 has been addressed and the necessary correction has been implemented.',
+    },
+  ]
+
+  const stale = detectStaleEmailThreads(emails, { now: '2026-07-19T00:00:00Z', staleDays: 14 })
+  assert.equal(stale.length, 0)
+})
+
 test('stale-email-thread-detector: strips repeated reply prefixes', () => {
   assert.equal(stripReplyPrefix('Re: Fwd: RE:  Test subject'), 'Test subject')
 })
