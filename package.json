@@ -36,11 +36,19 @@
     "smoke:live": "node scripts/secondbrain-live-smoke.js"
   },
   "devDependencies": {
-    "concurrently": "^9.2.3"
+    "concurrently": "^9.2.3",
+    "postcss": "8.5.20"
   },
   "dependencies": {
     "pdf-parse": "^2.4.5",
     "plist": "^3.1.0",
-    "xlsx": "^0.18.5"
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
+  },
+  "overrides": {
+    "basic-ftp": "5.3.1",
+    "path-to-regexp": "0.1.13",
+    "next": {
+      "postcss": "8.5.20"
+    }
   }
 }
