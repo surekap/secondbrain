@@ -21,6 +21,14 @@ test('suppresses user-confirmed false positive Nikhil diving-trip attribution', 
   assert.equal(out.length, 0)
 })
 
+test('suppresses travel-booking cancellation and refund administration', () => {
+  const out = detectRelationshipOpenLoops({
+    contacts: [{ id: 103, display_name: 'Vaibhav Tamboli', relationship_tier: 'tier_2', relationship_type: 'friend' }],
+    directMessages: [{ contact_id: 103, source_id: 'vaibhav-travel-1', ts: '2026-03-20T03:52:17Z', from_me: false, body: 'GM bro. I would like to cancel my Svalbard booking and apply for refund. Please convince Preya to get me a refund.' }]
+  })
+  assert.equal(out.length, 0)
+})
+
 test('surfaces Vivek Gupta membership/intro direct-chat loop', () => {
   const out = detectRelationshipOpenLoops({
     contacts: [{ id: 85, display_name: 'Vivek Gupta', relationship_tier: 'tier_2', relationship_type: 'professional_contact' }],

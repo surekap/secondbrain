@@ -65,6 +65,9 @@ function isSuppressedOpenLoop(contact = {}, text = '') {
   const body = String(text || '').toLowerCase()
   // User-confirmed false positive: this direct row is not actionable intelligence about Nikhil.
   if (/\bnikhil\s+mehra\b/.test(name) && /\bdiving\s+trip\b/.test(body)) return true
+  // Personal travel cancellations/refunds are operational coordination, not an
+  // investment, relationship, or project obligation worth promoting to attention.
+  if (/\b(cancel|cancellation|refund)\b/.test(body) && /\b(booking|flight|hotel|trip|travel)\b/.test(body)) return true
   return false
 }
 
