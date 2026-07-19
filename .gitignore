@@ -44,6 +44,7 @@ temp/
 .agent-pids/
 .agent-logs/
 .model-cache/
+graphify-out/
 
 # WhatsApp connector session data
 packages/agents/whatsapp/.wwebjs_auth/
