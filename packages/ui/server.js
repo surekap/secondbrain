@@ -2817,19 +2817,28 @@ app.get('/api/projects/:id/communications', async (req, res) => {
 app.post('/api/projects/insights/:id/resolve', async (req, res) => {
   if (!db) return res.status(503).json({ error: 'No database' });
   try {
+    const insightId = Number.parseInt(req.params.id, 10);
+    if (!Number.isSafeInteger(insightId) || insightId < 1) {
+      return res.status(400).json({ error: 'Invalid insight id' });
+    }
     const allowedStatuses = new Set(['inferred_resolved', 'confirmed_resolved', 'dismissed']);
     const resolutionStatus = req.body?.resolution_status || 'inferred_resolved';
     if (!allowedStatuses.has(resolutionStatus)) {
       return res.status(400).json({ error: 'Invalid resolution_status' });
     }
+    const basis = req.body?.resolution_basis;
+    if (basis != null && (typeof basis !== 'string' || basis.length > 2000)) {
+      return res.status(400).json({ error: 'resolution_basis must be a string of at most 2000 characters' });
+    }
     const confidence = req.body?.resolution_confidence == null ? null : Number(req.body.resolution_confidence);
     if (confidence != null && (!Number.isFinite(confidence) || confidence < 0 || confidence > 1)) {
       return res.status(400).json({ error: 'resolution_confidence must be between 0 and 1' });
     }
-    const evidenceRefs = Array.isArray(req.body?.resolution_evidence_refs)
-      ? req.body.resolution_evidence_refs
-      : [];
-    await db.query(`
+    const evidenceRefs = req.body?.resolution_evidence_refs == null ? [] : req.body.resolution_evidence_refs;
+    if (!Array.isArray(evidenceRefs) || evidenceRefs.length > 20 || evidenceRefs.some(ref => typeof ref !== 'string' || ref.length > 300)) {
+      return res.status(400).json({ error: 'resolution_evidence_refs must contain at most 20 strings of 300 characters or fewer' });
+    }
+    const result = await db.query(`
       UPDATE projects.project_insights
       SET is_resolved = TRUE,
           resolution_status = $2,
@@ -2841,12 +2850,13 @@ app.post('/api/projects/insights/:id/resolve', async (req, res) => {
           updated_at = NOW()
       WHERE id = $1
     `, [
-      req.params.id,
+      insightId,
       resolutionStatus,
-      req.body?.resolution_basis || null,
+      basis || null,
       JSON.stringify(evidenceRefs),
       confidence,
     ]);
+    if (result.rowCount === 0) return res.status(404).json({ error: 'Insight not found' });
     res.json({ ok: true, resolution_status: resolutionStatus });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });

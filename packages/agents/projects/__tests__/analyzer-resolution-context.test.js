@@ -16,8 +16,9 @@ test('buildResolvedInsightContext preserves user-inferred closure for later anal
 
   assert.match(context, /Previously resolved insights/i)
   assert.match(context, /inferred_resolved/)
-  assert.match(context, /later collection reports continued without recurrence/i)
-  assert.match(context, /Do not reopen/i)
+  assert.match(context, /2026-07-19/)
+  assert.match(context, /Do not reopen/)
+  assert.doesNotMatch(context, /later collection reports continued without recurrence/i)
 })
 
 test('buildResolvedInsightContext returns empty context without resolved insights', () => {

@@ -87,6 +87,30 @@ test('stale-email-thread-detector: treats corrected operational reporting as clo
   assert.equal(stale.length, 0)
 })
 
+test('stale-email-thread-detector: does not treat a correction request as closure', () => {
+  const emails = [
+    {
+      id: 40,
+      thread_id: 'oem-correction-request',
+      subject: 'Re: Collection report',
+      from_address: 'Navneet Chabra <navneet.chabra@hartex.in>',
+      date: '2026-06-15T22:19:27.000Z',
+      body_text: 'May OEM collections are misstated. Kindly rectify.',
+    },
+    {
+      id: 41,
+      thread_id: 'oem-correction-request',
+      subject: 'Re: Collection report',
+      from_address: 'Raja Sudhakar <raja.sudhakar@hartex.in>',
+      date: '2026-06-16T22:19:27.000Z',
+      body_text: 'Correction needed. Has the May OEM report been addressed?',
+    },
+  ]
+
+  const stale = detectStaleEmailThreads(emails, { now: '2026-07-19T00:00:00Z', staleDays: 14 })
+  assert.equal(stale.length, 1)
+})
+
 test('stale-email-thread-detector: strips repeated reply prefixes', () => {
   assert.equal(stripReplyPrefix('Re: Fwd: RE:  Test subject'), 'Test subject')
 })
