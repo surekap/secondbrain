@@ -13,6 +13,7 @@ Read these before changing the product:
 - [Model routing and budget](docs/architecture/MODEL_ROUTING.md)
 - [Private intelligence evaluation contract](docs/architecture/evaluation.md)
 - [Safe migrations and backfills](docs/architecture/MIGRATIONS.md)
+- [Agent process supervision](docs/architecture/PROCESS_SUPERVISION.md)
 - [Cruft and consolidation audit](docs/architecture/CRUFT_AUDIT.md)
 
 ## Non-negotiable rules
@@ -27,5 +28,6 @@ Read these before changing the product:
 - Prefer deterministic normalization, linking, lifecycle, and deduplication. Use models for semantic extraction and synthesis behind schemas and evaluation gates.
 - Keep modules single-purpose, dependencies directed down the data pipeline, and changes minimal. Delete replaced paths only after usage, data, and rollback checks.
 - Use the existing npm workspaces and committed `package-lock.json`. Do not introduce pnpm or another lockfile without an explicit repository migration. Add no dependency unless the existing platform cannot do the job. Run relevant lint, unit, integration, migration, and quality tests after changes.
+- Managed agents are attached children of exactly one leased API supervisor. Never detach, unref, or adopt stale workers; follow the shutdown and orphan-reaping contract.
 
 If a proposed change violates an invariant, redesign it or update the architecture decision explicitly with migration and evaluation evidence. Do not silently weaken the contract.

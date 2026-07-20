@@ -65,6 +65,7 @@ These are behavioral contracts. A schema or class rename does not change them.
 3. Raw freshness, canonical freshness, extraction freshness, and attention freshness are observed separately.
 4. Data correction and destructive contraction require a snapshot, dry run, count reconciliation, rollback plan, and quality gates.
 5. Models and prompts are versioned. A model change cannot bypass the same evaluation suite.
+6. Long-running workers have exactly one leased supervisor, remain attached to it, and are drained on shutdown. A replacement supervisor reaps exact-match orphans; it never adopts processes whose pipes and exit events it does not own.
 
 ## Never acceptable
 

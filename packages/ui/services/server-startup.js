@@ -29,10 +29,16 @@ async function runServerStartup({
 
 function terminateOnStartupFailure(startupPromise, {
   logger = console,
+  beforeExit = async () => {},
   exit = process.exit,
 } = {}) {
-  return Promise.resolve(startupPromise).catch((err) => {
+  return Promise.resolve(startupPromise).catch(async (err) => {
     logger.error('[server] startup failed:', err.message);
+    try {
+      await beforeExit(err);
+    } catch (cleanupError) {
+      logger.error('[server] startup cleanup failed:', cleanupError.message);
+    }
     exit(1);
   });
 }

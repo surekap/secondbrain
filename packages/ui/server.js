@@ -26,6 +26,11 @@ const { applyOpportunityFeedback } = require('../agents/intelligence/services/op
 const { requireSameOrigin, secureTokenEqual } = require('../agents/shared/http-security');
 const { loadSqlMigrations, runMigrations } = require('../agents/shared/migrations');
 const { AgentRuntimeStore } = require('./services/agent-runtime-store');
+const {
+  AgentSupervisorLease,
+  findAgentProcesses,
+  terminateProcesses,
+} = require('./services/agent-process-supervisor');
 const { runServerStartup, terminateOnStartupFailure } = require('./services/server-startup');
 
 // ── Bootstrap ─────────────────────────────────────────────────────────────────
@@ -342,6 +347,8 @@ const CORE_STARTUP_DELAY_MS = {
   intelligence: 45_000,
 };
 const runtimeStore = new AgentRuntimeStore(db);
+const supervisorLease = new AgentSupervisorLease(db);
+const PROCESS_OUTPUT_GUARD = path.resolve(__dirname, '../agents/shared/process-output-guard.js');
 const restartTimers = new Map();
 const startingAgents = new Set();
 let supervisorInterval = null;
@@ -349,7 +356,7 @@ let serverShuttingDown = false;
 
 // ── Process registry ──────────────────────────────────────────────────────────
 
-const procs = {};   // agentId → { proc, pid, startTime, stoppedAt, exitCode, logStream, recovered }
+const procs = {};   // agentId → { proc, pid, startTime, stoppedAt, exitCode, logStream }
 const logs  = {};   // agentId → [{ ts, stream, text }]
 
 Object.keys(AGENTS).forEach(id => { logs[id] = []; });
@@ -373,19 +380,6 @@ function appendLog(agentId, stream, data) {
   }
 }
 
-// Read persisted log lines from disk (for recovered agents)
-function readLogFile(id) {
-  const fpath = logFile(id);
-  if (!fs.existsSync(fpath)) return [];
-  try {
-    return fs.readFileSync(fpath, 'utf8')
-      .split('\n')
-      .filter(l => l.trim())
-      .map(l => JSON.parse(l))
-      .slice(-MAX_LOG_LINES);
-  } catch { return []; }
-}
-
 // Open an append-mode log stream for an agent
 function openLogStream(id) {
   try {
@@ -393,59 +387,20 @@ function openLogStream(id) {
   } catch { return null; }
 }
 
-// Check if a PID is alive without sending a real signal
-function isPidAlive(pid) {
-  try { process.kill(pid, 0); return true; } catch { return false; }
-}
-
-// Scan `ps` output for a node process running a given script path
-// Returns the PID or null
-function findProcessByScript(scriptPath) {
-  try {
-    const { execSync } = require('child_process');
-    // ps ax: PID STAT CMD...   (works on macOS and Linux)
-    const out = execSync('ps ax -o pid,command', { encoding: 'utf8', stdio: ['ignore','pipe','ignore'] });
-    // Also check relative path (agents started via `npm run X` use relative paths)
-    const relPath = path.relative(process.cwd(), scriptPath);
-    for (const line of out.split('\n')) {
-      if (line.includes(scriptPath) || line.includes(relPath)) {
-        const pid = parseInt(line.trim().split(/\s+/)[0], 10);
-        if (!isNaN(pid)) return pid;
-      }
-    }
-  } catch {}
-  return null;
-}
-
-// On startup: detect agents that were started by a previous server instance
-// or started externally (e.g. npm run start:email)
-function recoverAgents() {
-  for (const [id, def] of Object.entries(AGENTS)) {
-    // 1. Try PID file first
-    const pf = pidFile(id);
-    let pid = null;
-    if (fs.existsSync(pf)) {
-      try {
-        const stored = parseInt(fs.readFileSync(pf, 'utf8').trim(), 10);
-        if (!isNaN(stored) && isPidAlive(stored)) pid = stored;
-        else fs.unlinkSync(pf);
-      } catch {}
-    }
-
-    // 2. Fall back to scanning ps for the agent entrypoint
-    if (!pid) pid = findProcessByScript(def.entrypoint);
-
-    if (!pid) continue;
-
-    procs[id] = { proc: null, pid, startTime: null, stoppedAt: null, exitCode: null,
-                  logStream: null, recovered: true };
-    // Write a PID file so future restarts also find it
-    try { fs.writeFileSync(pidFile(id), String(pid)); } catch {}
-    // Load any historical log lines from file
-    logs[id] = readLogFile(id);
-    appendLog(id, 'system', `[${def.name}] recovered (pid ${pid})`);
-    console.log(`[ui] Recovered ${id} agent (pid ${pid})`);
+async function reapOrphanedAgents() {
+  const matches = findAgentProcesses(AGENTS, { cwd: path.resolve(__dirname, '../..') });
+  const orphans = [...matches.values()].flat();
+  const result = await terminateProcesses(orphans);
+  if (result.survivors.length > 0) {
+    throw new Error(`Could not stop stale agent processes: ${result.survivors.join(', ')}`);
   }
+  for (const id of Object.keys(AGENTS)) {
+    try { fs.unlinkSync(pidFile(id)); } catch {}
+  }
+  if (result.requested.length > 0) {
+    console.warn(`[supervisor] reaped ${result.requested.length} stale agent process(es): ${result.requested.join(', ')}`);
+  }
+  return result;
 }
 
 // ── .env.local helpers ────────────────────────────────────────────────────────
@@ -511,9 +466,10 @@ async function startAgent(id) {
 }
 
 async function startAgentOnce(id) {
-  if (procs[id]?.proc || procs[id]?.recovered) return { error: 'Already running' };
   const def = AGENTS[id];
   if (!def) return { error: 'Unknown agent' };
+  if (!supervisorLease.ownsLease()) return { error: 'This API process does not own the agent supervisor lease' };
+  if (procs[id]?.proc) return { error: 'Already running' };
 
   // Reload env so the spawned process gets latest config
   dotenv.config({ path: ENV_PATH, override: true });
@@ -528,10 +484,10 @@ async function startAgentOnce(id) {
     delete waQr[id];
   }
 
-  const proc = spawn(process.execPath, [def.entrypoint], {
-    env:   { ...process.env, ...extraEnv },
+  const proc = spawn(process.execPath, ['--require', PROCESS_OUTPUT_GUARD, def.entrypoint], {
+    env:   { ...process.env, ...extraEnv, SECOND_BRAIN_PROCESS_OUTPUT_GUARD: '1' },
     stdio: ['ignore', 'pipe', 'pipe'],
-    detached: true,
+    detached: false,
   });
 
   // Rotate log file on fresh start
@@ -540,18 +496,13 @@ async function startAgentOnce(id) {
   const ls = openLogStream(id);
 
   procs[id] = { proc, pid: proc.pid, startTime: new Date(), stoppedAt: null,
-                exitCode: null, logStream: ls, recovered: false };
+                exitCode: null, logStream: ls };
   logs[id]  = [];
 
   // Write PID file
   try { fs.writeFileSync(pidFile(id), String(proc.pid)); } catch {}
 
   appendLog(id, 'system', `[${def.name}] started (pid ${proc.pid})`);
-
-  // Put agents in their own process group so restarting the UI/API server does
-  // not SIGINT/SIGTERM long-running analysis jobs. Recovery on the next server
-  // boot uses the PID file above and a ps scan fallback.
-  proc.unref();
 
   proc.stdout.on('data', d => {
     const text = d.toString();
@@ -576,7 +527,6 @@ async function startAgentOnce(id) {
       procs[id].exitCode  = code;
       procs[id].proc      = null;
       procs[id].stoppedAt = new Date();
-      procs[id].recovered = false;
       try { procs[id].logStream?.end(); } catch {}
       procs[id].logStream = null;
     }
@@ -604,37 +554,15 @@ async function stopAgent(id, { persistDesired = true } = {}) {
     clearRestartTimer(id);
   }
   const entry = procs[id];
-  if (!entry || (!entry.proc && !entry.recovered)) return { ok: true, alreadyStopped: true };
-  if (entry.recovered) {
-    // Kill the external process
-    try {
-      process.kill(entry.pid, 'SIGINT');
-      appendLog(id, 'system', `[${AGENTS[id].name}] SIGINT sent to pid ${entry.pid}`);
-      procs[id].recovered = false;
-      procs[id].stoppedAt = new Date();
-      try { fs.unlinkSync(pidFile(id)); } catch {}
-      return { ok: true };
-    } catch (e) {
-      return { error: `Could not signal process: ${e.message}` };
-    }
-  }
-  if (!entry.proc) return { error: 'Not running' };
-  entry.proc.kill('SIGINT');
+  if (!entry?.proc) return { ok: true, alreadyStopped: true };
+  const result = await terminateProcesses([entry.pid]);
+  if (result.survivors.length > 0) return { error: `Could not stop process ${entry.pid}` };
   return { ok: true };
 }
 
 function agentStatus(id) {
   const entry = procs[id];
   if (!entry) return 'idle';
-  // Recovered (external) process: re-verify it's still alive
-  if (entry.recovered) {
-    if (isPidAlive(entry.pid)) return 'running';
-    // Process died without us knowing
-    procs[id].recovered = false;
-    procs[id].stoppedAt = new Date();
-    try { fs.unlinkSync(pidFile(id)); } catch {}
-    return 'stopped';
-  }
   if (entry.proc)              return 'running';
   if (entry.exitCode === 0)    return 'stopped';
   if (entry.exitCode !== null) return 'error';
@@ -717,20 +645,9 @@ async function superviseCoreAgents() {
   if (serverShuttingDown) return;
   for (const id of CORE_AGENT_IDS) {
     const state = runtimeStore.get(id);
-    const entry = procs[id];
-
     if (state?.desired_state === 'stopped') {
       clearRestartTimer(id);
       if (agentStatus(id) === 'running') await stopAgent(id, { persistDesired: false });
-      continue;
-    }
-
-    if (entry?.recovered && !isPidAlive(entry.pid)) {
-      entry.recovered = false;
-      entry.stoppedAt = new Date();
-      try { fs.unlinkSync(pidFile(id)); } catch {}
-      const failedState = await runtimeStore.markFailure(id, { error: `${AGENTS[id].name} disappeared after recovery` });
-      scheduleAgentRestart(id, failedState);
       continue;
     }
 
@@ -739,17 +656,23 @@ async function superviseCoreAgents() {
 }
 
 async function initializeAgentSupervisor() {
-  recoverAgents();
   if (!db) {
-    console.warn('[supervisor] durable recovery disabled because the database is unavailable');
+    console.warn('[supervisor] disabled because the database is unavailable');
     return;
   }
-  await runtimeStore.initialize(CORE_AGENT_IDS);
-  for (const id of CORE_AGENT_IDS) {
-    const state = runtimeStore.get(id);
-    if (state?.desired_state === 'running') {
-      scheduleAgentRestart(id, state, { minimumDelayMs: CORE_STARTUP_DELAY_MS[id] || 0 });
+  await supervisorLease.acquire();
+  try {
+    await reapOrphanedAgents();
+    await runtimeStore.initialize(CORE_AGENT_IDS);
+    for (const id of CORE_AGENT_IDS) {
+      const state = runtimeStore.get(id);
+      if (state?.desired_state === 'running') {
+        scheduleAgentRestart(id, state, { minimumDelayMs: CORE_STARTUP_DELAY_MS[id] || 0 });
+      }
     }
+  } catch (error) {
+    await supervisorLease.release();
+    throw error;
   }
   supervisorInterval = setInterval(() => {
     superviseCoreAgents().catch(err => console.error('[supervisor] reconciliation failed:', err.message));
@@ -998,11 +921,6 @@ app.get('/api/agents/:id/logs', (req, res) => {
   const { id }   = req.params;
   const since    = req.query.since ? new Date(req.query.since) : null;
   if (!logs[id]) return res.status(404).json({ error: 'Unknown agent' });
-
-  // For recovered agents, merge file logs into memory buffer if not already done
-  if (procs[id]?.recovered && logs[id].length === 0) {
-    logs[id] = readLogFile(id);
-  }
 
   const buf      = logs[id];
   const filtered = since ? buf.filter(l => new Date(l.ts) > since) : buf;
@@ -3720,18 +3638,34 @@ async function startServer() {
   });
 }
 
-terminateOnStartupFailure(startServer());
+let resourcesStopped = false;
 
-async function shutdown() {
+async function stopServerResources() {
+  if (resourcesStopped) return;
+  resourcesStopped = true;
   if (serverShuttingDown) return;
   serverShuttingDown = true;
   if (supervisorInterval) clearInterval(supervisorInterval);
   for (const id of restartTimers.keys()) clearRestartTimer(id);
   try { observeAlerts.stop(); } catch {}
   try { indexer.stop?.(); } catch {}
+  const managedProcesses = Object.values(procs).filter(entry => entry?.proc).map(entry => entry.pid);
+  const result = await terminateProcesses(managedProcesses, { graceMs: 8_000 });
+  if (result.survivors.length > 0) {
+    console.error(`[supervisor] failed to stop agent processes: ${result.survivors.join(', ')}`);
+  }
+  try { await supervisorLease.release(); } catch (error) {
+    console.error('[supervisor] lease release failed:', error.message);
+  }
   try { await db?.end?.(); } catch {}
+}
+
+async function shutdown() {
+  await stopServerResources();
   process.exit(0);
 }
 
-process.on('SIGINT', shutdown);
-process.on('SIGTERM', shutdown);
+terminateOnStartupFailure(startServer(), { beforeExit: stopServerResources });
+
+process.once('SIGINT', shutdown);
+process.once('SIGTERM', shutdown);

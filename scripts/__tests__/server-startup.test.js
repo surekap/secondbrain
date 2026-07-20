@@ -65,14 +65,17 @@ test('required config migration failure aborts before agent initialization and l
 test('startup failure is handled and terminates with a nonzero status', async () => {
   const errors = []
   const exits = []
+  const cleanup = []
   const failure = Promise.reject(new Error('required migration failed'))
 
   await assert.doesNotReject(() => terminateOnStartupFailure(failure, {
     logger: { error: (...args) => errors.push(args) },
+    beforeExit: async (error) => cleanup.push(error.message),
     exit: (status) => exits.push(status),
   }))
 
   assert.deepEqual(errors, [['[server] startup failed:', 'required migration failed']])
+  assert.deepEqual(cleanup, ['required migration failed'])
   assert.deepEqual(exits, [1])
 })
 

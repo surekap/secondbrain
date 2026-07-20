@@ -65,4 +65,5 @@ This is a pragmatic SOLID boundary, not a request for ceremony. Prefer a small p
 - [MODEL_ROUTING.md](MODEL_ROUTING.md) — workload routing, cost envelope, and model-change rules.
 - [evaluation.md](evaluation.md) — executable private gold-set contract.
 - [MIGRATIONS.md](MIGRATIONS.md) — schema/backfill/cutover protocol.
+- [PROCESS_SUPERVISION.md](PROCESS_SUPERVISION.md) — single-owner worker lifecycle, orphan reaping and shutdown rules.
 - [CRUFT_AUDIT.md](CRUFT_AUDIT.md) — evidence-backed consolidation queue.
