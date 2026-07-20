@@ -127,15 +127,21 @@ log "Starting npm run ui"
 nohup npm run ui >> "$REPO_DIR/.agent-logs/ui.log" 2>&1 &
 UI_PID=$!
 log "npm run ui launched pid=$UI_PID"
-sleep 5
 
-write_status "running" "verify" "Verifying API port 4001"
+VERIFY_TIMEOUT_SECONDS="${SECOND_BRAIN_DEPLOY_VERIFY_TIMEOUT_SECONDS:-60}"
+VERIFY_INTERVAL_SECONDS=2
+VERIFY_DEADLINE=$((SECONDS + VERIFY_TIMEOUT_SECONDS))
+write_status "running" "verify" "Waiting up to ${VERIFY_TIMEOUT_SECONDS}s for UI/API readiness"
 if command -v curl >/dev/null 2>&1; then
-  if curl -fsS --max-time 10 http://127.0.0.1:4001/api/intelligence/refresh/status >/dev/null; then
-    write_status "completed" "done" "Pulled/reloaded successfully; api reachable on 4001"
-    log "Reload complete"
-    exit 0
-  fi
+  while [ "$SECONDS" -lt "$VERIFY_DEADLINE" ]; do
+    if curl -fsS --max-time 3 http://127.0.0.1:4001/api/health >/dev/null \
+       && curl -fsS --max-time 3 http://127.0.0.1:4000/ >/dev/null; then
+      write_status "completed" "done" "Pulled/reloaded successfully; UI and API are reachable"
+      log "Reload complete"
+      exit 0
+    fi
+    sleep "$VERIFY_INTERVAL_SECONDS"
+  done
 fi
-write_status "failed" "verify" "Reload command launched but API did not respond on 4001 within verification window"
+write_status "failed" "verify" "Reload command launched but UI/API did not become ready within ${VERIFY_TIMEOUT_SECONDS}s"
 exit 1
