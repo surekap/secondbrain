@@ -8,7 +8,7 @@ CREATE TABLE IF NOT EXISTS system.llm_providers (
   id            SERIAL PRIMARY KEY,
   name          TEXT NOT NULL,
   provider_type TEXT NOT NULL
-    CHECK (provider_type IN ('anthropic','claude_cli','openai','gemini','kimi','ollama','groq')),
+    CHECK (provider_type ~ '^[a-z0-9][a-z0-9_-]*$'),
   api_key       TEXT,
   base_url      TEXT,
   model         TEXT,
@@ -37,7 +37,7 @@ END $$;
 
 ALTER TABLE system.llm_providers
   ADD CONSTRAINT llm_providers_provider_type_check
-  CHECK (provider_type IN ('anthropic','claude_cli','openai','gemini','kimi','ollama','groq'));
+  CHECK (provider_type ~ '^[a-z0-9][a-z0-9_-]*$');
 
 -- Per-agent ordered provider list
 CREATE TABLE IF NOT EXISTS system.agent_llm_priority (

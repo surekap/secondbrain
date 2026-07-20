@@ -1,6 +1,10 @@
 const test = require('node:test')
 const assert = require('node:assert')
-const { getProviderDefinitions, getStaticModels } = require('../model-catalog')
+const {
+  getProviderDefinitions,
+  getStaticModels,
+  isValidProviderType,
+} = require('../model-catalog')
 
 test('getProviderDefinitions: merges gemini embeddings (fixed) with chat (from OpenRouter)', async () => {
   const providers = await getProviderDefinitions()
@@ -23,4 +27,17 @@ test('getStaticModels: only returns jina rows now', () => {
   const models = getStaticModels({})
   assert.ok(models.every(m => m.provider_type === 'jina'))
   assert.strictEqual(models.length, 2)
+})
+
+test('isValidProviderType: accepts native and OpenRouter provider slugs', () => {
+  assert.strictEqual(isValidProviderType('anthropic'), true)
+  assert.strictEqual(isValidProviderType('claude_cli'), true)
+  assert.strictEqual(isValidProviderType('meta-llama'), true)
+})
+
+test('isValidProviderType: rejects values outside the database slug contract', () => {
+  assert.strictEqual(isValidProviderType(''), false)
+  assert.strictEqual(isValidProviderType('Meta Llama'), false)
+  assert.strictEqual(isValidProviderType('meta/llama'), false)
+  assert.strictEqual(isValidProviderType(' meta-llama '), false)
 })
