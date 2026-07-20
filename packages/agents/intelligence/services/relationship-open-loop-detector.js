@@ -74,6 +74,9 @@ function isSuppressedOpenLoop(contact = {}, text = '') {
 function detectRelationshipOpenLoops(input = {}) {
   const contacts = input.contacts || []
   const directMessages = input.directMessages || []
+  const now = input.now ? new Date(input.now) : new Date()
+  const maxAgeDays = Number.isFinite(Number(input.maxAgeDays)) ? Number(input.maxAgeDays) : 30
+  const oldestAllowedAt = new Date(now.getTime() - maxAgeDays * 24 * 60 * 60 * 1000)
   const messagesByContact = new Map()
   for (const msg of directMessages) {
     const id = String(msg.contact_id || '')
@@ -90,6 +93,10 @@ function detectRelationshipOpenLoops(input = {}) {
     if (!messages.length) continue
     const open = classifyOpenLoop(messages)
     if (!open) continue
+    const openAt = messageAt(open)
+    // A single direct-chat message cannot establish an obligation indefinitely.
+    // Let the refresh retire it after 30 days unless newer evidence reopens it.
+    if (openAt && openAt < oldestAllowedAt) continue
     if (isSuppressedOpenLoop(contact, open.text)) continue
     const name = contactName(contact)
     const text = open.text
