@@ -6,10 +6,11 @@ BRANCH="${SECOND_BRAIN_DEPLOY_BRANCH:-main}"
 STATUS_FILE="$REPO_DIR/.agent-logs/deploy-reload-status.json"
 LOG_FILE="$REPO_DIR/.agent-logs/deploy-reload.log"
 LOCK_DIR="$REPO_DIR/.agent-logs/deploy-reload.lock"
+PID_FILE="$REPO_DIR/.agent-pids/deploy-ui-api.pids"
 RUN_BUILD="${SECOND_BRAIN_DEPLOY_BUILD:-1}"
 RUN_INSTALL="${SECOND_BRAIN_DEPLOY_INSTALL:-0}"
 
-mkdir -p "$REPO_DIR/.agent-logs"
+mkdir -p "$REPO_DIR/.agent-logs" "$REPO_DIR/.agent-pids"
 
 json_escape() {
   python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))'
@@ -105,12 +106,57 @@ if [ "$RUN_BUILD" = "1" ]; then
   npm run build --workspace=packages/ui | tee -a "$LOG_FILE"
 fi
 
-write_status "running" "stop" "Stopping existing listeners on 4000/4001"
+append_pid() {
+  local candidate="$1"
+  case "$candidate" in
+    ''|*[!0-9]*) return ;;
+  esac
+  case " $PIDS " in
+    *" $candidate "*) ;;
+    *) PIDS="$PIDS $candidate" ;;
+  esac
+}
+
+append_descendants() {
+  local parent="$1" child
+  if ! command -v pgrep >/dev/null 2>&1; then return; fi
+  for child in $(pgrep -P "$parent" 2>/dev/null || true); do
+    append_pid "$child"
+    append_descendants "$child"
+  done
+}
+
+append_ancestors() {
+  local current="$1" parent
+  while command -v ps >/dev/null 2>&1; do
+    parent="$(ps -o ppid= -p "$current" 2>/dev/null | tr -d '[:space:]')"
+    case "$parent" in
+      ''|*[!0-9]*|0|1) return ;;
+    esac
+    if [ "$parent" = "$$" ] || [ "$parent" = "$PPID" ]; then return; fi
+    append_pid "$parent"
+    current="$parent"
+  done
+}
+
+write_status "running" "stop" "Stopping the previous UI/API process tree"
 PIDS=""
+LISTENER_PIDS=""
 if command -v lsof >/dev/null 2>&1; then
-  PIDS="$(lsof -ti tcp:4000 -sTCP:LISTEN 2>/dev/null || true) $(lsof -ti tcp:4001 -sTCP:LISTEN 2>/dev/null || true)"
+  LISTENER_PIDS="$(lsof -ti tcp:4000 -sTCP:LISTEN 2>/dev/null || true) $(lsof -ti tcp:4001 -sTCP:LISTEN 2>/dev/null || true)"
 elif command -v fuser >/dev/null 2>&1; then
-  PIDS="$(fuser 4000/tcp 2>/dev/null || true) $(fuser 4001/tcp 2>/dev/null || true)"
+  LISTENER_PIDS="$(fuser 4000/tcp 2>/dev/null || true) $(fuser 4001/tcp 2>/dev/null || true)"
+fi
+for pid in $LISTENER_PIDS; do
+  append_pid "$pid"
+  append_descendants "$pid"
+  append_ancestors "$pid"
+done
+if [ -f "$PID_FILE" ]; then
+  while IFS= read -r pid; do
+    append_pid "$pid"
+    append_descendants "$pid"
+  done < "$PID_FILE"
 fi
 PIDS="$(echo "$PIDS" | xargs || true)"
 if [ -n "$PIDS" ]; then
@@ -121,27 +167,55 @@ if [ -n "$PIDS" ]; then
 else
   log "No listeners found on 4000/4001"
 fi
+rm -f "$PID_FILE"
 
-write_status "running" "start" "Starting npm run ui"
-log "Starting npm run ui"
-nohup npm run ui >> "$REPO_DIR/.agent-logs/ui.log" 2>&1 &
-UI_PID=$!
-log "npm run ui launched pid=$UI_PID"
+write_status "running" "start" "Starting API and UI processes"
+log "Starting API"
+nohup node packages/ui/server.js >> "$REPO_DIR/.agent-logs/ui.log" 2>&1 &
+API_PID=$!
+log "API launched pid=$API_PID"
+log "Starting Next.js UI"
+nohup npm start --workspace=packages/ui >> "$REPO_DIR/.agent-logs/ui.log" 2>&1 &
+NEXT_PID=$!
+log "Next.js UI launched pid=$NEXT_PID"
+printf '%s\n%s\n' "$API_PID" "$NEXT_PID" > "$PID_FILE"
 
-VERIFY_TIMEOUT_SECONDS="${SECOND_BRAIN_DEPLOY_VERIFY_TIMEOUT_SECONDS:-60}"
+VERIFY_TIMEOUT_SECONDS="${SECOND_BRAIN_DEPLOY_VERIFY_TIMEOUT_SECONDS:-90}"
 VERIFY_INTERVAL_SECONDS=2
 VERIFY_DEADLINE=$((SECONDS + VERIFY_TIMEOUT_SECONDS))
+HEALTHY_SINCE=0
+STABILITY_SECONDS="${SECOND_BRAIN_DEPLOY_STABILITY_SECONDS:-10}"
 write_status "running" "verify" "Waiting up to ${VERIFY_TIMEOUT_SECONDS}s for UI/API readiness"
 if command -v curl >/dev/null 2>&1; then
   while [ "$SECONDS" -lt "$VERIFY_DEADLINE" ]; do
+    if ! kill -0 "$API_PID" 2>/dev/null || ! kill -0 "$NEXT_PID" 2>/dev/null; then
+      break
+    fi
     if curl -fsS --max-time 3 http://127.0.0.1:4001/api/health >/dev/null \
        && curl -fsS --max-time 3 http://127.0.0.1:4000/ >/dev/null; then
-      write_status "completed" "done" "Pulled/reloaded successfully; UI and API are reachable"
-      log "Reload complete"
-      exit 0
+      if [ "$HEALTHY_SINCE" -eq 0 ]; then HEALTHY_SINCE=$SECONDS; fi
+      if [ $((SECONDS - HEALTHY_SINCE)) -ge "$STABILITY_SECONDS" ]; then
+        write_status "completed" "done" "Pulled/reloaded successfully; UI and API are stable"
+        log "Reload complete"
+        exit 0
+      fi
+    else
+      HEALTHY_SINCE=0
     fi
     sleep "$VERIFY_INTERVAL_SECONDS"
   done
 fi
+PIDS=""
+for pid in "$API_PID" "$NEXT_PID"; do
+  append_pid "$pid"
+  append_descendants "$pid"
+done
+PIDS="$(echo "$PIDS" | xargs || true)"
+if [ -n "$PIDS" ]; then
+  kill $PIDS 2>/dev/null || true
+  sleep 2
+  kill -9 $PIDS 2>/dev/null || true
+fi
+rm -f "$PID_FILE"
 write_status "failed" "verify" "Reload command launched but UI/API did not become ready within ${VERIFY_TIMEOUT_SECONDS}s"
 exit 1

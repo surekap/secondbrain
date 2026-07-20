@@ -531,7 +531,7 @@ validated with `pg_restore --list`.
   media extraction, and health/quality audits have one documented owner each.
 - Obsolete one-shot backfills, duplicate AI clients, external-action Limitless
   tools, and root prototype tests were removed after replacement-path checks.
-- Graphify now indexes 3,264 nodes, 4,454 edges, and 217 communities, replacing
+- Graphify now indexes 3,267 nodes, 4,462 edges, and 217 communities, replacing
   the historical zero-edge graph noted in the baseline analysis.
 
 ### Model routing and current operational limit
