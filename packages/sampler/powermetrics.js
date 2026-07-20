@@ -43,11 +43,18 @@ function _parseSample(doc) {
   }
 }
 
+function canRunPowermetrics({ platform = process.platform, getuid = process.getuid } = {}) {
+  if (platform !== 'darwin') return false
+  return typeof getuid !== 'function' || getuid() === 0
+}
+
 function start() {
   if (running) return
-  if (process.platform !== 'darwin') {
+  if (!canRunPowermetrics()) {
     // powermetrics is macOS-only. On Linux/other hosts we keep the sampler
     // alive and let index.js write null power fields plus CPU/memory telemetry.
+    // macOS also requires root; do not spawn a command that is guaranteed to
+    // fail when the managed sampler runs as the login user.
     running = true
     return
   }
@@ -90,4 +97,4 @@ function stop() {
   running = false
 }
 
-module.exports = { start, stop, onSample }
+module.exports = { start, stop, onSample, canRunPowermetrics }

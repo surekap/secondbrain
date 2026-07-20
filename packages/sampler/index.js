@@ -9,7 +9,7 @@ const pm       = require('./powermetrics')
 const ps       = require('./process-stats')
 const ollamaPs = require('./ollama-ps')
 
-console.log('[sampler] starting (privileged)')
+console.log('[sampler] starting')
 
 // ── Fast loop: powermetrics data every 1s ─────────────────────────────────────
 
@@ -135,9 +135,16 @@ setInterval(async () => {
 
 // ── Graceful shutdown ─────────────────────────────────────────────────────────
 
-process.on('SIGINT', () => {
+let shuttingDown = false
+
+async function shutdown() {
+  if (shuttingDown) return
+  shuttingDown = true
   console.log('[sampler] shutting down')
   pm.stop()
-  db.end()
+  await db.end().catch(() => {})
   process.exit(0)
-})
+}
+
+process.once('SIGINT', shutdown)
+process.once('SIGTERM', shutdown)
