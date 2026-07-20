@@ -9,7 +9,8 @@ test('dormancy-monitor: creates check_in for tier_1 contact exceeding 30 days', 
   const mockContact = {
     id: 'alice@example.com',
     relationship_tier: 'tier_1',
-    last_contact_date: thirtyFiveDaysAgo
+    last_contact_date: thirtyFiveDaysAgo,
+    canonical_communication_id: 101,
   };
 
   const opportunities = await checkDormancy([mockContact]);
@@ -25,7 +26,8 @@ test('dormancy-monitor: does not flag tier_1 contact within 30 days', async () =
   const mockContact = {
     id: 'bob@example.com',
     relationship_tier: 'tier_1',
-    last_contact_date: twentyDaysAgo
+    last_contact_date: twentyDaysAgo,
+    canonical_communication_id: 102,
   };
 
   const opportunities = await checkDormancy([mockContact]);
@@ -41,6 +43,7 @@ test('dormancy-monitor: skips contacts without next-touch obligation', async () 
     relationship_tier: 'tier_1',
     last_contact_date: ninetyDaysAgo,
     next_suggested_touch_at: null,
+    canonical_communication_id: 103,
   };
 
   const opportunities = await checkDormancy([mockContact]);
@@ -54,7 +57,8 @@ test('dormancy-monitor: deduplicates on dormancy:{contact_id}:{tier}', async () 
   const mockContact = {
     id: 'alice@example.com',
     relationship_tier: 'tier_1',
-    last_contact_date: thirtyFiveDaysAgo
+    last_contact_date: thirtyFiveDaysAgo,
+    canonical_communication_id: 101,
   };
 
   // Call twice to test deduplication
@@ -63,4 +67,14 @@ test('dormancy-monitor: deduplicates on dormancy:{contact_id}:{tier}', async () 
 
   assert.strictEqual(result1.length, 1, 'should create one opportunity on first call');
   assert.strictEqual(result2.length, 1, 'should still return one on second call (deduplicated)');
+});
+
+test('dormancy-monitor: does not create an item without canonical communication evidence', async () => {
+  const old = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
+  const opportunities = await checkDormancy([{
+    id: 77,
+    relationship_tier: 'tier_1',
+    last_contact_date: old,
+  }]);
+  assert.deepEqual(opportunities, []);
 });

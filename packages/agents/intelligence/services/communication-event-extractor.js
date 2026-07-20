@@ -212,6 +212,7 @@ function extractCommunicationEvents(records = [], sourceTable = '') {
       confidence: kind === 'webinar' || kind === 'conference' ? 0.92 : 0.84,
       metadata: {
         detector: 'communication_event_extractor',
+        source_kind: record.source || null,
         matched_keywords: text.match(/\b(webinar|conference|zoom|meeting|call|event|invite|invitation|register|rsvp|calendar|session|workshop|summit|panel|roundtable|demo|town hall|fireside chat|save the date)\b/gi) || [],
         raw_source_table: sourceTable,
       },
@@ -228,87 +229,36 @@ function extractCommunicationEvents(records = [], sourceTable = '') {
 
 async function loadCommunicationRows(pool, days = 30) {
   const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString()
-  const [emails, messages, comms, projectComms] = await Promise.all([
-    pool.query(`
-      SELECT
-        e.id::text AS source_id,
-        e.subject,
-        e.body_text,
-        e.body_html,
-        e.date,
-        e.received_at,
-        e.created_at,
-        e.from_address,
-        s.contact_id AS source_contact_id,
-        NULL::bigint AS source_project_id,
-        'email:' || e.id::text AS source_ref
-      FROM email.emails e
-      LEFT JOIN relationships.email_senders s
-        ON LOWER(s.parsed_email) = LOWER(REGEXP_REPLACE(COALESCE(e.from_address, ''), '^.*<([^>]+)>.*$', '\\1'))
-        OR LOWER(s.raw_address) = LOWER(COALESCE(e.from_address, ''))
-      WHERE COALESCE(e.date, e.received_at, e.created_at) >= $1::timestamptz
-      ORDER BY COALESCE(e.date, e.received_at, e.created_at) DESC
-      LIMIT 5000
-    `, [cutoff]),
-    pool.query(`
-      SELECT
-        m.id::text AS source_id,
-        m.chat_id,
-        m.ts,
-        COALESCE(m.data->>'body', m.data->>'caption', m.data->>'text', m.data->>'message') AS body,
-        COALESCE(m.data->'_data'->>'notifyName', m.data->>'notifyName') AS subject,
-        NULL::bigint AS source_contact_id,
-        NULL::bigint AS source_project_id,
-        COALESCE(m.data->'id'->>'_serialized', 'whatsapp:' || m.id::text) AS source_ref
-      FROM public.messages m
-      WHERE m.event IN ('message', 'message_create', 'message_historical')
-        AND m.ts >= $1::timestamptz
-        AND COALESCE(m.data->>'body', m.data->>'caption', m.data->>'text', m.data->>'message') IS NOT NULL
-      ORDER BY m.ts DESC
-      LIMIT 10000
-    `, [cutoff]),
-    pool.query(`
-      SELECT
-        rc.id::text AS source_id,
-        rc.subject,
-        rc.content_snippet,
-        rc.occurred_at,
-        rc.created_at,
-        rc.contact_id AS source_contact_id,
-        NULL::bigint AS source_project_id,
-        'relationships.communication:' || rc.id::text AS source_ref
-      FROM relationships.communications rc
-      WHERE COALESCE(rc.occurred_at, rc.created_at) >= $1::timestamptz
-        AND COALESCE(rc.content_snippet, rc.subject, '') <> ''
-      ORDER BY COALESCE(rc.occurred_at, rc.created_at) DESC
-      LIMIT 10000
-    `, [cutoff]),
-    pool.query(`
-      SELECT
-        pc.id::text AS source_id,
-        pc.subject,
-        pc.content_snippet,
-        pc.occurred_at,
-        pc.created_at,
-        pc.contact_id AS source_contact_id,
-        pc.project_id AS source_project_id,
-        'projects.project_communication:' || pc.id::text AS source_ref
+  const comms = await pool.query(`
+    SELECT
+      rc.source,
+      rc.source_id,
+      rc.subject,
+      rc.content_snippet,
+      rc.occurred_at,
+      rc.created_at,
+      rc.contact_id AS source_contact_id,
+      project_link.project_id AS source_project_id,
+      rc.source_id AS source_ref
+    FROM relationships.communications rc
+    LEFT JOIN LATERAL (
+      SELECT pc.project_id
       FROM projects.project_communications pc
-      WHERE COALESCE(pc.occurred_at, pc.created_at) >= $1::timestamptz
-        AND COALESCE(pc.content_snippet, pc.subject, '') <> ''
-      ORDER BY COALESCE(pc.occurred_at, pc.created_at) DESC
-      LIMIT 10000
-    `, [cutoff]),
-  ])
+      WHERE pc.source = rc.source
+        AND (pc.source_id = rc.source_id OR pc.episode_id = rc.source_id)
+      ORDER BY pc.relevance_score DESC NULLS LAST, pc.updated_at DESC NULLS LAST
+      LIMIT 1
+    ) project_link ON TRUE
+    WHERE COALESCE(rc.occurred_at, rc.created_at) >= $1::timestamptz
+      AND COALESCE(rc.content_snippet, rc.subject, '') <> ''
+      AND COALESCE(rc.metadata->>'lineage_status', 'verified') <> 'quarantined_missing_raw'
+    ORDER BY COALESCE(rc.occurred_at, rc.created_at) DESC
+    LIMIT 25000
+  `, [cutoff])
 
   return {
     cutoff,
-    rows: [
-      ...emails.rows.map(row => ({ ...row, source_table: 'email.emails' })),
-      ...messages.rows.map(row => ({ ...row, source_table: 'public.messages' })),
-      ...comms.rows.map(row => ({ ...row, source_table: 'relationships.communications' })),
-      ...projectComms.rows.map(row => ({ ...row, source_table: 'projects.project_communications' })),
-    ],
+    rows: comms.rows.map(row => ({ ...row, source_table: 'relationships.communications' })),
   }
 }
 
@@ -319,21 +269,10 @@ async function backfillCommunicationEvents(pool, options = {}) {
     : (...args) => console.log('[communication-events]', ...args)
 
   const { rows, cutoff } = await loadCommunicationRows(pool, days)
-  log(`Loaded ${rows.length} communication rows since ${cutoff}`)
+  log('info', 'Loaded communication rows for event extraction', { rows: rows.length, cutoff })
 
   const grouped = new Map()
-  const sourcePriority = new Map([
-    ['email.emails', 0],
-    ['public.messages', 1],
-    ['relationships.communications', 2],
-    ['projects.project_communications', 3],
-  ])
-
-  for (const row of rows.sort((a, b) => {
-    const left = sourcePriority.get(a.source_table) ?? 99
-    const right = sourcePriority.get(b.source_table) ?? 99
-    return left - right
-  })) {
+  for (const row of rows) {
     const events = extractCommunicationEvents([row], row.source_table)
     for (const event of events) {
       if (!grouped.has(event.event_key)) grouped.set(event.event_key, event)

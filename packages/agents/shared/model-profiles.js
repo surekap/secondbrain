@@ -7,13 +7,9 @@
 const MODEL_PROFILES = Object.freeze({
   bulk_structured: Object.freeze([
     { provider_type: 'openai', model: 'gpt-5.6-luna', reasoning_effort: 'low' },
-    { provider_type: 'gemini', model: 'gemini-3.1-flash-lite' },
-    { provider_type: 'anthropic', model: 'claude-sonnet-5' },
   ]),
   reasoning_synthesis: Object.freeze([
-    { provider_type: 'openai', model: 'gpt-5.6-sol', reasoning_effort: 'medium' },
-    { provider_type: 'anthropic', model: 'claude-sonnet-5' },
-    { provider_type: 'gemini', model: 'gemini-3.5-flash' },
+    { provider_type: 'openai', model: 'gpt-5.6-terra', reasoning_effort: 'high' },
   ]),
   autonomous_tools: Object.freeze([
     { provider_type: 'openai', model: 'gpt-5.6-sol', reasoning_effort: 'medium' },

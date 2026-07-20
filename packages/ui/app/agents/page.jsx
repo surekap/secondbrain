@@ -20,52 +20,6 @@ async function fetchModelCatalog({ providerType, capability, baseUrl }) {
   return apiFetch('GET', `/api/system/model-catalog?${params.toString()}`)
 }
 
-function ModelSelector({ label, providerType, model, onModelChange, apiKey, error }) {
-  const [options, setOptions] = useState([])
-  const [localError, setLocalError] = useState(error)
-
-  useEffect(() => {
-    if (!providerType) return
-
-    const fetchModels = async () => {
-      try {
-        const data = await fetchModelCatalog({ providerType })
-        setOptions(data.models || [])
-        setLocalError(null)
-      } catch (err) {
-        setLocalError(err.message)
-        setOptions([])
-      }
-    }
-
-    const timer = setTimeout(fetchModels, 100)
-    return () => clearTimeout(timer)
-  }, [providerType, apiKey])
-
-  return (
-    <div className="form-row">
-      <label>{label}</label>
-      {!apiKey && providerType !== 'claude-cli' ? (
-        <div style={{ padding: '0.5rem', fontSize: '0.75rem', color: '#f59e0b', background: 'rgba(245,158,11,0.1)', borderRadius: 4 }}>
-          Add API key above to see available models
-        </div>
-      ) : options.length > 0 ? (
-        <select value={model} onChange={e => onModelChange(e.target.value)} style={{ width: '100%' }}>
-          <option value="">Select a model…</option>
-          {options.map(opt => (
-            <option key={opt.value} value={opt.value}>
-              {opt.label}
-            </option>
-          ))}
-        </select>
-      ) : (
-        <input type="text" value={model} onChange={e => onModelChange(e.target.value)} placeholder="Paste model ID (e.g., claude-sonnet-5)" style={{ width: '100%' }} />
-      )}
-      {localError && <div style={{ marginTop: '0.35rem', fontSize: '0.72rem', color: '#f59e0b' }}>{localError}</div>}
-    </div>
-  )
-}
-
 function relativeTime(iso) {
   if (!iso) return '—'
   const s = Math.floor((Date.now() - new Date(iso)) / 1000)
@@ -130,7 +84,6 @@ function AgentStats({ id, stats }) {
       <div className="agent-stats">
         <div className="stat"><span className="stat-val">{formatNum(stats.total)}</span><span className="stat-label">Total lifelogs</span></div>
         <div className="stat"><span className="stat-val">{formatNum(stats.today)}</span><span className="stat-label">Today</span></div>
-        <div className="stat"><span className="stat-val">{formatNum(stats.pending)}</span><span className="stat-label">Unprocessed</span></div>
         <div className="stat"><span className="stat-val dim">{relativeTime(stats.last_fetch)}</span><span className="stat-label">Last fetch</span></div>
       </div>
     )
@@ -342,65 +295,10 @@ function EmailConfigForm({ config, onSave }) {
   )
 }
 
-function QuickModelSwitcher({ onSwitch }) {
-  const presets = {
-    latest: {
-      label: 'Latest',
-      tooltip: 'Newest available models',
-      models: { anthropic: 'claude-fable-5', openai: 'gpt-5.6-sol' }
-    },
-    balanced: {
-      label: 'Balanced',
-      tooltip: 'Good speed/quality tradeoff',
-      models: { anthropic: 'claude-sonnet-5', openai: 'gpt-5.6-luna' }
-    },
-    budget: {
-      label: 'Budget',
-      tooltip: 'Fastest/cheapest',
-      models: { anthropic: 'claude-haiku-4-5-20251001', openai: 'gpt-5.6-luna' }
-    },
-  }
-
-  return (
-    <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem' }}>
-      {Object.entries(presets).map(([key, preset]) => (
-        <button
-          key={key}
-          type="button"
-          onClick={() => onSwitch(preset.models)}
-          title={preset.tooltip}
-          style={{
-            padding: '0.4rem 0.8rem',
-            fontSize: '0.75rem',
-            fontWeight: 500,
-            background: 'var(--bg-2, #f5f5f5)',
-            border: '1px solid var(--border)',
-            borderRadius: 4,
-            cursor: 'pointer',
-            transition: 'all 0.2s',
-            color: 'var(--text)',
-          }}
-          onMouseEnter={e => e.target.style.background = 'var(--bg-3, #e8e8e8)'}
-          onMouseLeave={e => e.target.style.background = 'var(--bg-2, #f5f5f5)'}
-        >
-          {preset.label}
-        </button>
-      ))}
-    </div>
-  )
-}
-
 function LimitlessConfigForm({ config, onSave }) {
   const [limitlessApiKey, setLimitlessApiKey] = useState(config.LIMITLESS_API_KEY || '')
   const [fetchCron, setFetchCron] = useState(config.FETCH_INTERVAL_CRON || '*/5 * * * *')
-  const [processCron, setProcessCron] = useState(config.PROCESS_INTERVAL_CRON || '*/1 * * * *')
   const [fetchDays, setFetchDays] = useState(config.FETCH_DAYS || '1')
-  const [batchSize, setBatchSize] = useState(config.PROCESSING_BATCH_SIZE || '15')
-  const [aiProvider, setAiProvider] = useState(config.AI_PROVIDER || 'anthropic')
-  const [anthropicKey, setAnthropicKey] = useState(config.ANTHROPIC_API_KEY || '')
-  const [openaiKey, setOpenaiKey] = useState(config.OPENAI_API_KEY || '')
-  const [anthropicModel, setAnthropicModel] = useState(config.AI_ANTHROPIC_MODEL || '')
-  const [openaiModel, setOpenaiModel] = useState(config.AI_OPENAI_MODEL || '')
   const [saving, setSaving] = useState(false)
   const [feedback, setFeedback] = useState('')
 
@@ -410,15 +308,7 @@ function LimitlessConfigForm({ config, onSave }) {
     const updates = {
       LIMITLESS_API_KEY: limitlessApiKey,
       FETCH_INTERVAL_CRON: fetchCron,
-      PROCESS_INTERVAL_CRON: processCron,
       FETCH_DAYS: fetchDays,
-      PROCESSING_BATCH_SIZE: batchSize,
-      AI_PROVIDER: aiProvider,
-      ANTHROPIC_API_KEY: anthropicKey,
-      OPENAI_API_KEY: openaiKey,
-      AI_ANTHROPIC_MODEL: aiProvider === 'claude-cli' ? '' : anthropicModel,
-      AI_OPENAI_MODEL: openaiModel,
-      AI_CLAUDE_CLI_MODEL: aiProvider === 'claude-cli' ? anthropicModel : '',
     }
     try {
       const r = await apiFetch('POST', '/api/config', { agent: 'limitless', updates })
@@ -441,74 +331,16 @@ function LimitlessConfigForm({ config, onSave }) {
         <input type="password" value={limitlessApiKey} onChange={e => setLimitlessApiKey(e.target.value)} placeholder="sk-…" autoComplete="new-password" />
       </div>
       <div className="divider" />
-      <div className="form-section-title">AI Provider <span style={{ fontWeight: 400, fontSize: '.7rem', color: 'var(--text-3)', textTransform: 'none', letterSpacing: 0 }}>(applies to all agents — fallback is automatic)</span></div>
-      {aiProvider !== 'claude-cli' && (
-        <QuickModelSwitcher
-          onSwitch={(models) => {
-            setAnthropicModel(models.anthropic)
-            setOpenaiModel(models.openai)
-          }}
-        />
-      )}
-      <div className="form-row">
-        <label>Preferred provider</label>
-        <select value={aiProvider} onChange={e => setAiProvider(e.target.value)}>
-          <option value="claude-cli">Claude CLI / OAuth (uses Claude.ai subscription)</option>
-          <option value="anthropic">Anthropic API key</option>
-          <option value="openai">OpenAI API key</option>
-        </select>
-      </div>
-      {aiProvider === 'claude-cli' && (
-        <div className="form-row">
-          <label>Model alias</label>
-          <input type="text" value={anthropicModel} onChange={e => setAnthropicModel(e.target.value)} placeholder="sonnet (default)" />
-        </div>
-      )}
-      {aiProvider !== 'claude-cli' && (<>
-        <div className="form-row">
-          <label>Anthropic API Key</label>
-          <input type="password" value={anthropicKey} onChange={e => setAnthropicKey(e.target.value)} placeholder="sk-ant-…" autoComplete="new-password" />
-        </div>
-        <ModelSelector
-          label="Anthropic model"
-          providerType="anthropic"
-          model={anthropicModel}
-          onModelChange={setAnthropicModel}
-          apiKey={anthropicKey}
-          error={null}
-        />
-        <div className="form-row">
-          <label>OpenAI API Key</label>
-          <input type="password" value={openaiKey} onChange={e => setOpenaiKey(e.target.value)} placeholder="sk-…" autoComplete="new-password" />
-        </div>
-        <ModelSelector
-          label="OpenAI model"
-          providerType="openai"
-          model={openaiModel}
-          onModelChange={setOpenaiModel}
-          apiKey={openaiKey}
-          error={null}
-        />
-      </>)}
-      <div className="divider" />
       <div className="form-section-title">Schedule</div>
       <div className="form-row">
         <label>Fetch interval</label>
         <input type="text" value={fetchCron} onChange={e => setFetchCron(e.target.value)} placeholder="*/5 * * * *" />
       </div>
-      <div className="form-row">
-        <label>Process interval</label>
-        <input type="text" value={processCron} onChange={e => setProcessCron(e.target.value)} placeholder="*/1 * * * *" />
-      </div>
       <div className="divider" />
-      <div className="form-section-title">Processing</div>
+      <div className="form-section-title">Ingestion window</div>
       <div className="form-row">
         <label>Days to fetch</label>
         <input type="number" value={fetchDays} onChange={e => setFetchDays(e.target.value)} placeholder="1" min="1" />
-      </div>
-      <div className="form-row">
-        <label>Batch size</label>
-        <input type="number" value={batchSize} onChange={e => setBatchSize(e.target.value)} placeholder="15" min="1" />
       </div>
       <div className="form-actions">
         <div>
@@ -1364,6 +1196,7 @@ export default function AgentsPage() {
           agentIds.map(id => {
             const agent = agents[id]
             const s = agent.status
+            const wantsRunning = agent.desiredState === 'running'
             const tab = getTab(id)
             const usageRow = usageMtd.find(u => u.agent_id === id)
 
@@ -1409,8 +1242,10 @@ export default function AgentsPage() {
                     ) : (
                       <>
                         <StatusPill status={s} />
-                        {s === 'running'
-                          ? <button className="btn btn-stop" onClick={() => handleStop(id)}>&#9632; Stop</button>
+                        {s === 'running' || wantsRunning
+                          ? <button className="btn btn-stop" onClick={() => handleStop(id)}>
+                              &#9632; {s === 'running' ? 'Stop' : 'Cancel restart'}
+                            </button>
                           : <button className="btn btn-primary" onClick={() => handleStart(id)}>&#9654; Start</button>}
                       </>
                     )}
@@ -1418,6 +1253,13 @@ export default function AgentsPage() {
                 </div>
 
                 <AgentStats id={id} stats={agent.stats} />
+
+                {wantsRunning && s !== 'running' && agent.nextRestartAt && (
+                  <div style={{ fontSize: '0.75rem', color: '#f59e0b', padding: '0.25rem 0' }}>
+                    Automatic restart scheduled {relativeTime(agent.nextRestartAt)}
+                    {agent.lastError ? ` — ${agent.lastError}` : ''}
+                  </div>
+                )}
 
                 {id === 'apple-contacts' && agent.nativeAvailable && (
                   <div style={{ fontSize: '0.72rem', color: 'var(--text-3, #888)', lineHeight: 1.5, padding: '0.25rem 0' }}>

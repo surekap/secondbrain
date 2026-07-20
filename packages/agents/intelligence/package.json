@@ -4,6 +4,9 @@
   "private": true,
   "main": "index.js",
   "scripts": {
+    "start": "node runner.js",
+    "run": "node runner.js --once",
+    "test": "node --test __tests__/*.test.js",
     "init-db": "psql $DATABASE_URL < sql/schema.sql"
   },
   "dependencies": {

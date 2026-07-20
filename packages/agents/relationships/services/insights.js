@@ -12,27 +12,31 @@ async function findAwaitingReplyContacts() {
     const { rows } = await db.query(`
       WITH last_msgs AS (
         SELECT DISTINCT ON (chat_id)
-          chat_id,
-          (data->'id'->>'fromMe')::boolean AS from_me,
-          data->>'body'                     AS body,
-          ts,
-          data->'_data'->>'notifyName'      AS display_name
-        FROM public.messages
-        WHERE chat_id LIKE '%@c.us'
+          rc.chat_id,
+          rc.source_id,
+          rc.direction,
+          rc.content_snippet AS body,
+          rc.occurred_at AS ts,
+          c.display_name
+        FROM relationships.communications rc
+        LEFT JOIN relationships.contacts c ON c.id = rc.contact_id
+        WHERE rc.source = 'whatsapp'
+          AND rc.is_group = FALSE
+          AND rc.chat_id LIKE '%@c.us'
           AND chat_id != $1
           AND chat_id != 'status@broadcast'
-          AND event IN ('message', 'message_create', 'message_historical')
-          AND data->>'body' IS NOT NULL
-          AND data->>'body' != ''
-        ORDER BY chat_id, ts DESC
+          AND NULLIF(rc.content_snippet, '') IS NOT NULL
+          AND COALESCE(rc.metadata->>'lineage_status', 'verified') <> 'quarantined_missing_raw'
+        ORDER BY rc.chat_id, rc.occurred_at DESC
       )
       SELECT
         chat_id,
+        source_id,
         body   AS last_msg_body,
         ts     AS last_msg_at,
         display_name
       FROM last_msgs
-      WHERE from_me = false
+      WHERE direction = 'inbound'
         AND ts < NOW() - INTERVAL '2 hours'
         AND ts > NOW() - INTERVAL '30 days'
       ORDER BY ts DESC
@@ -53,42 +57,28 @@ async function findActiveGroupsNotParticipating() {
     const { rows } = await db.query(`
       SELECT
         chat_id,
-        COUNT(*) FILTER (WHERE (data->'id'->>'fromMe')::boolean = false) AS their_msgs,
-        MAX(ts) AS last_msg_at
-      FROM public.messages
-      WHERE chat_id LIKE '%@g.us'
-        AND event IN ('message', 'message_create', 'message_historical')
-        AND ts > NOW() - INTERVAL '7 days'
+        COUNT(*) FILTER (WHERE direction = 'inbound') AS their_msgs,
+        MAX(occurred_at) AS last_msg_at,
+        (ARRAY_AGG(source_id ORDER BY occurred_at DESC)
+          FILTER (WHERE direction = 'inbound'))[1:5] AS source_refs,
+        JSONB_AGG(JSONB_BUILD_OBJECT(
+          'body', content_snippet,
+          'ts', occurred_at,
+          'notify_name', metadata->>'author_name'
+        ) ORDER BY occurred_at DESC) FILTER (WHERE direction = 'inbound') AS sample_msgs
+      FROM relationships.communications
+      WHERE source = 'whatsapp'
+        AND is_group = TRUE
+        AND chat_id LIKE '%@g.us'
+        AND occurred_at > NOW() - INTERVAL '7 days'
+        AND COALESCE(metadata->>'lineage_status', 'verified') <> 'quarantined_missing_raw'
       GROUP BY chat_id
       HAVING
-        COUNT(*) FILTER (WHERE (data->'id'->>'fromMe')::boolean = true) = 0
-        AND COUNT(*) FILTER (WHERE (data->'id'->>'fromMe')::boolean = false) > 3
-      ORDER BY MAX(ts) DESC
+        COUNT(*) FILTER (WHERE direction = 'outbound') = 0
+        AND COUNT(*) FILTER (WHERE direction = 'inbound') > 3
+      ORDER BY MAX(occurred_at) DESC
     `)
-
-    // For each group, fetch a sample of recent messages
-    const results = []
-    for (const row of rows) {
-      try {
-        const { rows: msgs } = await db.query(`
-          SELECT
-            data->>'body' AS body,
-            ts,
-            data->'_data'->>'notifyName' AS notify_name
-          FROM public.messages
-          WHERE chat_id = $1
-            AND event IN ('message', 'message_create', 'message_historical')
-            AND data->>'body' IS NOT NULL
-            AND data->>'body' != ''
-          ORDER BY ts DESC
-          LIMIT 5
-        `, [row.chat_id])
-        results.push({ ...row, sample_msgs: msgs })
-      } catch {
-        results.push({ ...row, sample_msgs: [] })
-      }
-    }
-    return results
+    return rows.map(row => ({ ...row, sample_msgs: (row.sample_msgs || []).slice(0, 5) }))
   } catch (err) {
     console.error('[insights] findActiveGroupsNotParticipating error:', err.message)
     return []

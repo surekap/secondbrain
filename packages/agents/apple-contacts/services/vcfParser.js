@@ -1,6 +1,7 @@
 'use strict';
 
 const vCard = require('vcf');
+const { normalizeEmails, normalizePhones, rawValues } = require('./normalization');
 
 /**
  * Parse a .vcf file string into an array of normalized contact objects.
@@ -31,7 +32,8 @@ function normalizeCard(card) {
   // UID — stable ID; prefix vcf: to avoid collisions with native Apple IDs
   let uid = get('uid');
   const fn = get('fn') || '';
-  const emails = getAll('email').map(e => e.toLowerCase().trim()).filter(Boolean);
+  const rawEmails = rawValues(getAll('email'));
+  const emails = normalizeEmails(rawEmails);
 
   if (!uid) {
     // deterministic fallback from FN + first email
@@ -58,11 +60,8 @@ function normalizeCard(card) {
 
   if (!displayName) return null; // skip empty cards
 
-  // Phone numbers — digits only, keep last 10
-  const phoneNumbers = getAll('tel')
-    .map(t => t.replace(/\D/g, ''))
-    .filter(t => t.length >= 7)
-    .map(t => t.slice(-10));
+  const rawPhoneNumbers = rawValues(getAll('tel'));
+  const phoneNumbers = normalizePhones(rawPhoneNumbers);
 
   // Company
   const org = get('org');
@@ -93,6 +92,8 @@ function normalizeCard(card) {
     company,
     job_title:        jobTitle,
     avatar_data:      avatarData,
+    raw_emails:       rawEmails,
+    raw_phone_numbers: rawPhoneNumbers,
   };
 }
 

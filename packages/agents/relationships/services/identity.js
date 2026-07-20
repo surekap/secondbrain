@@ -5,9 +5,15 @@ function normalizeIdentityValue(identityType, value) {
   let v = String(value).trim()
   if (!v) return null
   if (identityType === 'email') v = v.toLowerCase()
-  if (identityType === 'wa_jid') v = v.toLowerCase()
-  if (identityType === 'phone') v = v.replace(/[^0-9+]/g, '')
-  if (identityType === 'phone' && v.startsWith('+')) v = v.slice(1)
+  if (identityType === 'wa_jid') {
+    v = v.toLowerCase().replace(/@s\.whatsapp\.net$/, '@c.us')
+    if (!/^(?:[1-9]\d{6,14}@c\.us|[1-9]\d{6,20}@lid)$/.test(v)) return null
+  }
+  if (identityType === 'phone') {
+    v = v.replace(/[^0-9+]/g, '')
+    if (v.startsWith('+')) v = v.slice(1)
+    if (!/^[1-9]\d{6,14}$/.test(v)) return null
+  }
   return v || null
 }
 
@@ -70,6 +76,70 @@ async function ensureIdentitySchema(pool) {
     CREATE INDEX IF NOT EXISTS contact_identities_contact_idx
       ON relationships.contact_identities (contact_id, is_active);
   `)
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS relationships.identity_conflicts (
+      id                  BIGSERIAL PRIMARY KEY,
+      source              TEXT NOT NULL,
+      identity_type       TEXT NOT NULL,
+      identity_value      TEXT NOT NULL,
+      existing_contact_id BIGINT NOT NULL REFERENCES relationships.contacts(id) ON DELETE CASCADE,
+      claimed_contact_id  BIGINT NOT NULL REFERENCES relationships.contacts(id) ON DELETE CASCADE,
+      status              TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','resolved','ignored')),
+      occurrences         INT NOT NULL DEFAULT 1,
+      metadata            JSONB NOT NULL DEFAULT '{}',
+      first_seen_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      last_seen_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      resolved_at         TIMESTAMPTZ
+    );
+  `)
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS identity_conflicts_pending_idx
+      ON relationships.identity_conflicts (
+        source, identity_type, identity_value, existing_contact_id, claimed_contact_id
+      ) WHERE status = 'pending';
+  `)
+  await pool.query(`
+    UPDATE relationships.identity_conflicts conflict
+    SET status = 'resolved',
+        resolved_at = NOW(),
+        metadata = conflict.metadata || jsonb_build_object(
+          'resolved_reason', 'inactive_duplicate_claim',
+          'resolved_to_contact_id', conflict.existing_contact_id::text
+        )
+    FROM relationships.contacts existing_contact,
+         relationships.contacts claimed_contact
+    WHERE conflict.status = 'pending'
+      AND existing_contact.id = conflict.existing_contact_id
+      AND claimed_contact.id = conflict.claimed_contact_id
+      AND existing_contact.is_noise IS DISTINCT FROM TRUE
+      AND claimed_contact.is_noise = TRUE
+  `)
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS relationships.contact_merge_redirects (
+      from_contact_id BIGINT PRIMARY KEY REFERENCES relationships.contacts(id) ON DELETE CASCADE,
+      to_contact_id   BIGINT NOT NULL REFERENCES relationships.contacts(id) ON DELETE RESTRICT,
+      reason          TEXT NOT NULL,
+      metadata        JSONB NOT NULL DEFAULT '{}',
+      merged_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      CHECK (from_contact_id <> to_contact_id)
+    );
+  `)
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS contact_merge_redirects_target_idx
+      ON relationships.contact_merge_redirects (to_contact_id);
+  `)
+  await pool.query(`
+    UPDATE relationships.contact_identities
+    SET is_active = FALSE,
+        metadata = COALESCE(metadata, '{}'::jsonb) ||
+                   jsonb_build_object('deactivated_reason', 'invalid_stable_identity'),
+        updated_at = NOW()
+    WHERE is_active = TRUE
+      AND (
+        (identity_type = 'wa_jid' AND identity_value !~ '^([1-9][0-9]{6,14}@c\\.us|[1-9][0-9]{6,20}@lid)$')
+        OR (identity_type = 'phone' AND identity_value !~ '^[1-9][0-9]{6,14}$')
+      )
+  `)
 }
 
 async function findContactByIdentity(pool, identity) {
@@ -90,17 +160,12 @@ async function findContactByIdentity(pool, identity) {
 async function upsertContactIdentity(pool, contactId, identity) {
   const normalized = normalizeIdentity(identity)
   if (!normalized || !contactId) return null
-  const { rows } = await pool.query(`
+  const { rows: inserted } = await pool.query(`
     INSERT INTO relationships.contact_identities (
       contact_id, source, identity_type, identity_value, confidence, verified_by, metadata
     ) VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)
     ON CONFLICT (source, identity_type, identity_value) WHERE is_active
-    DO UPDATE SET
-      contact_id  = EXCLUDED.contact_id,
-      confidence  = GREATEST(COALESCE(relationships.contact_identities.confidence, 0), COALESCE(EXCLUDED.confidence, 0)),
-      verified_by = EXCLUDED.verified_by,
-      metadata    = relationships.contact_identities.metadata || EXCLUDED.metadata,
-      updated_at  = NOW()
+    DO NOTHING
     RETURNING *
   `, [
     contactId,
@@ -111,7 +176,53 @@ async function upsertContactIdentity(pool, contactId, identity) {
     normalized.verified_by,
     JSON.stringify(normalized.metadata || {}),
   ])
-  return rows[0] || null
+  if (inserted[0]) return inserted[0]
+
+  const { rows: owners } = await pool.query(`
+    SELECT *
+    FROM relationships.contact_identities
+    WHERE source = $1
+      AND identity_type = $2
+      AND identity_value = $3
+      AND is_active = TRUE
+    LIMIT 1
+  `, [normalized.source, normalized.identity_type, normalized.identity_value])
+  const owner = owners[0]
+  if (!owner) return null
+
+  if (String(owner.contact_id) === String(contactId)) {
+    const { rows } = await pool.query(`
+      UPDATE relationships.contact_identities
+      SET confidence  = GREATEST(COALESCE(confidence, 0), COALESCE($2::numeric, 0)),
+          verified_by = $3,
+          metadata    = metadata || $4::jsonb,
+          updated_at  = NOW()
+      WHERE id = $1
+      RETURNING *
+    `, [owner.id, normalized.confidence, normalized.verified_by, JSON.stringify(normalized.metadata || {})])
+    return rows[0] || owner
+  }
+
+  await pool.query(`
+    INSERT INTO relationships.identity_conflicts (
+      source, identity_type, identity_value, existing_contact_id, claimed_contact_id, metadata
+    ) VALUES ($1, $2, $3, $4, $5, $6::jsonb)
+    ON CONFLICT (source, identity_type, identity_value, existing_contact_id, claimed_contact_id)
+      WHERE status = 'pending'
+    DO UPDATE SET
+      occurrences = relationships.identity_conflicts.occurrences + 1,
+      metadata = relationships.identity_conflicts.metadata || EXCLUDED.metadata,
+      last_seen_at = NOW()
+  `, [
+    normalized.source,
+    normalized.identity_type,
+    normalized.identity_value,
+    owner.contact_id,
+    contactId,
+    JSON.stringify(normalized.metadata || {}),
+  ])
+
+  return { ...owner, conflict: true, requested_contact_id: contactId }
 }
 
 async function recordContactIdentities(pool, contactId, identities = []) {
@@ -127,12 +238,35 @@ async function mergeContactRecords(pool, canonicalId, duplicateIds = [], options
   const duplicates = [...new Set((duplicateIds || []).map(id => String(id || '').trim()).filter(id => id && id !== canonical))]
   if (!canonical || !duplicates.length) return { canonical_id: canonical, duplicate_ids: [], merged: 0 }
 
-  const params = [canonical, duplicates]
-  const run = async (sql, extra = []) => pool.query(sql, params.concat(extra))
-
-  await pool.query('BEGIN')
+  const client = typeof pool.connect === 'function' ? await pool.connect() : pool
   try {
-    const { rows: contactRows } = await pool.query(`
+    await ensureIdentitySchema(client)
+  } catch (err) {
+    if (client !== pool && typeof client.release === 'function') client.release()
+    throw err
+  }
+  const params = [canonical, duplicates]
+  const run = async (sql, extra = []) => client.query(sql, params.concat(extra))
+  let savepointId = 0
+  const optionalSchemaError = err => /does not exist|relation .* does not exist|column .* does not exist/i.test(err.message)
+  const runOptional = async (sql, extra = []) => {
+    const savepoint = `merge_optional_${++savepointId}`
+    await client.query(`SAVEPOINT ${savepoint}`)
+    try {
+      const result = await run(sql, extra)
+      await client.query(`RELEASE SAVEPOINT ${savepoint}`)
+      return result
+    } catch (err) {
+      await client.query(`ROLLBACK TO SAVEPOINT ${savepoint}`)
+      await client.query(`RELEASE SAVEPOINT ${savepoint}`)
+      if (optionalSchemaError(err)) return null
+      throw err
+    }
+  }
+
+  await client.query('BEGIN')
+  try {
+    const { rows: contactRows } = await client.query(`
       SELECT id, display_name, normalized_name, emails, phone_numbers, wa_jids, tags,
              first_interaction_at, last_interaction_at, manual_overrides
       FROM relationships.contacts
@@ -141,6 +275,7 @@ async function mergeContactRecords(pool, canonicalId, duplicateIds = [], options
     `, params)
     const canonicalRow = contactRows.find(r => String(r.id) === canonical)
     if (!canonicalRow) throw new Error(`Canonical contact ${canonical} not found`)
+    const canonicalOverrides = canonicalRow.manual_overrides || {}
 
     await run(`
       UPDATE relationships.contacts c SET
@@ -150,7 +285,7 @@ async function mergeContactRecords(pool, canonicalId, duplicateIds = [], options
         tags = ARRAY(SELECT DISTINCT unnest(c.tags || COALESCE(src.tags, '{}'))),
         first_interaction_at = LEAST(c.first_interaction_at, src.first_interaction_at),
         last_interaction_at = GREATEST(c.last_interaction_at, src.last_interaction_at),
-        manual_overrides = COALESCE(c.manual_overrides, '{}'::jsonb) || COALESCE(src.manual_overrides, '{}'::jsonb),
+        manual_overrides = COALESCE(src.manual_overrides, '{}'::jsonb) || COALESCE(c.manual_overrides, '{}'::jsonb),
         updated_at = NOW()
       FROM (
         SELECT ARRAY_AGG(DISTINCT e) FILTER (WHERE e IS NOT NULL) AS emails,
@@ -159,7 +294,7 @@ async function mergeContactRecords(pool, canonicalId, duplicateIds = [], options
                ARRAY_AGG(DISTINCT t) FILTER (WHERE t IS NOT NULL) AS tags,
                MIN(first_interaction_at) AS first_interaction_at,
                MAX(last_interaction_at) AS last_interaction_at,
-               jsonb_object_agg(k, v) FILTER (WHERE k IS NOT NULL) AS manual_overrides
+               jsonb_object_agg(k, v ORDER BY dup.id DESC) FILTER (WHERE k IS NOT NULL) AS manual_overrides
         FROM relationships.contacts dup
         LEFT JOIN LATERAL unnest(dup.emails) e ON TRUE
         LEFT JOIN LATERAL unnest(dup.phone_numbers) p ON TRUE
@@ -241,9 +376,7 @@ async function mergeContactRecords(pool, canonicalId, duplicateIds = [], options
          AND COALESCE(d.role, 'mentioned') = COALESCE(c.role, 'mentioned')`,
     ]
     for (const sql of conflictDeletes) {
-      try { await run(sql) } catch (err) {
-        if (!/does not exist|relation .* does not exist|column .* does not exist/i.test(err.message)) throw err
-      }
+      await runOptional(sql)
     }
 
     const updateTables = [
@@ -255,21 +388,19 @@ async function mergeContactRecords(pool, canonicalId, duplicateIds = [], options
       ['relationships.contact_research', 'contact_id'],
       ['relationships.insights', 'contact_id'],
       ['intelligence.signals', 'contact_id'],
+      ['intelligence.communication_events', 'source_contact_id'],
       ['intelligence.opportunities', 'primary_contact_id'],
       ['intelligence.contact_organizations', 'contact_id'],
       ['intelligence.opportunity_contacts', 'contact_id'],
+      ['projects.project_communications', 'contact_id'],
+      ['projects.communication_classifications', 'contact_id'],
     ]
 
     for (const [table, column] of updateTables) {
-      try {
-        await run(`UPDATE ${table} SET ${column} = $1::bigint WHERE ${column}::text = ANY($2::text[])`)
-      } catch (err) {
-        if (!/does not exist|relation .* does not exist|column .* does not exist/i.test(err.message)) throw err
-      }
+      await runOptional(`UPDATE ${table} SET ${column} = $1::bigint WHERE ${column}::text = ANY($2::text[])`)
     }
 
-    try {
-      await run(`
+    await runOptional(`
         UPDATE relationships.insights
         SET contact_ids = ARRAY(
           SELECT DISTINCT CASE WHEN x::text = ANY($2::text[]) THEN $1::bigint ELSE x END
@@ -277,34 +408,48 @@ async function mergeContactRecords(pool, canonicalId, duplicateIds = [], options
         )
         WHERE contact_ids && (SELECT ARRAY_AGG(x::bigint) FROM unnest($2::text[]) x)
       `)
-    } catch (err) {
-      if (!/does not exist|column .* does not exist/i.test(err.message)) throw err
-    }
 
-    try {
-      await run(`
+    await runOptional(`
+        UPDATE projects.projects
+        SET key_contact_ids = ARRAY(
+          SELECT DISTINCT CASE WHEN x::text = ANY($2::text[]) THEN $1::bigint ELSE x END
+          FROM unnest(COALESCE(key_contact_ids, '{}')) x
+        ),
+        updated_at = NOW()
+        WHERE COALESCE(key_contact_ids, '{}') &&
+              (SELECT ARRAY_AGG(x::bigint) FROM unnest($2::text[]) x)
+      `)
+
+    await runOptional(`
         UPDATE intelligence.entity_aliases
         SET entity_id = $1
         WHERE entity_type = 'contact' AND entity_id = ANY($2::text[])
       `)
-    } catch (err) {
-      if (!/does not exist|relation .* does not exist/i.test(err.message)) throw err
-    }
 
-    try {
-      await run(`
+    await runOptional(`
         UPDATE intelligence.object_topics
         SET object_id = $1
         WHERE object_type = 'contact' AND object_id = ANY($2::text[])
       `)
-    } catch (err) {
-      if (!/does not exist|relation .* does not exist/i.test(err.message)) throw err
-    }
+
+    const semanticScopeUpdates = [
+      `UPDATE intelligence.claims SET subject_id = $1, updated_at = NOW()
+       WHERE subject_type = 'contact' AND subject_id = ANY($2::text[])`,
+      `UPDATE intelligence.claims SET object_id = $1, updated_at = NOW()
+       WHERE object_type = 'contact' AND object_id = ANY($2::text[])`,
+      `UPDATE intelligence.guidance_facts SET scope_id = $1, updated_at = NOW()
+       WHERE scope_type = 'contact' AND scope_id = ANY($2::text[])`,
+      `UPDATE intelligence.clarification_questions SET scope_id = $1, updated_at = NOW()
+       WHERE scope_type = 'contact' AND scope_id = ANY($2::text[])`,
+      `UPDATE intelligence.opportunity_suppressions SET scope_id = $1
+       WHERE scope_type = 'contact' AND scope_id = ANY($2::text[])`,
+    ]
+    for (const sql of semanticScopeUpdates) await runOptional(sql)
 
     await run(`UPDATE relationships.contact_identities SET contact_id = $1::bigint, updated_at = NOW() WHERE contact_id::text = ANY($2::text[])`)
 
     // Remove duplicate comm rows created by previous polluted contact IDs, keeping the canonical/oldest row.
-    await pool.query(`
+    await client.query(`
       DELETE FROM relationships.communications c
       USING relationships.communications keeper
       WHERE c.id > keeper.id
@@ -323,11 +468,53 @@ async function mergeContactRecords(pool, canonicalId, duplicateIds = [], options
       WHERE id::text = ANY($2::text[])
     `)
 
+    for (const duplicateId of duplicates) {
+      const duplicateRow = contactRows.find(row => String(row.id) === duplicateId)
+      const duplicateOverrides = duplicateRow?.manual_overrides || {}
+      const manualOverrideConflicts = Object.keys(duplicateOverrides)
+        .filter(key => Object.prototype.hasOwnProperty.call(canonicalOverrides, key))
+        .filter(key => JSON.stringify(duplicateOverrides[key]) !== JSON.stringify(canonicalOverrides[key]))
+        .map(key => ({ key, canonical_value: canonicalOverrides[key], duplicate_value: duplicateOverrides[key] }))
+      await client.query(`
+        INSERT INTO relationships.contact_merge_redirects (
+          from_contact_id, to_contact_id, reason, metadata
+        ) VALUES ($1::bigint, $2::bigint, $3, $4::jsonb)
+        ON CONFLICT (from_contact_id) DO UPDATE SET
+          to_contact_id = EXCLUDED.to_contact_id,
+          reason = EXCLUDED.reason,
+          metadata = relationships.contact_merge_redirects.metadata || EXCLUDED.metadata,
+          merged_at = NOW()
+      `, [
+        duplicateId,
+        canonical,
+        options.note || 'Exact source identity merge',
+        JSON.stringify({
+          duplicate_key: options.duplicate_key || null,
+          decided_by: options.decided_by || 'system',
+          from_snapshot: duplicateRow || {},
+          manual_override_conflicts: manualOverrideConflicts,
+          conflict_resolution: 'canonical_value_preserved',
+        }),
+      ])
+    }
+
+    await runOptional(`
+      UPDATE relationships.identity_conflicts
+      SET status = 'resolved',
+          resolved_at = NOW(),
+          metadata = metadata || jsonb_build_object('resolved_to_contact_id', $1::text)
+      WHERE status = 'pending'
+        AND (
+          existing_contact_id::text = ANY($2::text[])
+          OR claimed_contact_id::text = ANY($2::text[])
+        )
+    `)
+
     if (options.recordDecision !== false) {
       const key = options.duplicate_key || `exact_identity:${canonical}:${duplicates.join(',')}`
-      await pool.query(`
+      await runOptional(`
         INSERT INTO intelligence.duplicate_decisions (entity_type, duplicate_key, action, canonical_id, duplicate_ids, decided_by, note)
-        VALUES ('contact', $1, 'confirmed', $2, $3::text[], $4, $5)
+        VALUES ('contact', $3, 'confirmed', $1, $2::text[], $4, $5)
         ON CONFLICT (entity_type, duplicate_key) DO UPDATE SET
           action = EXCLUDED.action,
           canonical_id = EXCLUDED.canonical_id,
@@ -335,14 +522,16 @@ async function mergeContactRecords(pool, canonicalId, duplicateIds = [], options
           decided_by = EXCLUDED.decided_by,
           note = EXCLUDED.note,
           decided_at = NOW()
-      `, [key, canonical, [canonical, ...duplicates], options.decided_by || 'system', options.note || 'Exact source identity merge'])
+      `, [key, options.decided_by || 'system', options.note || 'Exact source identity merge'])
     }
 
-    await pool.query('COMMIT')
+    await client.query('COMMIT')
     return { canonical_id: canonical, duplicate_ids: duplicates, merged: duplicates.length }
   } catch (err) {
-    await pool.query('ROLLBACK')
+    await client.query('ROLLBACK')
     throw err
+  } finally {
+    if (client !== pool && typeof client.release === 'function') client.release()
   }
 }
 

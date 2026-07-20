@@ -20,6 +20,17 @@ test('intelligence-integration: runIntelligenceServices is exported', async () =
   assert.ok(typeof runIntelligenceServices === 'function', 'index.js should export runIntelligenceServices');
 });
 
+test('intelligence schema readiness is tracked per database interface', async () => {
+  const { ensureSchema } = require('../index.js');
+  const calls = [];
+  const first = { query: async sql => { calls.push(['first', sql]); return { rows: [] }; } };
+  const second = { query: async sql => { calls.push(['second', sql]); return { rows: [] }; } };
+  await ensureSchema(first);
+  await ensureSchema(first);
+  await ensureSchema(second);
+  assert.deepStrictEqual(calls.map(([name]) => name), ['first', 'second']);
+});
+
 test('intelligence-integration: services handle empty arrays gracefully', async () => {
   const { extractSignals } = require('../services/signal-extractor');
   const { backfillOpportunities } = require('../services/backfill');

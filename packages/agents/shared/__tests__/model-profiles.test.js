@@ -5,17 +5,35 @@ const assert = require('node:assert')
 const { MODEL_PROFILES, getProfilePolicy } = require('../model-profiles')
 const { _internals } = require('../llm')
 
-test('bulk structured work prefers Luna and retains cross-provider fallbacks', () => {
+test('bulk structured work is pinned to Luna and fails closed without it', () => {
   const policy = getProfilePolicy('bulk_structured')
-  assert.deepStrictEqual(policy.map(p => p.provider_type), ['openai', 'gemini', 'anthropic'])
+  assert.deepStrictEqual(policy.map(p => p.provider_type), ['openai'])
   assert.strictEqual(policy[0].model, 'gpt-5.6-luna')
   assert.strictEqual(policy[0].reasoning_effort, 'low')
 })
 
-test('reasoning and tool profiles use Sol without routing every workload to it', () => {
-  assert.strictEqual(MODEL_PROFILES.reasoning_synthesis[0].model, 'gpt-5.6-sol')
+test('synthesis uses Terra while autonomous tools retain Sol', () => {
+  assert.deepStrictEqual(MODEL_PROFILES.reasoning_synthesis.map(p => p.provider_type), ['openai'])
+  assert.strictEqual(MODEL_PROFILES.reasoning_synthesis[0].model, 'gpt-5.6-terra')
+  assert.strictEqual(MODEL_PROFILES.reasoning_synthesis[0].reasoning_effort, 'high')
   assert.strictEqual(MODEL_PROFILES.autonomous_tools[0].model, 'gpt-5.6-sol')
   assert.strictEqual(MODEL_PROFILES.bulk_structured[0].model, 'gpt-5.6-luna')
+})
+
+test('automated profiles do not wake local Ollama models as a fallback', () => {
+  for (const profile of ['bulk_structured', 'reasoning_synthesis', 'autonomous_tools']) {
+    assert.equal(MODEL_PROFILES[profile].some(candidate => candidate.provider_type === 'ollama'), false)
+  }
+})
+
+test('profiled workloads do not use the legacy Anthropic environment fallback', () => {
+  const source = require('node:fs').readFileSync(require.resolve('../llm'), 'utf8')
+  const emptyProviderBranch = source.slice(
+    source.indexOf('if (providers.length === 0)'),
+    source.indexOf('const errors = []'),
+  )
+  assert.match(emptyProviderBranch, /if \(profile\)[\s\S]+no eligible providers configured for profile/)
+  assert.ok(emptyProviderBranch.indexOf('if (profile)') < emptyProviderBranch.indexOf('ANTHROPIC_API_KEY'))
 })
 
 test('unknown profiles fail closed', () => {

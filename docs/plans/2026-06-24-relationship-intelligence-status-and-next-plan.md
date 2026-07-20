@@ -1,5 +1,10 @@
 # Relationship Intelligence Status + Next Plan — 2026-06-24
 
+> Historical document. It is not an operational runbook. The one-shot
+> `backfill-intelligence-*` and `backfill-communication-events` commands below
+> were retired by the 2026-07-20 canonical recovery. Use the durable recovery
+> and intelligence runners documented in `docs/architecture/README.md`.
+
 > **For Hermes:** Use `software-delivery-workflow` for implementation and verification. Use `subagent-driven-development` only after the server/API is reachable and the next slice is selected.
 
 **Goal:** Record what has actually shipped, what is verified from code, what is blocked in live runtime, and the next implementation sequence for SecondBrain’s relationship-intelligence / attention-allocation system.

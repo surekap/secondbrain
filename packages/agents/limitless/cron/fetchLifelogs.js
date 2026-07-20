@@ -85,7 +85,7 @@ async function run() {
 
   if (startDate > endDate) {
     console.log("Start date is after end date. Nothing to fetch.");
-    return;
+    return { fetched: 0, saved: 0, windows: 0 };
   }
 
   console.log(
@@ -94,6 +94,7 @@ async function run() {
 
   let totalFetched = 0;
   let totalSaved = 0;
+  let windows = 0;
   let windowStart = new Date(startDate);
 
   while (windowStart <= endDate) {
@@ -105,6 +106,7 @@ async function run() {
 
     const apiStart = toApiDate(windowStart);
     const apiEnd = toApiDate(windowEnd);
+    windows += 1;
     console.log(`Fetching window: ${apiStart} -> ${apiEnd}`);
 
     const lifelogs = await getLifelogs({
@@ -130,6 +132,7 @@ async function run() {
   }
 
   console.log(`Done. Fetched ${totalFetched} and attempted to save ${totalSaved} lifelogs.`);
+  return { fetched: totalFetched, saved: totalSaved, windows };
 }
 
 if (require.main === module) {

@@ -69,6 +69,13 @@ const BULK_SUBJECT_PATTERNS = [
   /\bdisaster recovery drill\b/i,
   /\bmay updates?\b/i,
   /\bwhat'?s new\b/i,
+  /\bchanges?\b.*\b(?:legal agreements?|terms|polic(?:y|ies))\b/i,
+  /\border\s+(?:#?\d+[a-z0-9-]*\s+)?confirmed\b/i,
+  /\border confirmation\b/i,
+  /\blatest col+aterals?\b/i,
+  /\bstatus update on your payment\b/i,
+  /\breminder\b.*\b(?:tomorrow|webinar|symposium|conference|event)\b/i,
+  /\bpre-reads?\b.*\b(?:meeting|discussion|session)\b/i,
 ]
 
 const BULK_BODY_PATTERNS = [
@@ -180,6 +187,8 @@ function detectStaleEmailThreads(emails, options = {}) {
       thread_key: key,
       latest_email_id: String(latest.id),
       latest_action_email_id: String(latestAction.id),
+      latest_canonical_communication_id: latest.canonical_communication_id || null,
+      latest_action_canonical_communication_id: latestAction.canonical_communication_id || null,
       subject: stripReplyPrefix(latest.subject || latestAction.subject || 'Email thread'),
       from_address: latest.from_address || null,
       latest_at: latestAt.toISOString(),

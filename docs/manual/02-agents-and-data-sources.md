@@ -85,8 +85,8 @@ You do not need to keep clicking buttons all day. Once configured, they keep the
 ### What it does
 
 - fetches Limitless lifelogs
-- processes them with an AI provider
-- stores the results in the database
+- stores them as immutable source evidence
+- leaves semantic analysis to the relationship and intelligence pipelines
 
 ### Why it is useful
 
@@ -96,11 +96,8 @@ You do not need to keep clicking buttons all day. Once configured, they keep the
 ### What you configure
 
 - Limitless API key
-- preferred AI provider
 - fetch interval
-- process interval
 - number of days to fetch
-- batch size
 
 ### Schedule
 

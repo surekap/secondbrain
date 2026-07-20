@@ -66,9 +66,35 @@ This starts:
 
 Open `http://localhost:4000` in your browser.
 
+The listeners are loopback-only by default. For remote access from another device on your tailnet, keep those bindings private and expose the main UI with Tailscale Serve:
+
+```bash
+tailscale serve --bg --https=443 http://127.0.0.1:4000
+tailscale serve status
+```
+
+If port 443 is already occupied, use Tailscale's supported 8443 port and include
+it in the browser URL:
+
+```bash
+tailscale serve --bg --https=8443 http://127.0.0.1:4000
+```
+
+Add the exact HTTPS URL reported by Tailscale to `.env.local` and restart the app:
+
+```env
+SECOND_BRAIN_ALLOWED_ORIGINS=https://your-mac.your-tailnet.ts.net
+```
+
+For the 8443 form, use `https://your-mac.your-tailnet.ts.net:8443`.
+
+For the development server, also set `SECOND_BRAIN_ALLOWED_DEV_ORIGINS=your-mac.your-tailnet.ts.net`. Access control belongs in your Tailscale ACLs; ports 3000, 4000, and 4001 should not be opened directly.
+
 ## Step 3: let the app initialize the database
 
 On startup, the server automatically creates the main schemas it needs.
+
+It also restores the long-running Email, Limitless, Relationships, Projects, Intelligence, WhatsApp, and Sampler agents when their durable desired state is `running`. A Stop action is durable, so an intentionally stopped core agent stays stopped after a UI restart. Unexpected exits are retried with capped exponential backoff.
 
 That means you usually do not need to run manual SQL commands just to begin.
 
@@ -137,11 +163,11 @@ On the Limitless Agent card:
 
 1. Open the `Config` tab.
 2. Add your Limitless API key.
-3. Pick the AI provider it should use.
+3. Choose the fetch interval and history window.
 4. Save.
 5. Restart the agent if needed.
 
-The Limitless agent fetches new lifelogs every 5 minutes and processes batches every 30 seconds.
+The Limitless agent fetches new lifelogs every 5 minutes. Relationship and intelligence agents analyze the canonicalized evidence separately.
 
 ### WhatsApp
 

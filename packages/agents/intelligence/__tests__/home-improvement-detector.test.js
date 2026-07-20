@@ -48,3 +48,22 @@ test('combines home renovation lifelog and emails into one corroborated opportun
   assert.equal(opportunities[0].evidence.length, 2)
   assert.match(opportunities[0].why_now, /2026-06-23/)
 })
+
+test('uses the canonical communication id for canonical evidence', () => {
+  const opportunities = detectHomeImprovementOpportunities({
+    emails: [{
+      id: 991,
+      source_id: 'email:57354',
+      canonical_table: 'relationships.communications',
+      contact_id: 44,
+      subject: 'Home renovation services drawings',
+      occurred_at: '2026-06-17T10:00:00Z',
+      content_snippet: 'Electrical and plumbing drawings for the residence',
+    }],
+  })
+
+  assert.equal(opportunities[0].evidence[0].source_table, 'relationships.communications')
+  assert.equal(opportunities[0].evidence[0].source_id, 991)
+  assert.equal(opportunities[0].evidence[0].source_ref, 'email:57354')
+  assert.equal(opportunities[0].primary_contact_id, 44)
+})

@@ -5,166 +5,156 @@ const db        = require('@secondbrain/db')
 
 function parseJSON(text) {
   const clean = text.replace(/^```(?:json)?\n?/m, '').replace(/\n?```$/m, '').trim()
-  // If truncated, find the last complete object and close the array
   try {
     return JSON.parse(clean)
   } catch {
+    // Recover complete project objects from a truncated top-level array or
+    // { "projects": [...] } payload. Evidence validation below still rejects
+    // any incomplete or invented rows.
+    const firstBracket = clean.indexOf('[')
     const lastBrace = clean.lastIndexOf('}')
-    if (lastBrace === -1) throw new Error('No JSON objects found')
-    const truncated = clean.slice(0, lastBrace + 1) + '\n]'
-    return JSON.parse(truncated)
+    if (firstBracket === -1 || lastBrace < firstBracket) throw new Error('No JSON project objects found')
+    return JSON.parse(`${clean.slice(firstBracket, lastBrace + 1)}\n]`)
   }
 }
 
-/**
- * Gather raw data from all communication sources for project discovery.
- */
+function projectArrayFromPayload(payload) {
+  if (Array.isArray(payload)) return payload
+  if (payload && Array.isArray(payload.projects)) return payload.projects
+  throw new Error('Project discovery did not return a projects array')
+}
+
+const DISCOVERY_VERSION = 'canonical-project-discovery-v1'
+const OUTCOME_MARKER = /\b(approve|approved|build|built|buy|close|complete|completed|deliver|delivered|deploy|deployed|finali[sz]e|fix|fixed|implement|implemented|launch|launched|migrate|migrated|organize|organized|prepare|prepared|renew|renewed|resolve|resolved|sell|sign|signed|submit|submitted|target|deadline|milestone)\b/i
+
+function normalizeEvidenceText(value) {
+  return String(value || '').replace(/\s+/g, ' ').trim().toLowerCase()
+}
+
+function hasVerifiedOutcomeEvidence(raw, episodes) {
+  const evidence = raw?.outcome_evidence
+  const ref = String(evidence?.ref || '')
+  const quote = normalizeEvidenceText(evidence?.quote)
+  const completionTest = String(raw?.completion_test || '').trim()
+  if (!ref || quote.length < 12 || completionTest.length < 12 || !OUTCOME_MARKER.test(quote)) return false
+  const episode = episodes.find(candidate => String(candidate.source_id) === ref)
+  return Boolean(episode && normalizeEvidenceText(episode.content_snippet).includes(quote))
+}
+
+/** Gather evidence-bearing canonical episodes, never channel/contact names. */
 async function gatherDiscoveryData() {
-  // Email thread subjects (deduplicated, strip Re:/Fwd:)
-  const { rows: emailRows } = await db.query(`
-    SELECT
-      TRIM(REGEXP_REPLACE(subject, '^(Re|Fwd|FW|RE|FWD):\\s*', '', 'gi')) AS base_subject,
-      COUNT(*)                        AS thread_count,
-      MAX(date)                       AS most_recent
-    FROM email.emails
-    WHERE subject IS NOT NULL
-      AND subject != ''
-    GROUP BY base_subject
-    HAVING COUNT(*) >= 1
-    ORDER BY thread_count DESC, most_recent DESC
-    LIMIT 150
+  const { rows: episodes } = await db.query(`
+    WITH eligible AS (
+      SELECT id, source, source_id, subject, LEFT(content_snippet, 500) AS content_snippet,
+             occurred_at, contact_id, chat_id, is_group,
+             ROW_NUMBER() OVER (PARTITION BY source ORDER BY occurred_at DESC NULLS LAST) AS recent_rank,
+             ROW_NUMBER() OVER (
+               PARTITION BY source, DATE_TRUNC('week', occurred_at)
+               ORDER BY occurred_at DESC NULLS LAST
+             ) AS weekly_rank
+      FROM relationships.communications
+      WHERE occurred_at > NOW() - INTERVAL '180 days'
+        AND NULLIF(content_snippet, '') IS NOT NULL
+        AND COALESCE(metadata->>'lineage_status', 'verified') <> 'quarantined_missing_raw'
+    )
+    SELECT id, source, source_id, subject, content_snippet, occurred_at,
+           contact_id, chat_id, is_group
+    FROM eligible
+    WHERE recent_rank <= 15 OR weekly_rank = 1
+    ORDER BY occurred_at DESC NULLS LAST
   `)
+  return { episodes }
+}
 
-  // Limitless lifelog titles — last 100
-  const { rows: lifelogRows } = await db.query(`
-    SELECT title, start_time
-    FROM limitless.lifelogs
-    WHERE title IS NOT NULL AND title != ''
-    ORDER BY start_time DESC
-    LIMIT 100
-  `)
-
-  // WhatsApp contact names + message count (chats with >5 text messages in last 90 days)
-  const { rows: waRows } = await db.query(`
-    SELECT
-      m.chat_id,
-      MAX(m.data->'_data'->>'notifyName')   AS notify_name,
-      COUNT(*)                              AS msg_count
-    FROM public.messages m
-    WHERE m.event IN ('message','message_create','message_historical')
-      AND m.msg_type = 'chat'
-      AND m.data->>'body' IS NOT NULL
-      AND length(m.data->>'body') > 3
-      AND m.chat_id LIKE '%@c.us'
-    GROUP BY m.chat_id
-    HAVING COUNT(*) > 5
-    ORDER BY COUNT(*) DESC
-    LIMIT 60
-  `)
-
-  // Also pull group chat names
-  const { rows: groupRows } = await db.query(`
-    SELECT
-      m.chat_id,
-      COUNT(*) AS msg_count
-    FROM public.messages m
-    WHERE m.event IN ('message','message_create','message_historical')
-      AND m.msg_type = 'chat'
-      AND m.data->>'body' IS NOT NULL
-      AND length(m.data->>'body') > 3
-      AND m.chat_id LIKE '%@g.us'
-    GROUP BY m.chat_id
-    HAVING COUNT(*) > 10
-    ORDER BY COUNT(*) DESC
-    LIMIT 30
-  `)
-
-  const emailSubjects = emailRows.map(r => ({
-    subject: r.base_subject,
-    count:   parseInt(r.thread_count, 10),
-    recent:  r.most_recent,
-  }))
-
-  const lifelogTitles = lifelogRows.map(r => ({
-    title: r.title,
-    date:  r.start_time,
-  }))
-
-  const whatsappChats = [
-    ...waRows.map(r => ({
-      chat_id:  r.chat_id,
-      name:     r.notify_name || r.chat_id.replace('@c.us', ''),
-      msg_count: parseInt(r.msg_count, 10),
-    })),
-    ...groupRows.map(r => ({
-      chat_id:  r.chat_id,
-      name:     r.chat_id.replace('@g.us', ' (group)'),
-      msg_count: parseInt(r.msg_count, 10),
-    })),
-  ]
-
-  return { emailSubjects, lifelogTitles, whatsappChats }
+function validateDiscoveredProjects(result, episodes, existingProjects) {
+  result = projectArrayFromPayload(result)
+  const allowedRefs = new Set(episodes.map(episode => String(episode.source_id)))
+  const existingById = new Map(existingProjects.map(project => [Number(project.id), project]))
+  const seen = new Set()
+  const out = []
+  for (const raw of result) {
+    const evidenceRefs = [...new Set((Array.isArray(raw?.evidence_refs) ? raw.evidence_refs : [])
+      .map(String)
+      .filter(ref => allowedRefs.has(ref)))]
+    if (!evidenceRefs.length) continue
+    const existingId = raw.existing_project_id == null ? null : Number(raw.existing_project_id)
+    const existing = Number.isFinite(existingId) ? existingById.get(existingId) : null
+    if (raw.existing_project_id != null && !existing) continue
+    if (!existing && !hasVerifiedOutcomeEvidence(raw, episodes)) continue
+    const name = String(existing?.name || raw.name || '').trim()
+    if (!name) continue
+    const key = existing ? `id:${existing.id}` : `new:${name.toLowerCase()}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push({
+      ...raw,
+      name,
+      status: ['active', 'stalled', 'completed', 'unknown'].includes(raw.status) ? raw.status : 'unknown',
+      health: ['on_track', 'at_risk', 'blocked', 'unknown'].includes(raw.health) ? raw.health : 'unknown',
+      priority: ['high', 'medium', 'low'].includes(raw.priority) ? raw.priority : 'medium',
+      existing_project_id: existing?.id || null,
+      evidence_refs: evidenceRefs,
+      discovery_version: DISCOVERY_VERSION,
+    })
+  }
+  return out.slice(0, 20)
 }
 
 /**
- * Ask Claude to discover projects from gathered communications data.
+ * Ask the configured reasoning model to discover projects from canonical data.
  * Returns array of project objects.
  */
 async function discoverProjects(data) {
-  const { emailSubjects, lifelogTitles, whatsappChats } = data
+  const episodes = data.episodes || []
 
-  // Load existing project names so Claude can reuse them instead of creating variants
-  let existingNames = []
-  try {
-    const { rows } = await db.query(`SELECT name FROM projects.projects WHERE is_archived = FALSE ORDER BY name`)
-    existingNames = rows.map(r => r.name)
-  } catch { /* non-fatal */ }
-
-  const emailList = emailSubjects.slice(0, 100).map(e =>
-    `- "${e.subject}" (${e.count} emails, last: ${e.recent ? new Date(e.recent).toLocaleDateString() : 'unknown'})`
+  // Load existing project names so the model can reuse them instead of creating variants
+  const { rows: existingProjects } = await db.query(`
+    SELECT id, name, description, status
+    FROM projects.projects WHERE is_archived = FALSE ORDER BY name
+  `)
+  const episodeList = episodes.map(episode =>
+    `- canonical_ref="${episode.source_id}" channel=${episode.source} date=${episode.occurred_at ? new Date(episode.occurred_at).toISOString() : 'unknown'} subject=${JSON.stringify(episode.subject || '')} text=${JSON.stringify(episode.content_snippet || '')}`
   ).join('\n')
 
-  const lifelogList = lifelogTitles.slice(0, 60).map(l =>
-    `- "${l.title}" (${l.date ? new Date(l.date).toLocaleDateString() : ''})`
-  ).join('\n')
-
-  const waList = whatsappChats.slice(0, 50).map(c =>
-    `- ${c.name} (${c.msg_count} messages)`
-  ).join('\n')
-
-  const existingList = existingNames.length > 0
-    ? `\nExisting projects (reuse these exact names if the topic matches — do NOT create a new entry for something already tracked):\n${existingNames.map(n => `- ${n}`).join('\n')}\n`
+  const existingList = existingProjects.length > 0
+    ? `\nExisting projects (use existing_project_id only for an exact semantic continuation):\n${existingProjects.map(project => `- id=${project.id} name=${JSON.stringify(project.name)} outcome=${JSON.stringify(project.description || '')}`).join('\n')}\n`
     : ''
 
   const today = new Date().toLocaleDateString('en-GB', { year: 'numeric', month: 'long', day: 'numeric' })
-  const prompt = `You are analyzing communications for a business person. Today is ${today}. Based on these email subjects, meeting transcripts, and WhatsApp conversations, identify the distinct projects, matters, or initiatives this person is managing.
+  const prompt = `You are analyzing communications for a business person. Today is ${today}. Based on these email subjects, meeting transcripts, and WhatsApp conversations, identify distinct outcome-bearing projects this person is managing.
 ${existingList}
 
-Email thread subjects (with frequency):
-${emailList || '(none)'}
+Canonical communication episodes:
+${episodeList || '(none)'}
 
-Meeting transcript titles (recent):
-${lifelogList || '(none)'}
-
-Active WhatsApp conversations:
-${waList || '(none)'}
-
-Return a JSON array of projects. Each project:
+Return one JSON object with a "projects" array. Each project in that array:
+{
+  "projects": [
 {
   "name": "Short project name",
+  "existing_project_id": "numeric existing id or null",
   "description": "1-2 sentence description of what this project is about",
   "status": "active|stalled|completed|unknown",
   "health": "on_track|at_risk|blocked|unknown",
   "priority": "high|medium|low",
   "tags": ["tag1"],
-  "keywords": ["keyword1", "keyword2"]
+  "keywords": ["keyword1", "keyword2"],
+  "evidence_refs": ["exact canonical_ref value"],
+  "completion_test": "Concrete observable condition that would complete this project",
+  "outcome_evidence": {"ref":"exact canonical_ref value","quote":"verbatim excerpt proving a deliverable, milestone, decision, deadline, or intended completion"}
+}
+  ]
 }
 
 Guidelines:
 - Be specific — "Hartex SAP Implementation" not just "SAP"
+- A project must have an intended outcome, owner or stakeholders, and a lifecycle. Treat broad themes, relationships, recurring channels, and general interests as topics, not projects.
 - Merge very similar topics (e.g. "SAP HANA" and "SAP Implementation" are one project)
 - Ignore noise (one-off unrelated messages)
-- Max 20 projects
+- Max 10 projects
+- Every project must cite direct supporting canonical_ref values. A channel name, contact name, or recurring topic alone is not evidence of a project.
+- A genuinely new project must include a concrete completion_test and outcome_evidence. The quote must be copied verbatim from the cited episode and must itself show a deliverable, milestone, decision, deadline, or intended completion. Do not invent a target from general activity.
+- For an existing project, return its exact numeric existing_project_id. Never infer identity from a similar name. Use null for genuinely new outcomes.
 - keywords should be words or phrases that would appear in communications related to this project
 - For status: use "active" only if there is evidence of recent activity (within the last few months relative to today's date); use "stalled" if activity has gone quiet; use "completed" if the matter appears to have concluded; use "unknown" if unclear
 - For health: assess based on tone and recency of activity
@@ -175,17 +165,25 @@ Guidelines:
       profile: 'reasoning_synthesis',
       task_type: 'project_discovery_json',
       workflow_name: 'project_discovery',
-      max_tokens: 4096,
+      max_tokens: 1800,
       messages: [{ role: 'user', content: prompt }],
     })
 
     const text = response.text || ''
     const result = parseJSON(text)
-    return Array.isArray(result) ? result : []
+    return validateDiscoveredProjects(result, episodes, existingProjects)
   } catch (err) {
     console.error('[discoverer] discoverProjects error:', err.message)
-    return []
+    throw err
   }
 }
 
-module.exports = { gatherDiscoveryData, discoverProjects }
+module.exports = {
+  DISCOVERY_VERSION,
+  discoverProjects,
+  gatherDiscoveryData,
+  hasVerifiedOutcomeEvidence,
+  parseJSON,
+  projectArrayFromPayload,
+  validateDiscoveredProjects,
+}

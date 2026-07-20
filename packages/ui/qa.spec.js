@@ -243,16 +243,6 @@ test('limitless config form — FETCH_INTERVAL_CRON field present', async ({ pag
   await expect(page.locator('#form-limitless [name="FETCH_INTERVAL_CRON"]')).toBeVisible();
 });
 
-test('limitless config form — PROCESS_INTERVAL_CRON field present', async ({ page }) => {
-  await page.goto(BASE);
-  await page.waitForSelector('.agent-section', { timeout: 5000 });
-
-  await page.locator('.agent-section[data-id="limitless"] .panel-toggle').first().click();
-  await page.waitForSelector('#form-limitless', { timeout: 3000 });
-
-  await expect(page.locator('#form-limitless [name="PROCESS_INTERVAL_CRON"]')).toBeVisible();
-});
-
 test('limitless config form — FETCH_DAYS field present', async ({ page }) => {
   await page.goto(BASE);
   await page.waitForSelector('.agent-section', { timeout: 5000 });
@@ -263,18 +253,6 @@ test('limitless config form — FETCH_DAYS field present', async ({ page }) => {
   const fetchDaysInput = page.locator('#form-limitless [name="FETCH_DAYS"]');
   await expect(fetchDaysInput).toBeVisible();
   await expect(fetchDaysInput).toHaveValue('1');
-});
-
-test('limitless config form — PROCESSING_BATCH_SIZE field present', async ({ page }) => {
-  await page.goto(BASE);
-  await page.waitForSelector('.agent-section', { timeout: 5000 });
-
-  await page.locator('.agent-section[data-id="limitless"] .panel-toggle').first().click();
-  await page.waitForSelector('#form-limitless', { timeout: 3000 });
-
-  const batchInput = page.locator('#form-limitless [name="PROCESSING_BATCH_SIZE"]');
-  await expect(batchInput).toBeVisible();
-  await expect(batchInput).toHaveValue('15');
 });
 
 // ── g. Add Gmail account ───────────────────────────────────────────────────────
@@ -653,9 +631,7 @@ test('API — GET /api/config returns valid JSON with expected shape', async ({ 
   expect(body.email).toHaveProperty('MAILBOX');
   expect(body.limitless).toHaveProperty('LIMITLESS_API_KEY');
   expect(body.limitless).toHaveProperty('FETCH_INTERVAL_CRON');
-  expect(body.limitless).toHaveProperty('PROCESS_INTERVAL_CRON');
   expect(body.limitless).toHaveProperty('FETCH_DAYS');
-  expect(body.limitless).toHaveProperty('PROCESSING_BATCH_SIZE');
 });
 
 test('API — GET /api/agents/email/logs returns valid JSON', async ({ request }) => {

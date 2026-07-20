@@ -3,7 +3,9 @@
   "version": "1.0.0",
   "private": true,
   "main": "index.js",
-  "scripts": {},
+  "scripts": {
+    "test": "node --test __tests__/*.test.js"
+  },
   "dependencies": {
     "vcf": "^2.1.1",
     "dotenv": "^16.0.0",

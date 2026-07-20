@@ -5,7 +5,7 @@ require('dotenv').config({ path: require('path').resolve(__dirname, '../../../.e
 
 const cron = require('node-cron')
 const db   = require('@secondbrain/db')
-const { cleanupOrphanedRuns, killDuplicateProcesses } = require('../shared/cleanup')
+const { cleanupOrphanedRuns } = require('../shared/cleanup')
 
 const extractor     = require('./services/extractor')
 const analyzer      = require('./services/analyzer')
@@ -15,10 +15,16 @@ const intelligence   = require('../intelligence')
 const batching      = require('../shared/batching')
 const caching       = require('../shared/caching')
 const identity      = require('./services/identity')
+const communication = require('./services/communication')
+const { acquireRunLease } = require('../shared/run-lease')
 
 let telemetry = null
 try { telemetry = require('@secondbrain/telemetry') } catch (_) {}
 let _runId = null
+let _analysisPromise = null
+let _shutdownPromise = null
+const FORCE_FULL = process.argv.includes('--full')
+const RUN_ONCE = process.argv.includes('--once')
 
 console.log('🧠 Relationships Agent v1.0')
 console.log('📊 Builds contact profiles from WhatsApp, Email & Limitless\n')
@@ -35,6 +41,7 @@ async function ensureSchema() {
     console.log('✅ Schema ready')
   } catch (err) {
     console.error('❌ Schema setup error:', err.message)
+    throw err
   }
 }
 
@@ -67,15 +74,16 @@ async function upsertContact(profile, chatId) {
       const { rows: existing } = await db.query(`
         SELECT id FROM relationships.contacts
         WHERE wa_jids @> ARRAY[$1]::text[]
-           OR phone_numbers @> ARRAY[$2]::text[]
-           OR normalized_name = $3
+           OR EXISTS (
+             SELECT 1 FROM unnest(COALESCE(phone_numbers, '{}')) value
+             WHERE REGEXP_REPLACE(value, '[^0-9]', '', 'g') = $2
+           )
         ORDER BY CASE WHEN wa_jids @> ARRAY[$1]::text[] THEN 0
-                      WHEN phone_numbers @> ARRAY[$2]::text[] THEN 1
-                      ELSE 2 END,
+                      ELSE 1 END,
                  last_interaction_at DESC NULLS LAST,
                  id ASC
         LIMIT 1
-      `, [waJid, phone, normalizeName(profile.display_name)])
+      `, [waJid, phone])
       id = existing[0]?.id || null
     }
 
@@ -160,81 +168,27 @@ async function upsertContact(profile, chatId) {
   }
 }
 
-// Base64 JPEG thumbnails start with this prefix (FF D8 FF in base64)
-const JPEG_B64_PREFIX = '/9j/'
-
-function buildMediaSnippetAndMeta(msg) {
-  const type = msg.msg_type || 'chat'
-  const body = msg.body || ''
-
-  // If body looks like a base64 JPEG thumbnail, treat as media
-  const isMediaBody = body.startsWith(JPEG_B64_PREFIX) && body.length > 100
-
-  if (type === 'image' || (isMediaBody && type !== 'chat')) {
-    const caption = (msg.caption || '').trim()
-    return {
-      snippet:  caption || '📷 Photo',
-      metadata: { msg_type: 'image', thumbnail_b64: body.slice(0, 4000), wa_msg_id: msg.wa_msg_id || null },
-    }
-  }
-  if (type === 'video') {
-    const caption = (msg.caption || '').trim()
-    return {
-      snippet:  caption || '🎥 Video',
-      metadata: { msg_type: 'video', thumbnail_b64: body.slice(0, 4000), wa_msg_id: msg.wa_msg_id || null },
-    }
-  }
-  if (type === 'document') {
-    const name = (msg.filename || msg.caption || '').trim()
-    return {
-      snippet:  name ? `📎 ${name}` : '📎 Document',
-      metadata: { msg_type: 'document', filename: msg.filename || null, thumbnail_b64: body.slice(0, 4000), wa_msg_id: msg.wa_msg_id || null },
-    }
-  }
-  if (type === 'ptt' || type === 'audio') {
-    return { snippet: '🎤 Voice message', metadata: { msg_type: type } }
-  }
-  if (type === 'sticker') {
-    return { snippet: '🎴 Sticker', metadata: { msg_type: 'sticker' } }
-  }
-  if (type === 'location') {
-    return { snippet: '📍 Location', metadata: { msg_type: 'location' } }
-  }
-  if (type === 'vcard') {
-    return { snippet: '👤 Contact card', metadata: { msg_type: 'vcard' } }
-  }
-
-  // Plain text
-  return { snippet: body.slice(0, 300), metadata: { msg_type: type || 'chat' } }
-}
-
 async function upsertCommunications(contactId, messages, chatId) {
   let count = 0
   for (const msg of messages.slice(0, 50)) {
-    if (!msg.body) continue
+    if (!communication.messageTextForAnalysis(msg)) continue
+    const sourceId = communication.whatsappSourceId(msg, chatId)
     try {
-      const sourceId = `wa:${chatId}:${msg.ts ? new Date(msg.ts).getTime() : Math.random()}`
-      const { snippet, metadata } = buildMediaSnippetAndMeta(msg)
-      await db.query(`
-        INSERT INTO relationships.communications (
-          contact_id, source, source_id, direction,
-          content_snippet, chat_id, is_group, occurred_at, metadata
-        ) VALUES ($1, 'whatsapp', $2, $3, $4, $5, false, $6, $7)
-        ON CONFLICT (source, source_id, contact_id) DO UPDATE SET
-          content_snippet = EXCLUDED.content_snippet,
-          metadata        = EXCLUDED.metadata
-      `, [
-        contactId,
-        sourceId,
-        msg.from_me ? 'outbound' : 'inbound',
-        snippet,
-        chatId,
-        msg.ts,
-        JSON.stringify(metadata),
-      ])
+      const { snippet, metadata } = communication.buildMediaSnippetAndMeta(msg)
+      await communication.upsertCanonicalCommunication(db, {
+        contact_id: contactId,
+        source: 'whatsapp',
+        source_id: sourceId,
+        direction: msg.from_me ? 'outbound' : 'inbound',
+        content_snippet: snippet,
+        chat_id: chatId,
+        is_group: false,
+        occurred_at: msg.ts,
+        metadata,
+      })
       count++
     } catch (err) {
-      // ignore
+      console.error(`[index] direct communication error for ${sourceId}:`, err.message)
     }
   }
   return count
@@ -252,6 +206,12 @@ async function upsertInsight(contactId, insightData) {
         LIMIT 1
       `, [insightData.source_ref])
       if (exists.length > 0) {
+        if (Array.isArray(insightData.source_refs) && insightData.source_refs.length > 0) {
+          await db.query('UPDATE relationships.insights SET source_refs = $2::jsonb, updated_at = NOW() WHERE id = $1', [
+            exists[0].id,
+            JSON.stringify(insightData.source_refs),
+          ])
+        }
         if (!insightData.skip_intelligence) await intelligence.upsertFromRelationshipInsight(exists[0].id, contactId, insightData)
         return exists[0].id
       }
@@ -261,8 +221,8 @@ async function upsertInsight(contactId, insightData) {
 
     const { rows } = await db.query(`
       INSERT INTO relationships.insights (
-        contact_id, insight_type, title, description, priority, source_ref, contact_ids
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+        contact_id, insight_type, title, description, priority, source_ref, contact_ids, source_refs
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb)
       RETURNING id
     `, [
       contactId,
@@ -272,6 +232,7 @@ async function upsertInsight(contactId, insightData) {
       insightData.priority || 'medium',
       insightData.source_ref || null,
       contactIds,
+      JSON.stringify(insightData.source_refs || []),
     ])
     const insightId = rows[0]?.id || null
     if (insightId && !insightData.skip_intelligence) await intelligence.upsertFromRelationshipInsight(insightId, contactId, insightData)
@@ -296,56 +257,49 @@ async function getLastRunAt() {
   } catch { return null }
 }
 
-// ── Check if analysis is running ──────────────────────────────────────────────
-
-async function cleanupStaleRuns() {
-  try {
-    const { rows } = await db.query(`
-      UPDATE relationships.analysis_runs
-      SET status = 'failed', completed_at = NOW(), error = 'Agent crashed or was restarted'
-      WHERE status = 'running'
-        AND started_at < NOW() - INTERVAL '3 hours'
-      RETURNING id
-    `)
-    if (rows.length > 0) {
-      console.log(`🧹 Cleaned up ${rows.length} stale analysis run(s)`)
-    }
-  } catch { /* ignore */ }
-}
-
-async function isAnalysisRunning() {
-  try {
-    const { rows } = await db.query(`
-      SELECT id FROM relationships.analysis_runs
-      WHERE status = 'running'
-        AND started_at > NOW() - INTERVAL '2 hours'
-      LIMIT 1
-    `)
-    return rows.length > 0
-  } catch { return false }
+async function recoverInterruptedRuns() {
+  const { rows } = await db.query(`
+    UPDATE relationships.analysis_runs
+    SET status = 'failed', completed_at = NOW(),
+        error = COALESCE(error, 'Agent process was replaced before the run completed')
+    WHERE status = 'running'
+    RETURNING id
+  `)
+  if (rows.length > 0) {
+    console.log(`🧹 Recovered ${rows.length} interrupted analysis run(s)`)
+  }
 }
 
 // ── Main analysis ─────────────────────────────────────────────────────────────
 
 async function runAnalysis() {
-  await cleanupStaleRuns()
-  const alreadyRunning = await isAnalysisRunning()
-  if (alreadyRunning) {
-    console.log('⏭  Analysis already running, skipping')
-    return
-  }
-
-  if (telemetry) {
-    _runId = await telemetry.startRun({ agentId: 'relationships', workflowName: 'relationship_analysis' })
+  const lease = await acquireRunLease(db, 207202601)
+  if (!lease.acquired) {
+    console.log('⏭  Another relationships process owns the analysis lease')
+    return { status: 'skipped' }
   }
 
   let runId = null
   let contactsProcessed = 0
   let insightsGenerated = 0
+  let telemetryStatus = 'failed'
+  let telemetryError = null
+  const requiredFailures = []
 
   try {
+    // Holding the database lease proves no prior process can still be writing.
+    // Any running ledger row is therefore an interrupted predecessor.
+    await recoverInterruptedRuns()
+    if (telemetry) {
+      try {
+        _runId = await telemetry.startRun({ agentId: 'relationships', workflowName: 'relationship_analysis' })
+      } catch (err) {
+        console.warn('[telemetry] startRun failed:', err.message)
+        _runId = null
+      }
+    }
     // Get incremental watermark
-    const lastRunAt = await getLastRunAt()
+    const lastRunAt = FORCE_FULL ? null : await getLastRunAt()
     if (lastRunAt) {
       console.log(`⏱  Incremental mode: processing new activity since ${lastRunAt.toISOString()}`)
     } else {
@@ -354,8 +308,11 @@ async function runAnalysis() {
 
     // Create run record
     const { rows } = await db.query(`
-      INSERT INTO relationships.analysis_runs (status) VALUES ('running') RETURNING id
+      INSERT INTO relationships.analysis_runs (status) VALUES ('running')
+      ON CONFLICT DO NOTHING
+      RETURNING id
     `)
+    if (!rows.length) return { status: 'skipped' }
     runId = rows[0].id
     console.log(`\n🔍 Starting analysis run #${runId}`)
 
@@ -364,22 +321,26 @@ async function runAnalysis() {
     const directContacts = await extractor.extractDirectChatContacts()
     console.log(`   Found ${directContacts.length} direct chat contacts`)
 
-    // Filter: skip contacts with no new messages since last run (if incremental)
+    // Activity caches, not the last successful run timestamp, decide whether a
+    // contact is current. This lets per-contact failures retry automatically on
+    // the next run even when no new message arrived after the failed attempt.
     const meaningfulContacts = directContacts.filter(c => {
       const total = Number(c.msg_count)
       if (total < 3 && !c.display_name) return false
-      // Incremental: skip if last message is older than last run
-      if (lastRunAt && c.last_msg_at && new Date(c.last_msg_at) <= lastRunAt) return false
       return true
     })
-    console.log(`   Processing ${meaningfulContacts.length} contacts with new activity`)
+    console.log(`   Considering ${meaningfulContacts.length} meaningful contacts`)
 
     // ── 2. Filter unchanged items (caching optimization) ────────────────────
-    const contactsNeedingAnalysis = await caching.filterUnprocessedItems(
-      'relationships',
-      'direct_contact',
-      meaningfulContacts
-    )
+    const directContactItems = meaningfulContacts.map(contact => ({
+      ...contact,
+      id: contact.chat_id,
+      item_id: contact.chat_id,
+      last_activity_at: contact.last_msg_at,
+    }))
+    const contactsNeedingAnalysis = FORCE_FULL
+      ? directContactItems
+      : await caching.filterUnprocessedItems('relationships', 'direct_contact', directContactItems)
     console.log(`   Filtered to ${contactsNeedingAnalysis.length} contacts needing analysis (${meaningfulContacts.length - contactsNeedingAnalysis.length} cached)`)
 
     // ── 3. Process contacts in parallel batches ────────────────────────────
@@ -402,68 +363,38 @@ async function runAnalysis() {
           // Get messages
           const messages = await extractor.getDirectMessages(contact.chat_id, 30)
 
-          if (existingId && lastRunAt) {
-            // Existing contact: just add new messages, skip Claude (fast path)
-            if (contact.display_name && !/^\+?[0-9]{7,15}$/.test(contact.display_name)) {
-              await db.query(`
-                UPDATE relationships.contacts SET
-                  display_name    = CASE WHEN manual_overrides ? 'display_name' THEN display_name ELSE $1 END,
-                  normalized_name = CASE WHEN manual_overrides ? 'display_name' THEN normalized_name ELSE $2 END,
-                  updated_at      = NOW()
-                WHERE id = $3
-                  AND (display_name ~ '^[0-9]' OR display_name LIKE '+%' OR display_name LIKE 'Unknown%')
-              `, [contact.display_name, contact.display_name?.toLowerCase().replace(/\s+/g, '_'), existingId])
-            }
-            const newMessages = messages.filter(m => m.ts && new Date(m.ts) > lastRunAt)
-            if (newMessages.length > 0) {
-              const added = await upsertCommunications(existingId, newMessages, contact.chat_id)
-              if (added > 0) {
-                await db.query(`
-                  UPDATE relationships.contacts SET
-                    last_interaction_at = GREATEST(last_interaction_at, $1),
-                    updated_at          = NOW()
-                  WHERE id = $2
-                `, [contact.last_msg_at, existingId])
-                console.log(`   ↑ ${contact.display_name || contact.chat_id} (+${added} new messages)`)
-                // Record in cache
-                await caching.recordProcessed('relationships', 'direct_contact', contact.chat_id)
-              }
-            }
-            return { success: true, contact: contact.chat_id }
-          } else {
-            // New contact (or first run): full Claude analysis
-            const hasMeaningfulContent = messages.some(m => m.body && m.body.length > 5)
-            if (!hasMeaningfulContent && !contact.display_name) return { skipped: true }
+          // Every cache miss is semantic work, including a prior failed
+          // existing contact. Skipping analysis here would make failures
+          // permanent when no later message arrives.
+          const hasMeaningfulContent = messages.some(m => communication.messageTextForAnalysis(m).length > 5)
+          if (!hasMeaningfulContent && !contact.display_name) return { skipped: true }
 
-            // Fetch existing manual overrides so Claude respects user-confirmed facts
-            let existingOverrides = {}
-            if (existingId) {
-              const { rows: orRows } = await db.query(
-                'SELECT manual_overrides FROM relationships.contacts WHERE id = $1', [existingId]
-              )
-              existingOverrides = orRows[0]?.manual_overrides || {}
-            }
-
-            const profile = await analyzer.analyzeDirectChatContact(contact.chat_id, contact, messages, existingOverrides)
-            profile.last_msg_at  = contact.last_msg_at
-            profile.first_msg_at = contact.first_msg_at
-
-            const contactId = await upsertContact(profile, contact.chat_id)
-            if (!contactId) return { error: 'Failed to upsert contact' }
-
-            await upsertCommunications(contactId, messages, contact.chat_id)
-
-            if (!profile.is_noise) {
-              console.log(`   ✓ NEW ${profile.display_name} (${profile.relationship_type}, ${profile.relationship_strength})`)
-            }
-
-            // Record in cache
-            await caching.recordProcessed('relationships', 'direct_contact', contact.chat_id, {
-              is_noise: profile.is_noise,
-            })
-
-            return { success: true, contact: contact.chat_id, isNew: true }
+          let existingOverrides = {}
+          if (existingId) {
+            const { rows: orRows } = await db.query(
+              'SELECT manual_overrides FROM relationships.contacts WHERE id = $1', [existingId]
+            )
+            existingOverrides = orRows[0]?.manual_overrides || {}
           }
+
+          const profile = await analyzer.analyzeDirectChatContact(contact.chat_id, contact, messages, existingOverrides)
+          if (profile.analysis_error) {
+            return { error: profile.analysis_error, retryable: true, contact: contact.chat_id }
+          }
+          profile.last_msg_at  = contact.last_msg_at
+          profile.first_msg_at = contact.first_msg_at
+
+          const contactId = await upsertContact(profile, contact.chat_id)
+          if (!contactId) return { error: 'Failed to upsert contact' }
+          await upsertCommunications(contactId, messages, contact.chat_id)
+
+          if (!profile.is_noise) {
+            console.log(`   ✓ ${existingId ? 'UPDATED' : 'NEW'} ${profile.display_name} (${profile.relationship_type}, ${profile.relationship_strength})`)
+          }
+          await caching.recordProcessed('relationships', 'direct_contact', contact.chat_id, {
+            is_noise: profile.is_noise,
+          })
+          return { success: true, contact: contact.chat_id, isNew: !existingId }
         } catch (err) {
           console.error(`   ✗ Error processing ${contact.chat_id}: ${err.message}`)
           return { error: err.message }
@@ -488,6 +419,28 @@ async function runAnalysis() {
     )
 
     contactsProcessed += results.filter(r => r?.success).length
+    for (const result of results.filter(result => result?.error)) {
+      requiredFailures.push(`direct:${result.contact || 'unknown'}:${result.error}`)
+    }
+
+    // The analysis sample is intentionally small; recovery is not. Each run
+    // takes the oldest missing direct-message batch and advances the watermark
+    // through stable WhatsApp IDs until all history is canonicalized.
+    const missingDirectMessages = await extractor.getUnstoredDirectMessages(5000)
+    const directCommRecovery = await communication.upsertDirectCommunications(db, missingDirectMessages)
+    if (directCommRecovery.inserted > 0 || directCommRecovery.unresolved > 0) {
+      console.log(`   Recovered ${directCommRecovery.inserted} direct messages (${directCommRecovery.unresolved} unresolved contacts)`)
+    }
+
+    // Media analysis is asynchronous. Refresh already-canonical WhatsApp rows
+    // whenever a description/transcript/PDF summary arrives after ingestion.
+    const staleMediaMessages = await extractor.getStaleMediaCommunications(500)
+    const staleDirectMedia = staleMediaMessages.filter(message => !message.is_group)
+    const staleGroupMedia = staleMediaMessages.filter(message => message.is_group)
+    const directMediaRefresh = await communication.upsertDirectCommunications(db, staleDirectMedia)
+    const groupMediaRefresh = await communication.upsertGroupCommunications(db, staleGroupMedia)
+    const refreshedMedia = directMediaRefresh.updated + groupMediaRefresh.updated
+    if (refreshedMedia > 0) console.log(`   Refreshed semantic text for ${refreshedMedia} media communications`)
 
     // ── 3. Process email contacts ─────────────────────────────────────────────
     console.log('\n📧 Processing email contacts...')
@@ -495,30 +448,31 @@ async function runAnalysis() {
     const NOISE_EMAIL_PATTERNS = [/noreply/i, /no-reply/i, /donotreply/i, /notification/i,
       /alert/i, /newsletter/i, /marketing/i, /mailer/i, /support@/i, /bounce/i, /postmaster/i]
 
-    // Incremental: skip senders with no new emails since last run
-    const activeSenders = lastRunAt
-      ? emailSenders.filter(s => !s.last_email_at || new Date(s.last_email_at) > lastRunAt)
-      : emailSenders
-    console.log(`   ${activeSenders.length} senders with new activity (of ${emailSenders.length} total)`)
+    // The per-sender cache is the only retry/watermark authority. A global
+    // completed-run timestamp would hide a sender whose prior attempt failed.
+    const activeSenders = emailSenders
+    console.log(`   Considering ${activeSenders.length} senders`)
 
     // Filter senders that don't need re-processing (caching)
-    const sendersToProcess = await caching.filterUnprocessedItems(
-      'relationships',
-      'email_sender',
-      activeSenders.map((s, idx) => ({
+    const emailSenderItems = activeSenders.map(s => ({
         id: s.from_address,
         item_id: s.from_address,
         last_activity_at: s.last_email_at,
       }))
-    )
+    const sendersToProcess = FORCE_FULL
+      ? emailSenderItems
+      : await caching.filterUnprocessedItems('relationships', 'email_sender', emailSenderItems)
     console.log(`   Further filtered to ${sendersToProcess.length} senders needing update`)
 
     let emailContactsProcessed = 0
     // Map back to full sender objects
-    const senderAddressesToProcess = new Set(sendersToProcess.map(s => s.id))
+    const senderAddressesToProcess = new Set([
+      ...sendersToProcess.map(s => s.id),
+      ...activeSenders.filter(s => !s.is_linked && !s.registry_is_noise).map(s => s.from_address),
+    ])
     for (const sender of activeSenders) {
-      if (!sender.parsed_email || !senderAddressesToProcess.has(sender.from_address)) continue
-      const isNoise = NOISE_EMAIL_PATTERNS.some(p => p.test(sender.raw_address))
+      if (!sender.email || !senderAddressesToProcess.has(sender.from_address)) continue
+      const isNoise = NOISE_EMAIL_PATTERNS.some(p => p.test(sender.from_address))
 
       try {
         // Upsert into email_senders registry
@@ -539,7 +493,8 @@ async function runAnalysis() {
 
         if (isNoise) continue
 
-        // Try to link to an existing contact by exact source identity first, then legacy email/name fallback.
+        // Try to link to an existing contact by exact source identity first,
+        // then the legacy exact email array. Names are never identity evidence.
         let contactId = await identity.findContactByIdentity(db, { source: 'email', identity_type: 'email', identity_value: sender.email })
 
         if (!contactId) {
@@ -550,14 +505,6 @@ async function runAnalysis() {
         }
 
         let isNew = !contactId
-
-        if (!contactId && sender.name) {
-          const { rows: existingByName } = await db.query(`
-            SELECT id FROM relationships.contacts WHERE normalized_name = $1 LIMIT 1
-          `, [normalizeName(sender.name)])
-          contactId = existingByName[0]?.id || null
-          if (contactId) isNew = false
-        }
 
         if (!contactId) {
           // Create new contact from email sender
@@ -599,36 +546,43 @@ async function runAnalysis() {
         const emailsToProcess = (lastRunAt && !isNew)
           ? emails.filter(e => !e.date || new Date(e.date) > lastRunAt)
           : emails
-        for (const em of emailsToProcess) {
-          // Build snippet including extracted attachment text if available
-          const attachments = Array.isArray(em.attachments) ? em.attachments : (em.attachments ? JSON.parse(em.attachments) : [])
-          const attachText = attachments.filter(a => a.extracted_text).map(a => `[${a.filename||'file'}]: ${a.extracted_text.slice(0,100)}`).join(' ')
-          const baseSnippet = (em.body_text || em.subject || '').replace(/\s+/g, ' ')
-          const snippet = (baseSnippet + (attachText ? ' ' + attachText : '')).slice(0, 280)
-          try {
-            await db.query(`
-              INSERT INTO relationships.communications
-                (contact_id, source, source_id, direction, content_snippet, subject,
-                 is_read, occurred_at)
-              VALUES ($1, 'email', $2, 'inbound', $3, $4, $5, $6)
-              ON CONFLICT (source, source_id, contact_id) DO NOTHING
-            `, [contactId, `email:${em.id}`, snippet, em.subject, em.is_read, em.date])
-          } catch { /* ignore duplicate */ }
-        }
+        await communication.upsertEmailCommunications(db, emailsToProcess.map(em => ({
+          ...em,
+          contact_id: contactId,
+          from_address: sender.from_address,
+          sender_name: sender.name,
+          sender_email: sender.email,
+          sender_is_noise: isNoise,
+        })))
 
         emailContactsProcessed++
         // Record in cache
         await caching.recordProcessed('relationships', 'email_sender', sender.from_address)
       } catch (err) {
         console.error(`[index] email contact error for ${sender.from_address}:`, err.message)
+        requiredFailures.push(`email:${sender.from_address}:${err.message}`)
       }
     }
     console.log(`   Processed ${emailContactsProcessed} email contacts`)
+
+    const missingEmails = await extractor.getUnstoredEmailCommunications(5000)
+    const emailCommRecovery = await communication.upsertEmailCommunications(db, missingEmails)
+    if (emailCommRecovery.inserted > 0 || emailCommRecovery.unresolved > 0) {
+      console.log(`   Recovered ${emailCommRecovery.inserted} email communications (${emailCommRecovery.unresolved} unresolved)`)
+    }
 
     // ── 3b. Process WhatsApp groups ───────────────────────────────────────────
     console.log('\n👥 Processing WhatsApp groups...')
     const groups = await extractor.extractGroupChats()
     let groupsAnalyzed = 0
+
+    // Recover missing group events with one source scan. Checking the full
+    // messages table once per group is both redundant and O(groups × messages).
+    const missingGroupMessages = await extractor.getUnstoredGroupMessagesBatch(5000)
+    const groupCommRecovery = await communication.upsertGroupCommunications(db, missingGroupMessages)
+    if (groupCommRecovery.inserted > 0 || groupCommRecovery.skipped > 0) {
+      console.log(`   Recovered ${groupCommRecovery.inserted} group messages (${groupCommRecovery.linked} linked authors)`)
+    }
 
     for (const group of groups) {
       try {
@@ -653,7 +607,7 @@ async function runAnalysis() {
         const groupId = existing[0]?.id
         const analyzedAt = existing[0]?.analyzed_at
 
-        const hasNewActivity = !analyzedAt ||
+        const hasNewActivity = FORCE_FULL || !analyzedAt ||
           (group.last_msg_at && new Date(group.last_msg_at) > new Date(analyzedAt))
 
         if (hasNewActivity && !group.is_noise) {
@@ -666,6 +620,11 @@ async function runAnalysis() {
             last_activity_at: group.last_msg_at,
           }
           const analysis = await analyzer.analyzeGroup(groupRow, messages)
+          if (analysis.analysis_error) {
+            console.error(`   ✗ Group analysis deferred for ${groupName || group.chat_id}: ${analysis.analysis_error}`)
+            requiredFailures.push(`group:${group.chat_id}:${analysis.analysis_error}`)
+            continue
+          }
 
           await db.query(`
             UPDATE relationships.groups SET
@@ -724,9 +683,18 @@ async function runAnalysis() {
         }
       } catch (err) {
         console.error(`[index] group error for ${group.chat_id}:`, err.message)
+        requiredFailures.push(`group:${group.chat_id}:${err.message}`)
       }
     }
     console.log(`   Analyzed ${groupsAnalyzed} groups (of ${groups.length} total)`)
+
+    // Limitless transcripts are canonical communications too. A bounded batch
+    // per run makes historical recovery resumable without delaying fresh data.
+    const missingLifelogs = await extractor.getUnstoredLimitlessConversations(500)
+    const limitlessCommResult = await communication.upsertLimitlessCommunications(db, missingLifelogs)
+    if (limitlessCommResult.inserted > 0) {
+      console.log(`   Stored ${limitlessCommResult.inserted} Limitless communications`)
+    }
 
     // ── 4. Generate insights ──────────────────────────────────────────────────
     console.log('\n💡 Generating insights...')
@@ -758,6 +726,7 @@ async function runAnalysis() {
           description: `Last message ${daysSince}d ago: "${displayBody}"`,
           priority: daysSince > 7 ? 'high' : daysSince > 3 ? 'medium' : 'low',
           source_ref: `awaiting:${contact.chat_id}`,
+          source_refs: contact.source_id ? [contact.source_id] : [],
         })
         if (insightId) insightsGenerated++
       } catch (err) {
@@ -786,6 +755,7 @@ async function runAnalysis() {
           description: `${group.their_msgs} messages in last 7 days, you haven't participated. Recent: ${sampleText}`,
           priority: Number(group.their_msgs) > 10 ? 'medium' : 'low',
           source_ref: `group:active:${group.chat_id}`,
+          source_refs: group.source_refs || [],
         })
         if (insightId) insightsGenerated++
       } catch (err) {
@@ -817,6 +787,7 @@ async function runAnalysis() {
           description: `From ${senderName} on ${em.date ? new Date(em.date).toLocaleDateString() : 'unknown date'}. ${(em.body_text || '').slice(0, 120)}`,
           priority: 'medium',
           source_ref: `cold_email:${em.id}`,
+          source_refs: [`email:${em.id}`],
         })
         if (insightId) insightsGenerated++
       } catch (err) {
@@ -832,6 +803,10 @@ async function runAnalysis() {
     }
     console.log(`   Swarm generated ${swarmInsights.length} opportunity insights`)
 
+    if (requiredFailures.length > 0) {
+      throw new Error(`${requiredFailures.length} required relationship stage failure(s): ${requiredFailures.slice(0, 8).join('; ')}`)
+    }
+
     // ── 5. Mark run complete ──────────────────────────────────────────────────
     await db.query(`
       UPDATE relationships.analysis_runs
@@ -845,8 +820,10 @@ async function runAnalysis() {
     console.log(`\n✅ Analysis run #${runId} complete`)
     console.log(`   Contacts processed: ${contactsProcessed}`)
     console.log(`   Insights generated: ${insightsGenerated}\n`)
+    telemetryStatus = 'completed'
 
   } catch (err) {
+    telemetryError = err.message
     console.error('❌ Analysis run failed:', err.message)
     if (runId) {
       try {
@@ -857,25 +834,61 @@ async function runAnalysis() {
         `, [err.message, runId])
       } catch { /* ignore */ }
     }
+    throw err
+  } finally {
+    const telemetryRunId = _runId
+    _runId = null
+    if (telemetry && telemetryRunId) {
+      try {
+        await telemetry.endRun(telemetryRunId, {
+          status: telemetryStatus,
+          error: telemetryError,
+          contactsProcessed,
+          insightsGenerated,
+        })
+        await telemetry.flush()
+      } catch (err) {
+        console.warn('[telemetry] endRun failed:', err.message)
+      }
+    }
+    await lease.release()
+  }
+}
+
+async function startAnalysis() {
+  if (_analysisPromise) {
+    console.log('⏭  Analysis already active in this process, skipping')
+    return _analysisPromise
+  }
+  _analysisPromise = runAnalysis()
+  try {
+    return await _analysisPromise
+  } finally {
+    _analysisPromise = null
   }
 }
 
 // ── Schedule & start ──────────────────────────────────────────────────────────
 
 async function main() {
-  killDuplicateProcesses()
   await ensureSchema()
   await cleanupOrphanedRuns(db, 'relationships')
 
   // Run immediately on startup
   console.log('🏁 Starting initial analysis...\n')
-  await runAnalysis()
+  await startAnalysis()
+
+  if (RUN_ONCE) {
+    await db.end()
+    console.log('✅ One-shot relationships analysis complete')
+    return
+  }
 
   // Then every 6 hours
   console.log('⏰ Scheduling analysis every 6 hours')
   cron.schedule('0 */6 * * *', () => {
     console.log('⏰ Scheduled analysis triggered')
-    runAnalysis().catch(err => console.error('❌ Scheduled analysis error:', err.message))
+    startAnalysis().catch(err => console.error('❌ Scheduled analysis error:', err.message))
   })
 }
 
@@ -891,16 +904,32 @@ process.on('unhandledRejection', (reason) => {
   console.error('Unhandled rejection:', reason)
 })
 
-process.on('SIGINT', async () => {
-  console.log('\n🛑 Graceful shutdown...')
-  if (telemetry && _runId) {
-    await telemetry.endRun(_runId, { status: 'completed' })
-    await telemetry.flush()
-  }
-  try {
-    await db.end()
-    console.log('✅ Database closed')
-  } catch { /* ignore */ }
-  console.log('👋 Relationships Agent stopped')
+async function shutdown() {
+  if (_shutdownPromise) return _shutdownPromise
+  _shutdownPromise = (async () => {
+    console.log('\n🛑 Graceful shutdown requested...')
+    // Do not close the pool underneath an in-flight recovery. The run owns its
+    // durable status transition and is allowed to finish before process exit.
+    if (_analysisPromise) await _analysisPromise.catch(() => {})
+    if (telemetry) await telemetry.flush().catch(() => {})
+    try {
+      await db.end()
+      console.log('✅ Database closed')
+    } catch { /* ignore */ }
+    console.log('👋 Relationships Agent stopped')
+  })()
+  await _shutdownPromise
   process.exit(0)
-})
+}
+
+process.once('SIGINT', shutdown)
+process.once('SIGTERM', shutdown)
+
+module.exports = {
+  ensureSchema,
+  main,
+  recoverInterruptedRuns,
+  runAnalysis,
+  startAnalysis,
+  upsertContact,
+}

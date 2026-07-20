@@ -118,6 +118,34 @@ Then open:
 http://localhost:4000
 ```
 
+### Secure remote access through Tailscale
+
+The UI, API, and WhatsApp admin listener bind to loopback by default. Do not expose ports 3000, 4000, or 4001 directly on the LAN or tailnet. Publish only the main UI through Tailscale Serve; Next.js forwards `/api` to the loopback API internally:
+
+```bash
+tailscale serve --bg --https=443 http://127.0.0.1:4000
+tailscale serve status
+```
+
+If another local HTTPS service already owns port 443, use Tailscale's supported
+8443 port and include it in the printed URL/origin:
+
+```bash
+tailscale serve --bg --https=8443 http://127.0.0.1:4000
+```
+
+Copy the printed HTTPS origin into `.env.local`, then restart `npm run ui`:
+
+```env
+SECOND_BRAIN_ALLOWED_ORIGINS=https://your-mac.your-tailnet.ts.net
+```
+
+For the 8443 form, use `https://your-mac.your-tailnet.ts.net:8443`.
+
+When running `npm run ui:dev`, also set `SECOND_BRAIN_ALLOWED_DEV_ORIGINS` to the hostname without `https://`. Use Tailscale ACLs to decide which tailnet users/devices may reach the machine. To remove the proxy, run `tailscale serve reset`.
+
+The deploy/reload API is disabled unless `SECOND_BRAIN_DEPLOY_TOKEN` is configured. Generate a strong value with `openssl rand -hex 32` and send it only in the `x-deploy-token` header.
+
 ### First startup behavior
 
 On startup, the server automatically and idempotently:
@@ -126,6 +154,7 @@ On startup, the server automatically and idempotently:
 - initializes shared system tables
 - attempts to initialize the optional search / pgvector schema
 - seeds sensible default config values into the database when missing
+- restores core agents whose durable desired state is `running`
 
 You do **not** need to run manual `psql` schema commands for normal setup.
 
@@ -139,7 +168,7 @@ Once the app is open, go to `/agents` and do this:
 2. Configure `Email` if you want Gmail sync.
 3. Configure `Limitless` if you use Limitless.ai.
 4. Add `Embeddings` if you want semantic search.
-5. Start the agents you want to run.
+5. Stop any core agent you do not want to run; that stopped state is remembered across UI restarts.
 
 Recommended starting order:
 
@@ -218,11 +247,11 @@ Syncs Gmail inboxes into Postgres using IMAP.
 
 ### Limitless Agent
 
-Fetches and processes Limitless.ai lifelogs.
+Fetches Limitless.ai lifelogs as immutable source evidence.
 
 - fetches every 5 minutes
-- processes batches every 30 seconds
-- feeds meeting and spoken-context signals into the system
+- uses idempotent provider IDs and does not execute external actions
+- feeds meeting and spoken-context evidence to the relationship and intelligence pipelines
 
 ### WhatsApp Connector
 
@@ -331,7 +360,7 @@ packages/
 ├── db/                     Shared Postgres connection pool
 ├── agents/
 │   ├── email/              Gmail IMAP sync -> email.*
-│   ├── limitless/          Limitless fetch + processing
+│   ├── limitless/          Limitless raw evidence ingestion
 │   ├── projects/           Project discovery and insights
 │   ├── relationships/      Contact and group intelligence
 │   ├── research/           External contact enrichment

@@ -8,7 +8,7 @@ The `LLM Providers` panel is the shared brain configuration area.
 
 ## Why this matters
 
-Agents such as Limitless, Relationships, Projects, and Research need an AI provider to analyze and summarize data.
+Agents such as Relationships, Projects, Intelligence, and Research need an AI provider to analyze and summarize data. Limitless ingestion itself does not.
 
 If no provider is configured, those agents may run but fail when they need reasoning.
 
@@ -18,6 +18,9 @@ If no provider is configured, those agents may run but fail when they need reaso
 - Claude CLI
 - OpenAI
 - Gemini
+- Groq
+- Kimi/OpenRouter-compatible models
+- Ollama (explicit local use only)
 
 ## What you enter
 
@@ -44,8 +47,23 @@ Example:
 This lets you:
 
 - prefer your best model for the most important work
-- fall back if a provider fails
-- survive credit exhaustion more gracefully
+- configure fallback for workloads whose routing profile permits it
+- keep manual/experimental agents available during a provider outage
+
+## Recommended SecondBrain routing
+
+The default workload policy deliberately uses two OpenAI tiers:
+
+- `gpt-5.6-luna` with low reasoning for high-volume structured extraction and
+  classification;
+- `gpt-5.6-terra` with high reasoning for project/relationship synthesis and
+  evidence-bound signal verification.
+
+Local Ollama models are not an automatic fallback because loading them can
+consume substantial memory and CPU on the host. They remain a supported,
+explicit provider for users who choose local inference, but must be enabled
+deliberately. Autonomous tool loops retain `gpt-5.6-sol` as a separate
+frontier profile and are not used for the bulk communication pipeline.
 
 ## Credit exhaustion
 
@@ -54,7 +72,8 @@ The system can mark a provider as out of credits.
 When that happens:
 
 - the provider shows a warning
-- fallback providers can still be used
+- a profile with an approved fallback can use it
+- strict Luna/Terra production profiles pause durably instead of changing model
 - you can reset the credit flag after topping up or fixing the account
 
 ## Monthly usage

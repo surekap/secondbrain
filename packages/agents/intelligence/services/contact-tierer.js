@@ -3,8 +3,8 @@
 const CADENCE_BY_TIER = {
   tier_1: 30,
   tier_2: 60,
-  tier_3: 120,
-  unknown: 180,
+  tier_3: null,
+  unknown: null,
   noise: null,
 }
 

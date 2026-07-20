@@ -215,10 +215,46 @@ function contactNameNeedles(contact = {}) {
   return Array.from(new Set(names))
 }
 
-function contactsMentionedInText(text, contacts = []) {
+function mentionTokens(value) {
+  return String(value || '').toLowerCase().match(/[a-z0-9]{3,}/g) || []
+}
+
+function buildContactMentionIndex(contacts = []) {
+  const entries = []
+  const frequencies = new Map()
+  for (const contact of contacts) {
+    for (const name of contactNameNeedles(contact)) {
+      const normalized = name.toLowerCase()
+      const nameTokens = [...new Set(mentionTokens(normalized))]
+      if (!nameTokens.length) continue
+      entries.push({ contact, normalized, nameTokens })
+      for (const token of nameTokens) frequencies.set(token, (frequencies.get(token) || 0) + 1)
+    }
+  }
+  const byToken = new Map()
+  for (const entry of entries) {
+    const keyToken = [...entry.nameTokens].sort((left, right) => {
+      const frequencyDelta = (frequencies.get(left) || 0) - (frequencies.get(right) || 0)
+      return frequencyDelta || right.length - left.length || left.localeCompare(right)
+    })[0]
+    if (!byToken.has(keyToken)) byToken.set(keyToken, [])
+    byToken.get(keyToken).push(entry)
+  }
+  return byToken
+}
+
+function contactsMentionedInText(text, contactMentionIndex = new Map()) {
   const lower = String(text || '').toLowerCase()
   if (!lower) return []
-  return contacts.filter(contact => contactNameNeedles(contact).some(name => lower.includes(name.toLowerCase())))
+  const matches = new Map()
+  for (const token of new Set(mentionTokens(lower))) {
+    for (const entry of contactMentionIndex.get(token) || []) {
+      if (lower.includes(entry.normalized) && entry.contact?.id != null) {
+        matches.set(String(entry.contact.id), entry.contact)
+      }
+    }
+  }
+  return [...matches.values()]
 }
 
 function addParticipantContact(participants, contact) {
@@ -258,6 +294,7 @@ function detectCrossChannelProjectSignals(input = {}) {
   const minSharedProjectDmTerms = input.minSharedProjectDmTerms ?? 1
   const out = []
   const participantContactMap = buildParticipantContactMap(contacts)
+  const contactMentionIndex = buildContactMentionIndex(contacts)
 
   const groupMessagesByChat = new Map()
   for (const m of groupMessages) {
@@ -295,7 +332,7 @@ function detectCrossChannelProjectSignals(input = {}) {
           const contact = participantContactMap.get(pKey)
           if (contact) addParticipantContact(participants, contact)
         }
-        for (const mentioned of contactsMentionedInText(messageText(gm), contacts)) addParticipantContact(participants, mentioned)
+        for (const mentioned of contactsMentionedInText(messageText(gm), contactMentionIndex)) addParticipantContact(participants, mentioned)
       }
 
       for (const rawContact of participants.values()) {
@@ -389,26 +426,19 @@ function detectCrossChannelProjectSignals(input = {}) {
             candidate_score: pgScore + relevantDms[0].score,
             shared_project_dm_terms: relevantDms[0].shared_terms,
           },
-          evidence: [
-            {
-              source_table: 'relationships.groups',
-              source_id: group.id || group.wa_chat_id,
-              source_ref: `group:${group.id || group.wa_chat_id}`,
-              occurred_at: group.last_activity_at || group.updated_at || null,
-              quote: compactText(groupText(group), 500),
-              relevance: pgScore,
-              metadata: { wa_chat_id: group.wa_chat_id || group.chat_id || null },
-            },
-            ...relevantDms.map(x => ({
-              source_table: 'public.messages',
-              source_id: x.dm.source_id || x.dm.id || `${x.dm.chat_id || contact.id}:${x.dm.ts || x.dm.occurred_at || ''}`,
-              source_ref: `whatsapp:${x.dm.source_id || x.dm.id || ''}`,
+          // Group/project rows are derived context, retained above in metadata.
+          // Item evidence itself is always a canonical communication pointer.
+          evidence: relevantDms
+            .filter(x => x.dm.canonical_communication_id)
+            .map(x => ({
+              source_table: 'relationships.communications',
+              source_id: x.dm.canonical_communication_id,
+              source_ref: `relationships.communication:${x.dm.canonical_communication_id}`,
               occurred_at: x.dm.occurred_at || x.dm.ts || x.dm.created_at || null,
               quote: compactText(x.text, 500),
               relevance: x.score,
               metadata: { chat_id: x.dm.chat_id || null, contact_id: contact.id },
             })),
-          ],
         })
       }
     }
@@ -435,6 +465,8 @@ function detectCrossChannelProjectSignals(input = {}) {
 
 module.exports = {
   detectCrossChannelProjectSignals,
+  buildContactMentionIndex,
+  contactsMentionedInText,
   overlapScore,
   tokens,
 }

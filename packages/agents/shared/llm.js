@@ -66,14 +66,18 @@ function _isProviderDead(providerId) {
   return true
 }
 
-function _markProviderDead(providerId) {
-  _deadProviders.set(providerId, Date.now() + DEAD_TTL_MS)
+function _markProviderDead(providerId, ttlMs = DEAD_TTL_MS) {
+  _deadProviders.set(providerId, Date.now() + ttlMs)
 }
 
 // ── Priority list cache ───────────────────────────────────────────────────────
 
 const CACHE_TTL_MS = 60 * 1000
 const _priorityCache = new Map()  // agentId → { providers, expiresAt }
+
+function providerEligible(provider) {
+  return Boolean(provider?.is_enabled && provider?.has_credits)
+}
 
 async function getPriorityList(agentId, profile) {
   const now = Date.now()
@@ -92,9 +96,7 @@ async function getPriorityList(agentId, profile) {
     const providers = []
     for (const route of policy) {
       const rowsForType = rows.filter(p => p.provider_type === route.provider_type)
-      const eligible = rowsForType.filter(p =>
-        p.is_enabled && (p.has_credits || !p.last_error_at || new Date(p.last_error_at).getTime() < now - 30 * 60 * 1000)
-      )
+      const eligible = rowsForType.filter(providerEligible)
       const configured = eligible.find(p => p.model === route.model) || eligible[0]
       if (configured) {
         providers.push({ ...configured, ...route, configured_model: configured.model })
@@ -120,12 +122,20 @@ async function getPriorityList(agentId, profile) {
     JOIN system.llm_providers p ON p.id = alp.provider_id
     WHERE alp.agent_id = $1
       AND p.is_enabled = true
-      AND (p.has_credits = true OR p.last_error_at < NOW() - INTERVAL '30 minutes')
+      AND p.has_credits = true
     ORDER BY alp.priority ASC
   `, [agentId])
 
   _priorityCache.set(cacheKey, { providers: rows, expiresAt: now + CACHE_TTL_MS })
   return rows
+}
+
+async function hasEligibleProvider(profile, requiredCapability = null) {
+  const providers = await getPriorityList('__profile_preflight__', profile)
+  for (const provider of providers) {
+    if (await providerSupportsCapability(provider, requiredCapability)) return true
+  }
+  return false
 }
 
 function invalidatePriorityCache(agentId) {
@@ -147,9 +157,19 @@ function isCreditError(err) {
   if (status === 429 && err.error?.code === 'insufficient_quota') return true
   if (err.status === 'RESOURCE_EXHAUSTED') return true
   const msg = (err.message || '').toLowerCase()
+  if (status === 429 && (
+    msg.includes('quota') ||
+    msg.includes('spending cap') ||
+    msg.includes('resource exhausted')
+  )) return true
   if (msg.includes('credit') && msg.includes('balance')) return true
   if (msg.includes('insufficient_quota')) return true
   return false
+}
+
+function isTransientRateLimitError(err) {
+  const status = err.status || err.statusCode || (err.response && err.response.status)
+  return status === 429 && !isCreditError(err)
 }
 
 // ── Usage logging ─────────────────────────────────────────────────────────────
@@ -399,15 +419,23 @@ async function callGemini(provider, { system, messages, max_tokens }) {
   if (!provider.api_key) throw Object.assign(new Error('Gemini API key not configured'), { status: 402 })
   const genAI = new GoogleGenerativeAI(provider.api_key)
   const model = genAI.getGenerativeModel({ model: provider.model || 'gemini-2.0-flash' })
-  const textParts = messages.filter(m => m.role !== 'system').map(m => {
-    const content = Array.isArray(m.content)
-      ? m.content.filter(b => b.type === 'text').map(b => b.text).join('\n')
-      : (m.content || '')
-    return content
-  })
+  const parts = []
   const systemMsg = messages.find(m => m.role === 'system')
-  const prompt = (systemMsg ? systemMsg.content + '\n\n' : (system ? system + '\n\n' : '')) + textParts.join('\n')
-  const result = await model.generateContent(prompt)
+  const instruction = systemMsg?.content || system
+  if (instruction) parts.push({ text: instruction })
+  for (const message of messages.filter(m => m.role !== 'system')) {
+    if (!Array.isArray(message.content)) {
+      if (message.content) parts.push({ text: message.content })
+      continue
+    }
+    for (const block of message.content) {
+      if (block.type === 'text' && block.text) parts.push({ text: block.text })
+      else if (block.source?.data) {
+        parts.push({ inlineData: { data: block.source.data, mimeType: block.source.media_type } })
+      }
+    }
+  }
+  const result = await model.generateContent(parts)
   const text = result.response.text()
   const usage = result.response.usageMetadata
   return { text, tool_calls: [], stop_reason: 'end_turn', tokensIn: usage?.promptTokenCount, tokensOut: usage?.candidatesTokenCount }
@@ -462,13 +490,20 @@ function toOllamaMessages(messages, system) {
     const content = Array.isArray(message.content)
       ? message.content.filter(block => block.type === 'text').map(block => block.text).join('\n')
       : (message.content || '')
-    ollamaMessages.push({ role: message.role === 'assistant' ? 'assistant' : 'user', content })
+    const images = Array.isArray(message.content)
+      ? message.content
+        .filter(block => block.type !== 'text' && block.source?.data)
+        .map(block => block.source.data)
+      : []
+    const ollamaMessage = { role: message.role === 'assistant' ? 'assistant' : 'user', content }
+    if (images.length) ollamaMessage.images = images
+    ollamaMessages.push(ollamaMessage)
   }
 
   return ollamaMessages
 }
 
-async function callOllama(provider, { system, messages, tools, max_tokens }) {
+function buildOllamaParams(provider, { system, messages, tools, max_tokens, expectJson }) {
   const params = {
     model: provider.model || 'qwen3',
     messages: toOllamaMessages(messages, system),
@@ -476,6 +511,10 @@ async function callOllama(provider, { system, messages, tools, max_tokens }) {
   }
 
   if (max_tokens) params.options = { num_predict: max_tokens }
+  if (expectJson) {
+    params.format = 'json'
+    params.think = false
+  }
   if (tools?.length) {
     params.tools = tools.map(tool => ({
       type: 'function',
@@ -486,6 +525,11 @@ async function callOllama(provider, { system, messages, tools, max_tokens }) {
       },
     }))
   }
+  return params
+}
+
+async function callOllama(provider, options) {
+  const params = buildOllamaParams(provider, options)
 
   const response = await ollamaRequest({
     baseUrl: provider.base_url,
@@ -579,6 +623,25 @@ const CALL_FNS = {
   ollama:     callOllama,
 }
 
+async function providerSupportsCapability(provider, capability) {
+  if (!capability) return true
+  if (capability !== 'vision') return false
+  if (['anthropic', 'openai', 'gemini'].includes(provider.provider_type)) return true
+  if (provider.provider_type !== 'ollama') return false
+  try {
+    const details = await ollamaRequest({
+      baseUrl: provider.base_url,
+      path: '/api/show',
+      body: { model: provider.model },
+      apiKey: provider.api_key || null,
+    })
+    return Array.isArray(details.capabilities) && details.capabilities.includes('vision')
+  } catch (error) {
+    console.warn(`[llm] could not verify Ollama capabilities for ${provider.model}: ${error.message}`)
+    return false
+  }
+}
+
 // ── Public API ────────────────────────────────────────────────────────────────
 
 /**
@@ -589,13 +652,17 @@ const CALL_FNS = {
  * @param {object} opts      { messages, system?, tools?, max_tokens? }
  * @returns {{ text, tool_calls, stop_reason, provider }}
  */
-async function create(agentId, { system, messages, tools, max_tokens, profile, task_type, workflow_name, run_id, _taskType, _workflowName, _runId } = {}) {
+async function create(agentId, { system, messages, tools, max_tokens, profile, required_capability, task_type, workflow_name, run_id, _taskType, _workflowName, _runId } = {}) {
   const effectiveTaskType = task_type || _taskType || null
   const effectiveWorkflow = workflow_name || _workflowName || null
   const effectiveRunId = run_id || _runId || null
   const providers = await getPriorityList(agentId, profile)
+  const expectJson = ['extract', 'classify', 'json'].some(token => String(effectiveTaskType || '').toLowerCase().includes(token))
 
   if (providers.length === 0) {
+    if (profile) {
+      throw new Error(`[llm] no eligible providers configured for profile: ${profile}`)
+    }
     // Fallback: env-var credentials for backward compat during transition
     if (process.env.ANTHROPIC_API_KEY) {
       console.warn(`[llm] no DB providers for ${agentId}, falling back to env ANTHROPIC_API_KEY`)
@@ -614,6 +681,10 @@ async function create(agentId, { system, messages, tools, max_tokens, profile, t
 
     const fn = CALL_FNS[prov.provider_type]
     if (!fn) continue
+    if (!(await providerSupportsCapability(prov, required_capability))) {
+      errors.push(`${prov.name}: does not support required capability ${required_capability}`)
+      continue
+    }
 
     const effectiveProv = { ...prov, api_key: credentialFromEnv(prov.provider_type) || prov.api_key }
     console.log(`[llm:${agentId}] trying ${prov.name} (${prov.provider_type}/${prov.model}${profile ? ` profile=${profile}` : ''})`)
@@ -629,7 +700,7 @@ async function create(agentId, { system, messages, tools, max_tokens, profile, t
     }) : null
 
     try {
-      const result = await fn(effectiveProv, { system, messages, tools, max_tokens })
+      const result = await fn(effectiveProv, { system, messages, tools, max_tokens, expectJson })
       const cost   = calcCost(prov.provider_type, prov.model, result.tokensIn, result.tokensOut)
       await logUsage({ providerId: prov.id, agentId, model: result.model || prov.model, profile, taskType: effectiveTaskType, tokensIn: result.tokensIn, tokensOut: result.tokensOut, costUsd: cost })
       await markProviderHealthy(prov.id)
@@ -669,6 +740,9 @@ async function create(agentId, { system, messages, tools, max_tokens, profile, t
       if (isConnRefused) {
         _markProviderDead(prov.id)
         console.warn(`[llm:${agentId}] ${prov.name} unreachable (ECONNREFUSED) — skipping for 5 min`)
+      } else if (isTransientRateLimitError(err)) {
+        _markProviderDead(prov.id, 60 * 1000)
+        console.warn(`[llm:${agentId}] ${prov.name} rate-limited — cooling down for 1 min`)
       } else {
         console.warn(`[llm:${agentId}] ${prov.name} failed: ${err.message}`)
       }
@@ -708,6 +782,7 @@ async function embed(agentId, text) {
 module.exports = {
   create,
   embed,
+  hasEligibleProvider,
   invalidatePriorityCache,
-  _internals: { toResponsesInput, parseResponsesResponse, calcCost },
+  _internals: { toResponsesInput, toOllamaMessages, buildOllamaParams, providerEligible, providerSupportsCapability, parseResponsesResponse, calcCost, isCreditError, isTransientRateLimitError },
 }

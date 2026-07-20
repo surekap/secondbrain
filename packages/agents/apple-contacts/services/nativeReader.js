@@ -1,17 +1,19 @@
 'use strict';
 
-if (process.platform !== 'darwin') {
-  throw new Error('Native Apple Contacts sync requires macOS');
-}
+const { normalizeEmails, normalizePhones, rawValues } = require('./normalization');
 
-let contacts;
-try {
-  contacts = require('node-mac-contacts');
-} catch (err) {
-  throw new Error(
-    'node-mac-contacts is not installed or could not be loaded. ' +
-    'Run: npm install --optional  (Error: ' + err.message + ')'
-  );
+function loadNativeContacts() {
+  if (process.platform !== 'darwin') {
+    throw new Error('Native Apple Contacts sync requires macOS');
+  }
+  try {
+    return require('node-mac-contacts');
+  } catch (err) {
+    throw new Error(
+      'node-mac-contacts is not installed or could not be loaded. ' +
+      'Run: npm install --optional  (Error: ' + err.message + ')'
+    );
+  }
 }
 
 /**
@@ -20,6 +22,7 @@ try {
  * @returns {Promise<Array<NormalizedContact>>}
  */
 async function readNativeContacts() {
+  const contacts = loadNativeContacts();
   // Check permission before calling getAllContacts — it returns [] silently when denied
   const authStatus = contacts.getAuthStatus();
   if (authStatus === 'Not Determined') {
@@ -46,7 +49,7 @@ async function readNativeContacts() {
   return raw.map(normalizeNativeContact).filter(Boolean);
 }
 
-function normalizeNativeContact(c) {
+function normalizeNativeContact(c, options = {}) {
   const firstName = (c.firstName || '').trim() || null;
   const lastName  = (c.lastName  || '').trim() || null;
   const nickname  = (c.nickname  || '').trim() || null;
@@ -60,14 +63,12 @@ function normalizeNativeContact(c) {
 
   if (!displayName) return null;
 
-  const emails = (c.emailAddresses || [])
-    .map(e => (e.value || '').toLowerCase().trim())
-    .filter(Boolean);
-
-  const phoneNumbers = (c.phoneNumbers || [])
-    .map(p => (p.value || '').replace(/\D/g, ''))
-    .filter(t => t.length >= 7)
-    .map(t => t.slice(-10));
+  // node-mac-contacts currently returns strings. Older releases and test
+  // fixtures may return { value, label } objects, so accept both shapes.
+  const rawEmails = rawValues(c.emailAddresses || []);
+  const rawPhoneNumbers = rawValues(c.phoneNumbers || []);
+  const emails = normalizeEmails(c.emailAddresses || []);
+  const phoneNumbers = normalizePhones(c.phoneNumbers || [], options);
 
   // image is a Buffer (JPEG data) when present
   let avatarData = null;
@@ -85,6 +86,8 @@ function normalizeNativeContact(c) {
     company:          org,
     job_title:        (c.jobTitle || '').trim() || null,
     avatar_data:      avatarData,
+    raw_emails:       rawEmails,
+    raw_phone_numbers: rawPhoneNumbers,
   };
 }
 
@@ -101,4 +104,4 @@ function printDeniedInstructions() {
   console.error('');
 }
 
-module.exports = { readNativeContacts };
+module.exports = { readNativeContacts, normalizeNativeContact };

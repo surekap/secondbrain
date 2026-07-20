@@ -104,23 +104,18 @@ Rules:
 
         for (const item of items) {
           if (!item.title) continue
-          // Look up contact_id by name if provided
-          let contactId = null
-          if (item.contact_name) {
-            const { rows } = await db.query(`
-              SELECT id FROM relationships.contacts
-              WHERE normalized_name = LOWER(TRIM($1))
-                 OR display_name    ILIKE $1
-              LIMIT 1
-            `, [item.contact_name])
-            contactId = rows[0]?.id || null
-          }
+          // A transcript name is evidence, not identity. Keep it in the
+          // description for later exact-identity resolution or clarification.
+          const contactId = null
+          const unresolvedPerson = item.contact_name
+            ? `[Unresolved person: ${item.contact_name}] `
+            : ''
 
           insights.push({
             contact_id:   contactId,
             insight_type: 'action_needed',
             title:        `[Meeting] ${item.title}`,
-            description:  `${log.title ? `"${log.title}" · ` : ''}${item.description || ''}`,
+            description:  `${unresolvedPerson}${log.title ? `"${log.title}" · ` : ''}${item.description || ''}`,
             priority:     item.priority || 'medium',
             source_ref:   `lifelog:${log.id}`,
           })
@@ -426,27 +421,17 @@ Rules:
 
     const text = response.text || ''
     const items = parseJSON(text)
-    if (!Array.isArray(items)) return insights
+        if (!Array.isArray(items)) return insights
 
-    for (const item of items.slice(0, 5)) {
-      // Resolve person names to contact_ids
-      const contactIds = []
-      for (const name of (item.person_names || [])) {
-        if (!name) continue
-        try {
-          const { rows } = await db.query(`
-            SELECT id FROM relationships.contacts
-            WHERE normalized_name ILIKE $1
-               OR display_name ILIKE $2
-            LIMIT 1
-          `, [name.toLowerCase().trim(), name.trim()])
-          if (rows.length > 0) contactIds.push(rows[0].id)
-        } catch { /* ignore */ }
-      }
+        for (const item of items.slice(0, 5)) {
+          // Names synthesized from a digest are not stable identity evidence.
+          // Retain them for review/clarification instead of guessing contacts.
+          const contactIds = []
+          const unresolvedNames = (item.person_names || []).filter(Boolean)
 
-      // Deduplicate: skip if a similar insight already exists unactioned
-      const sortedIds = [...contactIds].sort((a, b) => a - b).join(',')
-      const titleHash = `cross:${item.title?.slice(0, 40)?.toLowerCase().replace(/\s+/g, '_')}:${sortedIds}`
+          // Deduplicate: skip if a similar insight already exists unactioned
+          const participantKey = unresolvedNames.map(name => name.toLowerCase().trim()).sort().join(',')
+          const titleHash = `cross:${item.title?.slice(0, 40)?.toLowerCase().replace(/\s+/g, '_')}:${participantKey}`
       const { rows: exists } = await db.query(`
         SELECT id FROM relationships.insights
         WHERE source_ref = $1
@@ -460,7 +445,7 @@ Rules:
         contact_ids:  contactIds,
         insight_type: 'cross_source_opportunity',
         title:        item.title || 'Relationship opportunity',
-        description:  item.description || '',
+            description:  `${unresolvedNames.length ? `[Unresolved people: ${unresolvedNames.join(', ')}] ` : ''}${item.description || ''}`,
         priority:     item.priority || 'medium',
         source_ref:   titleHash,
       })

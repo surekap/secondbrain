@@ -13,6 +13,7 @@ const indexSource = fs.readFileSync(path.join(repo, 'packages', 'agents', 'intel
 const {
   extractCommunicationEvents,
 } = require('../services/communication-event-extractor')
+const eventExtractorSource = fs.readFileSync(path.join(repo, 'packages', 'agents', 'intelligence', 'services', 'communication-event-extractor.js'), 'utf8')
 
 test('communication events schema stores traceable source communication metadata', () => {
   assert.ok(schema.includes('CREATE TABLE IF NOT EXISTS intelligence.communication_events'))
@@ -60,4 +61,12 @@ test('communication event extractor classifies invites and preserves the origina
 
 test('intelligence pipeline wires communication event backfill into refresh', () => {
   assert.ok(indexSource.includes("backfillCommunicationEvents(pool, { days: 30, log })"))
+})
+
+test('communication event backfill reads each message only from the canonical layer', () => {
+  const loader = eventExtractorSource.slice(eventExtractorSource.indexOf('async function loadCommunicationRows'), eventExtractorSource.indexOf('async function backfillCommunicationEvents'))
+  assert.match(loader, /FROM relationships\.communications rc/)
+  assert.doesNotMatch(loader, /FROM email\.emails|FROM public\.messages/)
+  assert.match(loader, /rows: comms\.rows\.map\(row => \(\{ \.\.\.row, source_table: 'relationships\.communications'/)
+  assert.match(loader, /rc\.source_id AS source_ref/)
 })

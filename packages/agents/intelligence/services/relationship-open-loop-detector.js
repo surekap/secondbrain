@@ -102,6 +102,7 @@ function detectRelationshipOpenLoops(input = {}) {
     const text = open.text
     const direction = open.from_me ? 'outbound' : 'inbound'
     const sourceId = open.source_id || open.id || `${open.chat_id || id}:${open.ts || open.occurred_at || ''}`
+    const canonicalCommunicationId = open.canonical_communication_id || null
     const occurredAt = open.ts || open.occurred_at || open.created_at || contact.last_interaction_at || null
     out.push({
       opportunity_type: 'follow_up',
@@ -130,9 +131,11 @@ function detectRelationshipOpenLoops(input = {}) {
         relationship_type: contact.relationship_type || null,
       },
       evidence: [{
-        source_table: 'public.messages',
-        source_id: sourceId,
-        source_ref: `whatsapp:${sourceId}`,
+        source_table: canonicalCommunicationId ? 'relationships.communications' : 'public.messages',
+        source_id: canonicalCommunicationId || sourceId,
+        source_ref: canonicalCommunicationId
+          ? `relationships.communication:${canonicalCommunicationId}`
+          : `whatsapp:${sourceId}`,
         occurred_at: occurredAt,
         quote: compact(text, 500),
         relevance: 0.9,

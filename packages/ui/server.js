@@ -2,10 +2,10 @@
 
 const express    = require('express');
 const { spawn }  = require('child_process');
-const { randomUUID } = require('crypto');
 const fs         = require('fs');
 const path       = require('path');
 const dotenv     = require('dotenv');
+const crypto     = require('crypto');
 const { Pool }   = require('pg');
 const indexer    = require('./services/indexer');
 const { embedBatch, toSql, getEmbeddingConfig } = require('./services/embedder');
@@ -19,7 +19,14 @@ const { resolveEntityAlias } = require('../agents/intelligence/services/entity-r
 const { auditDuplicateContacts, auditDuplicateOrganizations, auditDuplicateSummary } = require('../agents/intelligence/services/duplicate-auditor');
 const { upsertDuplicateDecision, listDuplicateDecisions } = require('../agents/intelligence/services/duplicate-decisions');
 const { runExactIdentityMerge } = require('../agents/relationships/services/exact-identity-backfill');
+const { mergeContactRecords } = require('../agents/relationships/services/identity');
 const { createOpportunitySuppression } = require('../agents/intelligence/services/suppression-matcher');
+const { answerClarification, recordGuidanceFact, recordGuidanceFactInTransaction } = require('../agents/intelligence/services/guidance');
+const { applyOpportunityFeedback } = require('../agents/intelligence/services/opportunity-feedback');
+const { requireSameOrigin, secureTokenEqual } = require('../agents/shared/http-security');
+const { loadSqlMigrations, runMigrations } = require('../agents/shared/migrations');
+const { AgentRuntimeStore } = require('./services/agent-runtime-store');
+const { runServerStartup, terminateOnStartupFailure } = require('./services/server-startup');
 
 // ── Bootstrap ─────────────────────────────────────────────────────────────────
 
@@ -42,12 +49,6 @@ try {
   console.warn('[ui] DB pool creation failed:', e.message);
 }
 
-const intelligenceRefreshState = {
-  current: null,
-  last: null,
-  history: [],
-};
-
 const EXPLICIT_OPPORTUNITY_ACTIONS = new Set([
   'wrong_person',
   'wrong_project',
@@ -67,6 +68,9 @@ const ACTION_TO_REASON_CODE = {
 
 async function recordOpportunitySuppressionFromAction(opportunity, action, note) {
   if (!opportunity || !EXPLICIT_OPPORTUNITY_ACTIONS.has(action)) return null;
+  // Wrong-link feedback repairs this item only. Suppressing the person/project
+  // globally would erase unrelated valid intelligence about that entity.
+  if (action === 'wrong_person' || action === 'wrong_project') return null;
   if (!db) throw new Error('No database');
 
   const reasonCode = ACTION_TO_REASON_CODE[action];
@@ -114,49 +118,6 @@ async function recordOpportunitySuppressionFromAction(opportunity, action, note)
       action,
     },
   });
-}
-
-function createIntelligenceRefreshRun(trigger = 'api') {
-  return {
-    id: randomUUID(),
-    trigger,
-    status: 'running',
-    started_at: new Date().toISOString(),
-    finished_at: null,
-    duration_ms: null,
-    error: null,
-    result: null,
-    logs: [],
-  };
-}
-
-function appendIntelligenceRefreshLog(run, level, message, meta = null) {
-  if (!run) return;
-  const entry = {
-    ts: new Date().toISOString(),
-    level,
-    message: String(message || ''),
-    ...(meta ? { meta } : {}),
-  };
-  run.logs.push(entry);
-  if (run.logs.length > 500) run.logs.splice(0, run.logs.length - 500);
-  const line = `[intelligence-refresh:${run.id}] ${entry.message}`;
-  if (level === 'error') console.error(line, meta || '');
-  else if (level === 'warn') console.warn(line, meta || '');
-  else console.log(line, meta || '');
-}
-
-function finishIntelligenceRefreshRun(run, status, result = null, error = null) {
-  if (!run) return;
-  run.status = status;
-  run.finished_at = new Date().toISOString();
-  run.duration_ms = new Date(run.finished_at).getTime() - new Date(run.started_at).getTime();
-  run.result = result;
-  run.error = error ? String(error.message || error) : null;
-  intelligenceRefreshState.last = run;
-  intelligenceRefreshState.history.unshift(run);
-  intelligenceRefreshState.history = intelligenceRefreshState.history.slice(0, 10);
-  if (intelligenceRefreshState.current?.id === run.id) intelligenceRefreshState.current = null;
 }
 
 const DEPLOY_STATUS_FILE = path.resolve(LOGS_DIR, 'deploy-reload-status.json');
@@ -230,7 +191,7 @@ async function migrateEnvToDb() {
   // ── API keys: only seed if present in environment ──────────────────────────
   const apiKeys = [
     'LIMITLESS_API_KEY', 'TAVILY_API_KEY', 'PEOPLEDATALABS_API_KEY',
-    'SERPAPI_API_KEY', 'NOTION_TOKEN', 'TODOIST_API_KEY', 'PERPLEXITY_API_KEY',
+    'SERPAPI_API_KEY', 'PERPLEXITY_API_KEY',
     'GEMINI_API_KEY', 'ANTHROPIC_API_KEY', 'OPENAI_API_KEY',
   ];
   for (const envKey of apiKeys) {
@@ -258,8 +219,6 @@ async function migrateEnvToDb() {
   const ltFetchDays = process.env.FETCH_DAYS ? Number(process.env.FETCH_DAYS) : 1;
   await seed('limitless.FETCH_DAYS',              ltFetchDays);
   await seed('limitless.FETCH_INTERVAL_CRON',     '*/5 * * * *');
-  await seed('limitless.PROCESS_INTERVAL_CRON',   '*/1 * * * *');
-  await seed('limitless.PROCESSING_BATCH_SIZE',   '15');
 
   // WhatsApp — CLIENT_ID has no sensible default; leave blank for user to fill
   await seed('system.WHATSAPP_CLIENT_ID', '');
@@ -267,6 +226,11 @@ async function migrateEnvToDb() {
   if (migrated > 0) {
     console.log(`[server] seeded ${migrated} config keys to DB`);
   }
+}
+
+async function runOrderedMigrations() {
+  const directory = path.resolve(__dirname, '../agents/shared/sql/migrations');
+  return runMigrations(db, loadSqlMigrations(directory));
 }
 
 // ── Chromium setup (idempotent) ───────────────────────────────────────────────
@@ -296,24 +260,35 @@ const AGENTS = {
     name:        'Email Agent',
     description: 'Syncs Gmail inboxes into Postgres via IMAP',
     entrypoint:  path.resolve(__dirname, '../agents/email/index.js'),
+    core:        true,
   },
   limitless: {
     id:          'limitless',
     name:        'Limitless Agent',
     description: 'Fetches and processes Limitless.ai lifelogs',
     entrypoint:  path.resolve(__dirname, '../agents/limitless/index.js'),
+    core:        true,
   },
   relationships: {
     id:          'relationships',
     name:        'Relationships Agent',
     description: 'Analyzes emails, WhatsApp, and Limitless to build contact profiles',
     entrypoint:  path.resolve(__dirname, '../agents/relationships/index.js'),
+    core:        true,
   },
   projects: {
     id:          'projects',
     name:        'Projects Agent',
     description: 'Groups communications into projects and tracks their progress',
     entrypoint:  path.resolve(__dirname, '../agents/projects/index.js'),
+    core:        true,
+  },
+  intelligence: {
+    id:          'intelligence',
+    name:        'Intelligence Agent',
+    description: 'Extracts evidence-backed claims and reconciles the precision-first attention queue',
+    entrypoint:  path.resolve(__dirname, '../agents/intelligence/runner.js'),
+    core:        true,
   },
   research: {
     id:          'research',
@@ -338,12 +313,14 @@ const AGENTS = {
     name:        'WhatsApp Connector',
     description: 'Bridges WhatsApp Web to Postgres — saves messages and fans out to webhook subscribers',
     entrypoint:  path.resolve(__dirname, '../agents/whatsapp/src/app.js'),
+    core:        true,
   },
   sampler: {
     id:          'sampler',
     name:        'System Sampler',
     description: 'Collects system telemetry samples for observability and freshness checks',
     entrypoint:  path.resolve(__dirname, '../sampler/index.js'),
+    core:        true,
   },
   'apple-contacts': {
     id:              'apple-contacts',
@@ -353,6 +330,22 @@ const AGENTS = {
     nativeAvailable: process.platform === 'darwin',
   },
 };
+
+const CORE_AGENT_IDS = Object.values(AGENTS).filter(agent => agent.core).map(agent => agent.id);
+const CORE_STARTUP_DELAY_MS = {
+  email: 0,
+  limitless: 0,
+  whatsapp: 0,
+  sampler: 0,
+  relationships: 15_000,
+  projects: 30_000,
+  intelligence: 45_000,
+};
+const runtimeStore = new AgentRuntimeStore(db);
+const restartTimers = new Map();
+const startingAgents = new Set();
+let supervisorInterval = null;
+let serverShuttingDown = false;
 
 // ── Process registry ──────────────────────────────────────────────────────────
 
@@ -508,6 +501,16 @@ function writeEnv(updates) {
 const waQr = {}; // agentId → { data: string, ts: Date } — latest WhatsApp QR
 
 async function startAgent(id) {
+  if (startingAgents.has(id)) return { error: 'Start already in progress' };
+  startingAgents.add(id);
+  try {
+    return await startAgentOnce(id);
+  } finally {
+    startingAgents.delete(id);
+  }
+}
+
+async function startAgentOnce(id) {
   if (procs[id]?.proc || procs[id]?.recovered) return { error: 'Already running' };
   const def = AGENTS[id];
   if (!def) return { error: 'Unknown agent' };
@@ -564,6 +567,7 @@ async function startAgent(id) {
     appendLog(id, 'stdout', d);
   });
   proc.stderr.on('data', d => appendLog(id, 'stderr', d));
+  proc.on('error', err => appendLog(id, 'stderr', `[${def.name}] process error: ${err.message}`));
 
   proc.on('exit', code => {
     appendLog(id, 'system', `[${def.name}] process exited (code ${code ?? '?'})`);
@@ -578,14 +582,29 @@ async function startAgent(id) {
     }
     // Remove PID file
     try { fs.unlinkSync(pidFile(id)); } catch {}
+    handleAgentExit(id, code).catch(err => {
+      console.error(`[supervisor] failed to record ${id} exit:`, err.message);
+    });
   });
+
+  if (def.core) {
+    await runtimeStore.markStarted(id).catch(err => {
+      console.warn(`[supervisor] could not persist ${id} start:`, err.message);
+    });
+  }
 
   return { pid: proc.pid };
 }
 
-function stopAgent(id) {
+async function stopAgent(id, { persistDesired = true } = {}) {
+  const def = AGENTS[id];
+  if (!def) return { error: 'Unknown agent' };
+  if (def.core && persistDesired) {
+    await runtimeStore.setDesired(id, 'stopped');
+    clearRestartTimer(id);
+  }
   const entry = procs[id];
-  if (!entry) return { error: 'Not running' };
+  if (!entry || (!entry.proc && !entry.recovered)) return { ok: true, alreadyStopped: true };
   if (entry.recovered) {
     // Kill the external process
     try {
@@ -622,6 +641,122 @@ function agentStatus(id) {
   return 'idle';
 }
 
+function clearRestartTimer(id) {
+  const timer = restartTimers.get(id);
+  if (timer) clearTimeout(timer);
+  restartTimers.delete(id);
+}
+
+function scheduleAgentRestart(id, state = runtimeStore.get(id), options = {}) {
+  if (serverShuttingDown || !AGENTS[id]?.core || state?.desired_state !== 'running') return;
+  if (agentStatus(id) === 'running' || startingAgents.has(id) || restartTimers.has(id)) return;
+
+  const requestedAt = state.next_restart_at ? new Date(state.next_restart_at).getTime() : Date.now();
+  const restartAt = Math.max(requestedAt, Date.now() + Math.max(0, Number(options.minimumDelayMs || 0)));
+  const delayMs = Math.max(0, restartAt - Date.now());
+  const timer = setTimeout(() => {
+    restartTimers.delete(id);
+    restartCoreAgent(id).catch(err => console.error(`[supervisor] ${id} restart failed:`, err.message));
+  }, delayMs);
+  timer.unref?.();
+  restartTimers.set(id, timer);
+  appendLog(id, 'system', `[${AGENTS[id].name}] restart scheduled in ${Math.ceil(delayMs / 1000)}s`);
+}
+
+async function restartCoreAgent(id) {
+  if (serverShuttingDown || runtimeStore.get(id)?.desired_state !== 'running') return;
+  let result;
+  try {
+    result = await startAgent(id);
+  } catch (error) {
+    result = { error: error.message };
+  }
+  if (result?.error && result.error !== 'Already running') {
+    const failedState = await runtimeStore.markFailure(id, { error: result.error });
+    scheduleAgentRestart(id, failedState);
+  }
+}
+
+async function handleAgentExit(id, code) {
+  const def = AGENTS[id];
+  if (!def?.core || serverShuttingDown) return;
+  const state = runtimeStore.get(id);
+  if (!state) return;
+  if (state.desired_state === 'stopped') {
+    await runtimeStore.markStopped(id, code);
+    return;
+  }
+  const failedState = await runtimeStore.markFailure(id, {
+    exitCode: code,
+    error: `${def.name} exited unexpectedly${code == null ? '' : ` with code ${code}`}`,
+  });
+  scheduleAgentRestart(id, failedState);
+}
+
+async function requestAgentStart(id) {
+  const def = AGENTS[id];
+  if (!def) return { error: 'Unknown agent' };
+  if (def.core) {
+    await runtimeStore.setDesired(id, 'running');
+    clearRestartTimer(id);
+  }
+  let result;
+  try {
+    result = await startAgent(id);
+  } catch (error) {
+    result = { error: error.message };
+  }
+  if (def.core && result?.error && result.error !== 'Already running') {
+    const failedState = await runtimeStore.markFailure(id, { error: result.error });
+    scheduleAgentRestart(id, failedState);
+  }
+  return result;
+}
+
+async function superviseCoreAgents() {
+  if (serverShuttingDown) return;
+  for (const id of CORE_AGENT_IDS) {
+    const state = runtimeStore.get(id);
+    const entry = procs[id];
+
+    if (state?.desired_state === 'stopped') {
+      clearRestartTimer(id);
+      if (agentStatus(id) === 'running') await stopAgent(id, { persistDesired: false });
+      continue;
+    }
+
+    if (entry?.recovered && !isPidAlive(entry.pid)) {
+      entry.recovered = false;
+      entry.stoppedAt = new Date();
+      try { fs.unlinkSync(pidFile(id)); } catch {}
+      const failedState = await runtimeStore.markFailure(id, { error: `${AGENTS[id].name} disappeared after recovery` });
+      scheduleAgentRestart(id, failedState);
+      continue;
+    }
+
+    scheduleAgentRestart(id, state);
+  }
+}
+
+async function initializeAgentSupervisor() {
+  recoverAgents();
+  if (!db) {
+    console.warn('[supervisor] durable recovery disabled because the database is unavailable');
+    return;
+  }
+  await runtimeStore.initialize(CORE_AGENT_IDS);
+  for (const id of CORE_AGENT_IDS) {
+    const state = runtimeStore.get(id);
+    if (state?.desired_state === 'running') {
+      scheduleAgentRestart(id, state, { minimumDelayMs: CORE_STARTUP_DELAY_MS[id] || 0 });
+    }
+  }
+  supervisorInterval = setInterval(() => {
+    superviseCoreAgents().catch(err => console.error('[supervisor] reconciliation failed:', err.message));
+  }, 15_000);
+  supervisorInterval.unref?.();
+}
+
 // ── DB stats ──────────────────────────────────────────────────────────────────
 
 async function emailStats() {
@@ -646,8 +781,7 @@ async function limitlessStats() {
       SELECT
         COUNT(*)                                                      AS total,
         COUNT(*) FILTER (WHERE created_at > NOW() - INTERVAL '24h')  AS today,
-        MAX(created_at)                                               AS last_fetch,
-        COUNT(*) FILTER (WHERE processed = FALSE)                     AS pending
+        MAX(start_time)                                                AS last_fetch
       FROM limitless.lifelogs
     `);
     return rows[0];
@@ -792,6 +926,7 @@ function readGmailAccounts(env) {
 // ── Express ───────────────────────────────────────────────────────────────────
 
 const app = express();
+app.use(requireSameOrigin());
 app.use(express.json());
 app.use('/api/observe', createObserveRouter(db));
 
@@ -826,6 +961,7 @@ app.get('/api/agents', async (req, res) => {
   for (const [id, def] of Object.entries(AGENTS)) {
     const entry  = procs[id] || {};
     const status = agentStatus(id);
+    const runtime = runtimeStore.get(id);
     result[id] = {
       id,
       name:        def.name,
@@ -835,6 +971,11 @@ app.get('/api/agents', async (req, res) => {
       startTime:   entry.startTime  || null,
       stoppedAt:   entry.stoppedAt  || null,
       exitCode:    entry.exitCode   ?? null,
+      desiredState: runtime?.desired_state || null,
+      restartCount: runtime?.restart_count ?? 0,
+      consecutiveFailures: runtime?.consecutive_failures ?? 0,
+      nextRestartAt: runtime?.next_restart_at || null,
+      lastError: runtime?.last_error || null,
       stats:          id === 'email'          ? eStats
                     : id === 'limitless'      ? lStats
                     : id === 'relationships'  ? rStats
@@ -870,9 +1011,13 @@ app.get('/api/agents/:id/logs', (req, res) => {
 
 // POST /api/agents/:id/start
 app.post('/api/agents/:id/start', async (req, res) => {
-  const result = await startAgent(req.params.id);
-  if (result?.error) return res.status(400).json(result);
-  res.json(result || { ok: true });
+  try {
+    const result = await requestAgentStart(req.params.id);
+    if (result?.error) return res.status(400).json(result);
+    res.json(result || { ok: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
 });
 
 // GET /api/agents/:id/qr  — latest WhatsApp QR code data (null if not waiting)
@@ -882,10 +1027,14 @@ app.get('/api/agents/:id/qr', (req, res) => {
 });
 
 // POST /api/agents/:id/stop
-app.post('/api/agents/:id/stop', (req, res) => {
-  const result = stopAgent(req.params.id);
-  if (result.error) return res.status(400).json(result);
-  res.json(result);
+app.post('/api/agents/:id/stop', async (req, res) => {
+  try {
+    const result = await stopAgent(req.params.id);
+    if (result.error) return res.status(400).json(result);
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
 });
 
 // POST /api/agents/:id/import  — one-shot file import for openai/gemini
@@ -959,15 +1108,7 @@ app.get('/api/config', (req, res) => {
     limitless: {
       LIMITLESS_API_KEY:        redact(env.LIMITLESS_API_KEY),
       FETCH_INTERVAL_CRON:      env.FETCH_INTERVAL_CRON      || '*/5 * * * *',
-      PROCESS_INTERVAL_CRON:    env.PROCESS_INTERVAL_CRON    || '*/1 * * * *',
       FETCH_DAYS:               env.FETCH_DAYS               || '1',
-      PROCESSING_BATCH_SIZE:    env.PROCESSING_BATCH_SIZE    || '15',
-      AI_PROVIDER:           env.AI_PROVIDER           || 'anthropic',
-      ANTHROPIC_API_KEY:     redact(env.ANTHROPIC_API_KEY),
-      OPENAI_API_KEY:        redact(env.OPENAI_API_KEY),
-      AI_ANTHROPIC_MODEL:    env.AI_ANTHROPIC_MODEL    || '',
-      AI_OPENAI_MODEL:       env.AI_OPENAI_MODEL       || '',
-      AI_CLAUDE_CLI_MODEL:   env.AI_CLAUDE_CLI_MODEL   || '',
     },
     OPENAI_EXPORT_PATH:           env.OPENAI_EXPORT_PATH           || '',
     GEMINI_EXPORT_PATH:           env.GEMINI_EXPORT_PATH           || '',
@@ -999,8 +1140,9 @@ app.get('/api/system/deploy/log', (req, res) => {
 
 // POST /api/system/deploy/reload — fast-forward pull, optional install/build, restart UI/API.
 // Guardrails: explicit confirmation, no concurrent deploys, detached script handles
-// git cleanliness/ff-only/build/port restart. Optional env SECOND_BRAIN_DEPLOY_TOKEN
-// can require x-deploy-token or body.deploy_token.
+// git cleanliness/ff-only/build/port restart. SECOND_BRAIN_DEPLOY_TOKEN is
+// mandatory and accepted only through x-deploy-token so it is not copied into
+// request bodies or application logs.
 app.post('/api/system/deploy/reload', (req, res) => {
   try {
     const confirmation = req.body?.confirm;
@@ -1008,8 +1150,11 @@ app.post('/api/system/deploy/reload', (req, res) => {
       return res.status(400).json({ error: 'confirm must equal pull-and-reload' });
     }
     const expectedToken = process.env.SECOND_BRAIN_DEPLOY_TOKEN || '';
-    const suppliedToken = req.get('x-deploy-token') || req.body?.deploy_token || '';
-    if (expectedToken && suppliedToken !== expectedToken) {
+    if (!expectedToken) {
+      return res.status(503).json({ error: 'Deploy/reload is disabled until SECOND_BRAIN_DEPLOY_TOKEN is configured' });
+    }
+    const suppliedToken = req.get('x-deploy-token') || '';
+    if (!secureTokenEqual(expectedToken, suppliedToken)) {
       return res.status(403).json({ error: 'Invalid deploy token' });
     }
     if (deployAlreadyRunning()) {
@@ -1108,10 +1253,8 @@ app.post('/api/config', (req, res) => {
     }
 
     if (agent === 'limitless') {
-      const keys = ['LIMITLESS_API_KEY', 'FETCH_INTERVAL_CRON', 'PROCESS_INTERVAL_CRON',
-                    'FETCH_DAYS', 'PROCESSING_BATCH_SIZE', 'AI_PROVIDER',
-                    'ANTHROPIC_API_KEY', 'OPENAI_API_KEY',
-                    'AI_ANTHROPIC_MODEL', 'AI_OPENAI_MODEL', 'AI_CLAUDE_CLI_MODEL'];
+      const keys = ['LIMITLESS_API_KEY', 'FETCH_INTERVAL_CRON',
+                    'FETCH_DAYS'];
       for (const k of keys) {
         if (updates[k] != null && updates[k] !== '[REDACTED]') envUpdates[k] = updates[k];
       }
@@ -1471,10 +1614,29 @@ app.get('/api/intelligence/identity/exact-merge', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// POST /api/intelligence/duplicates/decide — record confirm/ignore decision; never auto-merges
+// POST /api/intelligence/duplicates/decide — ignore a candidate or merge a user-confirmed contact.
+// Raw source records are immutable; the merge only updates canonical/contact-derived rows.
 app.post('/api/intelligence/duplicates/decide', async (req, res) => {
   if (!db) return res.status(503).json({ error: 'No database' });
   try {
+    const entityType = String(req.body?.entity_type || '').trim().toLowerCase();
+    const action = String(req.body?.action || '').trim().toLowerCase();
+    if (entityType === 'contact' && ['confirm', 'confirmed'].includes(action)) {
+      const canonicalId = String(req.body?.canonical_id || '').trim();
+      const duplicateIds = [...new Set((Array.isArray(req.body?.duplicate_ids) ? req.body.duplicate_ids : [])
+        .map(id => String(id || '').trim())
+        .filter(id => id && id !== canonicalId))];
+      if (!canonicalId || duplicateIds.length === 0) {
+        return res.status(400).json({ error: 'A canonical contact and at least one duplicate contact are required' });
+      }
+      const merge = await mergeContactRecords(db, canonicalId, duplicateIds, {
+        duplicate_key: req.body?.duplicate_key,
+        decided_by: req.body?.decided_by || 'dashboard',
+        note: req.body?.note || 'User-confirmed duplicate merge',
+      });
+      return res.json({ ok: true, merged: true, merge });
+    }
+
     const row = await upsertDuplicateDecision(db, {
       entity_type: req.body?.entity_type,
       duplicate_key: req.body?.duplicate_key,
@@ -1812,6 +1974,7 @@ app.get('/api/intelligence/opportunities', async (req, res) => {
     if (status !== 'all') {
       params.push(status);
       conditions.push(`o.status = $${params.length}`);
+      if (status === 'open') conditions.push(`o.lifecycle_state = 'active'`);
     }
     if (req.query.type) {
       params.push(req.query.type);
@@ -2097,7 +2260,10 @@ app.patch('/api/intelligence/opportunities/:id', async (req, res) => {
     delete updates.feedback_action;
     delete updates.action;
     if (!updates.feedback_note && req.body?.note) updates.feedback_note = req.body.note;
-    if (feedbackAction === 'already_closed') {
+    if (feedbackAction === 'wrong_person' || feedbackAction === 'wrong_project') {
+      delete updates.status;
+      delete updates.feedback;
+    } else if (feedbackAction === 'already_closed') {
       updates.status = 'actioned';
       updates.feedback = updates.feedback || 'too_late';
     } else if (feedbackAction === 'not_useful') {
@@ -2110,34 +2276,21 @@ app.patch('/api/intelligence/opportunities/:id', async (req, res) => {
     updates.feedback_note = updates.feedback_note || compactText(req.body?.note || req.body?.feedback_note || '', 500) || null;
   }
 
-  const setClauses = [];
-  const values = [];
-  let idx = 1;
-  for (const [key, value] of Object.entries(updates)) {
-    setClauses.push(`${key} = $${idx++}`);
-    values.push(value);
-  }
-  if (updates.status === 'actioned') setClauses.push('actioned_at = NOW()');
-  if (updates.status === 'dismissed') setClauses.push('dismissed_at = NOW()');
-  setClauses.push('updated_at = NOW()');
-  values.push(id);
-
   try {
-    const { rows } = await db.query(`
-      UPDATE intelligence.opportunities
-      SET ${setClauses.join(', ')}
-      WHERE id = $${idx}
-      RETURNING *
-    `, values);
-    if (!rows.length) return res.status(404).json({ error: 'Not found' });
+    const result = await applyOpportunityFeedback(db, id, {
+      updates,
+      action: feedbackAction || null,
+      note: updates.feedback_note || req.body?.note || null,
+    });
+    if (!result) return res.status(404).json({ error: 'Not found' });
     if (feedbackAction) {
       try {
-        await recordOpportunitySuppressionFromAction(rows[0], feedbackAction, updates.feedback_note || null);
+        await recordOpportunitySuppressionFromAction(result.opportunity, feedbackAction, updates.feedback_note || null);
       } catch (suppressionError) {
         console.warn('[ui] suppression write failed:', suppressionError.message);
       }
     }
-    res.json(rows[0]);
+    res.json({ ...result.opportunity, feedback_event: result.feedback_event, link_correction: result.link_correction });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -2159,79 +2312,230 @@ app.post('/api/intelligence/opportunities/:id/feedback', async (req, res) => {
     : feedback;
 
   try {
-    const { rows } = await db.query(`
-      INSERT INTO intelligence.opportunity_feedback_events (opportunity_id, feedback, note)
-      VALUES ($1, $2, $3)
-      RETURNING *
-    `, [id, recordedFeedback, note]);
-    await db.query(`
-      UPDATE intelligence.opportunities
-      SET feedback = $2, feedback_note = COALESCE($3, feedback_note), updated_at = NOW()
-      WHERE id = $1
-    `, [id, recordedFeedback, note]);
+    const linkCorrection = action === 'wrong_person' || action === 'wrong_project';
+    const result = await applyOpportunityFeedback(db, id, {
+      updates: linkCorrection ? { feedback_note: note } : { feedback: recordedFeedback, feedback_note: note },
+      action: action || null,
+      note,
+    });
+    if (!result) return res.status(404).json({ error: 'Not found' });
     if (action) {
-      const { rows: opportunityRows } = await db.query('SELECT * FROM intelligence.opportunities WHERE id = $1', [id]);
-      if (opportunityRows.length) {
-        try {
-          await recordOpportunitySuppressionFromAction(opportunityRows[0], action, note);
-        } catch (suppressionError) {
-          console.warn('[ui] suppression write failed:', suppressionError.message);
-        }
+      try {
+        await recordOpportunitySuppressionFromAction(result.opportunity, action, note);
+      } catch (suppressionError) {
+        console.warn('[ui] suppression write failed:', suppressionError.message);
       }
     }
-    res.json(rows[0]);
+    res.json(result.feedback_event || { ok: true, opportunity: result.opportunity });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// GET /api/intelligence/refresh/status — inspect latest on-demand intelligence refresh
-app.get('/api/intelligence/refresh/status', (req, res) => {
-  res.json({
-    current: intelligenceRefreshState.current,
-    last: intelligenceRefreshState.last,
-    history: intelligenceRefreshState.history,
-  });
+// GET /api/intelligence/refresh/status — inspect durable intelligence runs.
+app.get('/api/intelligence/refresh/status', async (req, res) => {
+  if (!db) return res.status(503).json({ error: 'Database unavailable' });
+  try {
+    const { rows } = await db.query(`
+      SELECT id, trigger, status, runner_id, stats, checkpoints, error,
+             started_at, heartbeat_at, completed_at,
+             CASE WHEN completed_at IS NOT NULL
+               THEN EXTRACT(EPOCH FROM (completed_at - started_at)) * 1000
+               ELSE EXTRACT(EPOCH FROM (NOW() - started_at)) * 1000
+             END AS duration_ms
+      FROM intelligence.pipeline_runs
+      ORDER BY started_at DESC
+      LIMIT 10
+    `);
+    res.json({
+      current: rows.find(run => run.status === 'running') || null,
+      last: rows.find(run => run.status !== 'running') || null,
+      history: rows,
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
 });
 
 // POST /api/intelligence/refresh — trigger intelligence pipeline on-demand
 app.post('/api/intelligence/refresh', async (req, res) => {
   try {
     if (!db) return res.status(503).json({ error: 'Database unavailable' });
-    if (intelligenceRefreshState.current) {
+    const { rows: running } = await db.query(`
+      SELECT id, trigger, status, runner_id, started_at, heartbeat_at
+      FROM intelligence.pipeline_runs
+      WHERE status = 'running'
+      ORDER BY started_at DESC
+      LIMIT 1
+    `);
+    if (running[0]) {
       return res.status(409).json({
         status: 'already_running',
-        run_id: intelligenceRefreshState.current.id,
-        current: intelligenceRefreshState.current,
+        run_id: running[0].id,
+        current: running[0],
       });
     }
 
-    const { runIntelligenceServices } = require('../agents/intelligence/index.js');
-    const run = createIntelligenceRefreshRun(req.body?.trigger || 'api');
-    intelligenceRefreshState.current = run;
-    appendIntelligenceRefreshLog(run, 'info', 'Refresh queued');
-
-    // Run in background, but expose all logs/status through /api/intelligence/refresh/status.
+    const { runDurableIntelligence } = require('../agents/intelligence/services/pipeline-runner');
     setImmediate(async () => {
       try {
-        appendIntelligenceRefreshLog(run, 'info', 'Refresh started');
-        const result = await runIntelligenceServices(db, {
-          log: (level, message, meta) => appendIntelligenceRefreshLog(run, level, message, meta),
-        });
-        appendIntelligenceRefreshLog(run, 'info', 'Refresh completed', result);
-        finishIntelligenceRefreshRun(run, 'completed', result);
+        await runDurableIntelligence({ pool: db, trigger: 'api' });
       } catch (error) {
-        appendIntelligenceRefreshLog(run, 'error', 'Refresh failed', { error: error.message, stack: error.stack });
-        finishIntelligenceRefreshRun(run, 'failed', null, error);
+        console.error('[API] Durable intelligence refresh failed:', error.message);
       }
     });
 
-    res.json({
+    res.status(202).json({
       status: 'queued',
-      run_id: run.id,
       status_url: '/api/intelligence/refresh/status',
-      message: 'Intelligence pipeline queued for execution'
+      message: 'Durable intelligence pipeline queued for execution'
     });
   } catch (error) {
     console.error('[API] Intelligence refresh error:', error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET /api/intelligence/clarifications — only consequential, persistent ambiguity is user-facing.
+app.get('/api/intelligence/clarifications', async (req, res) => {
+  if (!db) return res.status(503).json({ error: 'Database unavailable' });
+  try {
+    const includeAll = req.query.all === 'true';
+    const { rows } = await db.query(`
+      SELECT id, ambiguity_key, scope_type, scope_id, question, impact, status,
+             occurrences, first_observed_at, last_observed_at, metadata
+      FROM intelligence.clarification_questions
+      WHERE ($1::boolean OR (status = 'pending' AND impact = 'high' AND occurrences >= 3))
+      ORDER BY CASE impact WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END,
+               occurrences DESC, last_observed_at DESC
+      LIMIT 50
+    `, [includeAll]);
+    res.json(rows);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// POST /api/intelligence/clarifications/:key/answer — persist an answer as guidance, never raw-data mutation.
+app.post('/api/intelligence/clarifications/:key/answer', async (req, res) => {
+  if (!db) return res.status(503).json({ error: 'Database unavailable' });
+  if (req.body?.fact_value === undefined) return res.status(400).json({ error: 'fact_value is required' });
+  try {
+    const fact = await answerClarification(db, req.params.key, {
+      fact_type: req.body?.fact_type || 'decision_rule',
+      fact_value: req.body.fact_value,
+      confidence: req.body?.confidence,
+      metadata: { answered_by: req.body?.answered_by || 'dashboard' },
+    });
+    if (!fact) return res.status(404).json({ error: 'Pending clarification not found' });
+    const { runDurableIntelligence } = require('../agents/intelligence/services/pipeline-runner');
+    setImmediate(() => runDurableIntelligence({ pool: db, trigger: 'api' })
+      .catch(error => console.error('[API] Post-clarification intelligence rebuild failed:', error.message)));
+    res.json({ ok: true, guidance: fact });
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+// POST /api/intelligence/guidance — append/supersede a scoped user fact overlay.
+app.post('/api/intelligence/guidance', async (req, res) => {
+  if (!db) return res.status(503).json({ error: 'Database unavailable' });
+  try {
+    const fact = await recordGuidanceFact(db, {
+      ...req.body,
+      provenance: req.body?.provenance || 'user_fact',
+      metadata: { ...(req.body?.metadata || {}), created_by: req.body?.created_by || 'dashboard' },
+    });
+    res.status(201).json({ ok: true, guidance: fact });
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+// GET /api/intelligence/health — compare adjacent pipeline watermarks and correction queues.
+app.get('/api/intelligence/health', async (req, res) => {
+  if (!db) return res.status(503).json({ error: 'Database unavailable' });
+  try {
+    const [sourceResult, derivedResult, identityResult, mediaResult] = await Promise.all([
+      db.query(`
+        SELECT 'email' AS stage, COUNT(*)::bigint AS row_count, MAX(COALESCE(date, received_at, created_at)) AS watermark FROM email.emails
+        UNION ALL
+        SELECT 'whatsapp', COUNT(*)::bigint, MAX(ts) FROM public.messages
+        UNION ALL
+        SELECT 'limitless', COUNT(*)::bigint, MAX(COALESCE(start_time, created_at)) FROM limitless.lifelogs
+      `),
+      db.query(`
+        SELECT
+          (SELECT MAX(occurred_at) FROM relationships.communications) AS canonical_watermark,
+          (SELECT MAX(last_seen_at) FROM intelligence.opportunities) AS intelligence_watermark,
+          (SELECT MAX(completed_at) FROM intelligence.pipeline_runs WHERE status = 'completed') AS last_completed_run,
+          (SELECT COUNT(*)::bigint FROM intelligence.opportunities WHERE status = 'open') AS open_items,
+          (SELECT COUNT(*)::bigint FROM intelligence.opportunities WHERE status = 'open' AND NOT EXISTS (
+            SELECT 1 FROM intelligence.opportunity_evidence evidence WHERE evidence.opportunity_id = intelligence.opportunities.id
+          )) AS open_without_evidence
+      `),
+      db.query(`
+        SELECT
+          COUNT(*) FILTER (WHERE c.is_noise IS DISTINCT FROM TRUE)::bigint AS active_contacts,
+          COUNT(*) FILTER (WHERE c.is_noise IS DISTINCT FROM TRUE AND EXISTS (
+            SELECT 1 FROM relationships.contact_identities identity
+            WHERE identity.contact_id = c.id AND identity.is_active
+              AND identity.identity_type IN ('wa_jid','email','phone','apple_contact_id')
+          ))::bigint AS contacts_with_stable_identity,
+          (SELECT COUNT(*)::bigint FROM relationships.identity_conflicts WHERE status = 'pending') AS pending_identity_conflicts,
+          (SELECT COUNT(*)::bigint FROM (
+            SELECT source, source_id
+            FROM relationships.communications
+            GROUP BY source, source_id
+            HAVING COUNT(DISTINCT contact_id) > 1
+          ) duplicates) AS duplicated_source_events
+        FROM relationships.contacts c
+      `),
+      db.query(`
+        SELECT
+          COUNT(*)::bigint AS media_total,
+          COUNT(*) FILTER (
+            WHERE COALESCE(analysis_status, 'pending') IN ('pending','failed')
+              AND (mime_type = 'application/pdf' OR mime_type LIKE 'image/%')
+          )::bigint AS media_pending,
+          COUNT(*) FILTER (WHERE analysis_status = 'skipped')::bigint AS media_skipped,
+          COUNT(*) FILTER (WHERE analysis_status = 'completed' AND semantic_text IS NOT NULL)::bigint AS media_analyzed
+        FROM public.media_files
+      `),
+    ]);
+
+    const sourceRows = sourceResult.rows;
+    const latestRaw = sourceRows
+      .map(row => row.watermark && new Date(row.watermark))
+      .filter(value => value && !Number.isNaN(value.getTime()))
+      .sort((a, b) => b - a)[0] || null;
+    const derived = derivedResult.rows[0] || {};
+    const canonical = derived.canonical_watermark ? new Date(derived.canonical_watermark) : null;
+    const intelligence = derived.intelligence_watermark ? new Date(derived.intelligence_watermark) : null;
+    const lagMinutes = (newer, older) => newer && older
+      ? Math.max(0, Math.round((newer.getTime() - older.getTime()) / 60000))
+      : null;
+    const rawToCanonicalMinutes = lagMinutes(latestRaw, canonical);
+    const canonicalToIntelligenceMinutes = lagMinutes(canonical, intelligence);
+    const identity = identityResult.rows[0] || {};
+    const media = mediaResult.rows[0] || {};
+    const warnings = [];
+    if (rawToCanonicalMinutes == null || rawToCanonicalMinutes > 10) warnings.push('raw_to_canonical_lag');
+    if (canonicalToIntelligenceMinutes == null || canonicalToIntelligenceMinutes > 30) warnings.push('canonical_to_intelligence_lag');
+    if (Number(derived.open_without_evidence || 0) > 0) warnings.push('open_items_without_evidence');
+    if (Number(identity.pending_identity_conflicts || 0) > 0) warnings.push('identity_conflicts_pending');
+    if (Number(identity.duplicated_source_events || 0) > 0) warnings.push('duplicated_source_events');
+    if (Number(media.media_pending || 0) > 0) warnings.push('media_analysis_pending');
+
+    res.json({
+      status: warnings.length ? 'degraded' : 'healthy',
+      warnings,
+      thresholds_minutes: { raw_to_canonical: 10, canonical_to_intelligence: 30 },
+      lags_minutes: { raw_to_canonical: rawToCanonicalMinutes, canonical_to_intelligence: canonicalToIntelligenceMinutes },
+      sources: sourceRows,
+      derived,
+      identity,
+      media,
+    });
+  } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
@@ -2289,39 +2593,66 @@ app.patch('/api/relationships/contacts/:id', async (req, res) => {
     values.push(v);
   }
 
-  // Record manual overrides for every explicitly-set allowed field
+  // Compose manual override additions and removals into one assignment. A
+  // request may intentionally set a value while handing future ownership back
+  // to the agent, so PostgreSQL must never see duplicate column assignments.
   const overrideFields = Object.keys(updates).filter(k => allowed.includes(k));
+  const validClearOverrides = [...new Set(clearOverrides.filter(field => allowed.includes(field)))];
+  const now = new Date().toISOString();
+  const overrideEntries = {};
   if (overrideFields.length > 0) {
-    const now = new Date().toISOString();
-    const overrideEntries = {};
     for (const field of overrideFields) {
       overrideEntries[field] = { value: updates[field], set_at: now };
     }
-    setClauses.push(`manual_overrides = manual_overrides || $${idx++}`);
-    values.push(JSON.stringify(overrideEntries));
   }
-
-  // Remove overrides for fields the caller wants to hand back to agents.
-  // Use one assignment so clearing several fields does not emit
-  // "multiple assignments to same column manual_overrides".
-  const validClearOverrides = clearOverrides.filter(field => allowed.includes(field));
-  if (validClearOverrides.length > 0) {
-    setClauses.push(`manual_overrides = COALESCE(manual_overrides, '{}'::jsonb) - $${idx++}::text[]`);
+  if (overrideFields.length || validClearOverrides.length) {
+    setClauses.push(`manual_overrides = (COALESCE(manual_overrides, '{}'::jsonb) || $${idx++}::jsonb) - $${idx++}::text[]`);
+    values.push(JSON.stringify(overrideEntries));
     values.push(validClearOverrides);
   }
 
   setClauses.push('updated_at = NOW()');
   values.push(id);
 
+  const client = await db.connect();
   try {
-    const { rows } = await db.query(
+    await client.query('BEGIN');
+    const { rows } = await client.query(
       `UPDATE relationships.contacts SET ${setClauses.join(', ')} WHERE id = $${idx} RETURNING *`,
       values
     );
-    if (!rows.length) return res.status(404).json({ error: 'Not found' });
+    if (!rows.length) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Not found' });
+    }
+    const requestId = crypto.randomUUID();
+    for (const field of overrideFields.filter(field => !validClearOverrides.includes(field))) {
+      await recordGuidanceFactInTransaction(client, {
+        scope_type: 'contact',
+        scope_id: String(id),
+        fact_type: `manual_field:${field}`,
+        fact_value: { field, value: updates[field], mode: 'authoritative' },
+        provenance: 'user_fact',
+        source_ref: `manual-edit:contact:${id}:${requestId}:${field}`,
+      });
+    }
+    for (const field of validClearOverrides) {
+      await recordGuidanceFactInTransaction(client, {
+        scope_type: 'contact',
+        scope_id: String(id),
+        fact_type: `manual_field:${field}`,
+        fact_value: { field, mode: 'released' },
+        provenance: 'user_fact',
+        source_ref: `manual-release:contact:${id}:${requestId}:${field}`,
+      });
+    }
+    await client.query('COMMIT');
     res.json(rows[0]);
   } catch (e) {
+    try { await client.query('ROLLBACK'); } catch (_) {}
     res.status(500).json({ error: e.message });
+  } finally {
+    client.release();
   }
 });
 
@@ -2760,35 +3091,65 @@ app.patch('/api/projects/:id', async (req, res) => {
     values.push(v);
   }
 
-  // Record manual overrides for every explicitly-set allowed field
+  // Compose additions and removals into one manual_overrides assignment.
   const overrideFields = Object.keys(updates).filter(k => allowed.includes(k));
+  const validClearOverrides = [...new Set(clearOverrides.filter(field => allowed.includes(field)))];
+  const now = new Date().toISOString();
+  const overrideEntries = {};
   if (overrideFields.length > 0) {
-    const now = new Date().toISOString();
-    const overrideEntries = {};
     for (const field of overrideFields) {
       overrideEntries[field] = { value: updates[field], set_at: now };
     }
-    setClauses.push(`manual_overrides = manual_overrides || $${idx++}`);
-    values.push(JSON.stringify(overrideEntries));
   }
-
-  // Remove overrides for fields the caller wants to hand back to agents
-  for (const field of clearOverrides) {
-    setClauses.push(`manual_overrides = manual_overrides - $${idx++}`);
-    values.push(field);
+  if (overrideFields.length || validClearOverrides.length) {
+    setClauses.push(`manual_overrides = (COALESCE(manual_overrides, '{}'::jsonb) || $${idx++}::jsonb) - $${idx++}::text[]`);
+    values.push(JSON.stringify(overrideEntries));
+    values.push(validClearOverrides);
   }
 
   setClauses.push('updated_at = NOW()');
   values.push(id);
 
+  const client = await db.connect();
   try {
-    const { rows } = await db.query(
+    await client.query('BEGIN');
+    const { rows } = await client.query(
       `UPDATE projects.projects SET ${setClauses.join(', ')} WHERE id = $${idx} RETURNING *`,
       values
     );
-    if (!rows.length) return res.status(404).json({ error: 'Not found' });
+    if (!rows.length) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Not found' });
+    }
+    const requestId = crypto.randomUUID();
+    for (const field of overrideFields.filter(field => !validClearOverrides.includes(field))) {
+      await recordGuidanceFactInTransaction(client, {
+        scope_type: 'project',
+        scope_id: String(id),
+        fact_type: `manual_field:${field}`,
+        fact_value: { field, value: updates[field], mode: 'authoritative' },
+        provenance: 'user_fact',
+        source_ref: `manual-edit:project:${id}:${requestId}:${field}`,
+      });
+    }
+    for (const field of validClearOverrides) {
+      await recordGuidanceFactInTransaction(client, {
+        scope_type: 'project',
+        scope_id: String(id),
+        fact_type: `manual_field:${field}`,
+        fact_value: { field, mode: 'released' },
+        provenance: 'user_fact',
+        source_ref: `manual-release:project:${id}:${requestId}:${field}`,
+      });
+    }
+    await client.query('COMMIT');
     res.json(rows[0]);
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) {
+    try { await client.query('ROLLBACK'); } catch (_) {}
+    res.status(500).json({ error: e.message });
+  } finally {
+    client.release();
+  }
 });
 
 // GET /api/projects/:id/communications
@@ -3336,41 +3697,39 @@ app.get('/api/system/usage', async (req, res) => {
 
 // ── Start ─────────────────────────────────────────────────────────────────────
 
-// Detect agents that survived a server restart
-recoverAgents();
-
 async function startServer() {
-  if (db) {
-    try {
-      await runSystemSchema();
-      await migrateEnvToDb();
-    } catch (err) {
-      console.error('[server] startup migration failed:', err.message);
-    }
-  }
-
-  // Download Chromium for the WhatsApp bridge if not already present (idempotent)
-  await ensurePuppeteerChrome();
-
   const PORT = process.env.UI_PORT || 4001;
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`\n  secondbrain UI → http://localhost:${PORT}\n`);
-    if (db) {
-      indexer.start(db);
-      observeAlerts.start(db);
-      startAgent('sampler').catch(err => {
-        console.error('[server] sampler auto-start failed:', err.message);
-      });
-    }
+  const HOST = process.env.SECOND_BRAIN_BIND_HOST || '127.0.0.1';
+  return runServerStartup({
+    db,
+    runSystemSchema,
+    runMigrations: runOrderedMigrations,
+    migrateEnvToDb,
+    ensurePuppeteerChrome,
+    initializeAgentSupervisor,
+    onSupervisorError: (err) => {
+      console.error('[supervisor] startup reconciliation failed:', err.message);
+    },
+    listen: () => app.listen(PORT, HOST, () => {
+      console.log(`\n  secondbrain API → http://${HOST}:${PORT}\n`);
+      if (db) {
+        indexer.start(db);
+        observeAlerts.start(db);
+      }
+    }),
   });
 }
 
-startServer();
+terminateOnStartupFailure(startServer());
 
-function shutdown() {
+async function shutdown() {
+  if (serverShuttingDown) return;
+  serverShuttingDown = true;
+  if (supervisorInterval) clearInterval(supervisorInterval);
+  for (const id of restartTimers.keys()) clearRestartTimer(id);
   try { observeAlerts.stop(); } catch {}
   try { indexer.stop?.(); } catch {}
-  try { db?.end?.(); } catch {}
+  try { await db?.end?.(); } catch {}
   process.exit(0);
 }
 

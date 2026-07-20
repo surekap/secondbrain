@@ -34,13 +34,13 @@ const MEMBER_PATTERNS = [
 ]
 
 function textForLifelog(lifelog = {}) {
-  return [lifelog.title, lifelog.markdown, lifelog.contents, lifelog.summary]
+  return [lifelog.title, lifelog.subject, lifelog.content_snippet, lifelog.markdown, lifelog.contents, lifelog.summary]
     .filter(Boolean)
     .join('\n')
 }
 
 function textForEmail(email = {}) {
-  return [email.subject, email.from_address, email.sender_email, email.body_text, email.body]
+  return [email.subject, email.from_address, email.sender_email, email.content_snippet, email.body_text, email.body]
     .filter(Boolean)
     .join('\n')
 }
@@ -73,13 +73,26 @@ function dateValue(value) {
 }
 
 function emailOccurredAt(email = {}) {
-  return email.date || email.received_at || email.created_at || null
+  return email.occurred_at || email.date || email.received_at || email.created_at || null
+}
+
+function evidenceIdentity(record = {}, fallbackTable, fallbackPrefix) {
+  const canonical = record.canonical_table === 'relationships.communications'
+  const id = canonical ? record.id : (record.source_id || record.id)
+  const rawRef = record.source_id || record.id
+  return {
+    source_table: canonical ? 'relationships.communications' : fallbackTable,
+    source_id: id,
+    source_ref: String(rawRef || '').startsWith(`${fallbackPrefix}:`)
+      ? String(rawRef)
+      : `${fallbackPrefix}:${rawRef}`,
+  }
 }
 
 function detectHomeImprovementOpportunities(input = {}) {
   const lifelogs = (input.lifelogs || [])
     .filter(isHomeImprovementLifelog)
-    .sort((a, b) => dateValue(b.start_time || b.created_at) - dateValue(a.start_time || a.created_at))
+    .sort((a, b) => dateValue(b.occurred_at || b.start_time || b.created_at) - dateValue(a.occurred_at || a.start_time || a.created_at))
   const emails = (input.emails || [])
     .filter(isHomeImprovementEmail)
     .sort((a, b) => dateValue(emailOccurredAt(b)) - dateValue(emailOccurredAt(a)))
@@ -87,7 +100,7 @@ function detectHomeImprovementOpportunities(input = {}) {
   if (!lifelogs.length && !emails.length) return []
 
   const latestAt = [
-    ...lifelogs.map(x => x.start_time || x.created_at),
+    ...lifelogs.map(x => x.occurred_at || x.start_time || x.created_at),
     ...emails.map(emailOccurredAt),
   ].filter(Boolean).sort((a, b) => dateValue(a) - dateValue(b)).at(-1) || null
   const allText = [...lifelogs.map(textForLifelog), ...emails.map(textForEmail)].join('\n')
@@ -101,24 +114,21 @@ function detectHomeImprovementOpportunities(input = {}) {
 
   const evidence = []
   if (lifelog) {
-    const sourceId = lifelog.id || lifelog.source_id || 'unknown'
+    const identity = evidenceIdentity(lifelog, 'limitless.lifelogs', 'limitless')
     evidence.push({
-      source_table: 'limitless.lifelogs',
-      source_id: sourceId,
-      source_ref: `limitless:${sourceId}`,
-      occurred_at: lifelog.start_time || lifelog.created_at || null,
+      ...identity,
+      occurred_at: lifelog.occurred_at || lifelog.start_time || lifelog.created_at || null,
       quote: compact(lifelogText, 900),
       relevance: 0.95,
       metadata: { title: lifelog.title || null, detector: 'home_improvement_project' },
     })
   }
   for (const email of emails.slice(0, 8)) {
+    const identity = evidenceIdentity(email, 'email.emails', 'email')
     evidence.push({
-      source_table: 'email.emails',
-      source_id: email.id,
-      source_ref: `email:${email.id}`,
+      ...identity,
       occurred_at: emailOccurredAt(email),
-      quote: compact(`${email.subject || ''}\n${email.body_text || email.body || ''}`, 900),
+      quote: compact(`${email.subject || ''}\n${email.content_snippet || email.body_text || email.body || ''}`, 900),
       relevance: 0.9,
       metadata: {
         subject: email.subject || null,
@@ -146,6 +156,8 @@ function detectHomeImprovementOpportunities(input = {}) {
     source_ref: `home_improvement_project:${signature}`,
     dedupe_key: `home_improvement_project:${signature}`,
     primary_project_id: null,
+    primary_contact_id: latestEmail?.contact_id || lifelog?.contact_id || null,
+    contact_ids: [latestEmail?.contact_id || lifelog?.contact_id].filter(Boolean),
     metadata: {
       detector: 'home_improvement_project',
       project_family: 'home_renovation',

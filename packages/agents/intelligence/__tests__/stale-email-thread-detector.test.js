@@ -30,6 +30,7 @@ test('stale-email-thread-detector: promotes old internal follow-up awaiting exte
   const emails = [
     {
       id: 1,
+      canonical_communication_id: 7001,
       thread_id: 'sivaram-april',
       subject: 'Re: Follow up with Sivaram - Phi Capital',
       from_address: 'Prateek Sureka <ps@hartex.in>',
@@ -41,6 +42,7 @@ test('stale-email-thread-detector: promotes old internal follow-up awaiting exte
   const stale = detectStaleEmailThreads(emails, { now: '2026-06-26T00:00:00Z', staleDays: 14 })
   assert.equal(stale.length, 1)
   assert.equal(stale[0].pending_direction, 'awaiting_external_response')
+  assert.equal(stale[0].latest_action_canonical_communication_id, 7001)
   assert.match(stale[0].title, /Sivaram|Phi Capital/i)
   assert.match(stale[0].recommended_next_action, /Follow up/)
 })
@@ -127,6 +129,12 @@ test('stale-email-thread-detector: ignores newsletters, itineraries, and bulk tr
     { id: 17, subject: 'This Month at Penn Engineering: May 2026', from_address: 'Penn Engineering News <info@seas.upenn.edu>', date: '2026-06-01T00:00:00Z', body_text: 'Newsletter graduation highlights please view online unsubscribe' },
     { id: 18, subject: 'Sandbox scheduled a new maintenance - Scheduled Disaster Recovery Drill', from_address: 'alert@sandbox.co.in', date: '2026-06-01T00:00:00Z', body_text: 'Please be informed maintenance is scheduled' },
     { id: 19, subject: 'May Updates: Simplifying probation, payroll & goal tracking', from_address: 'Abinaya from KekaHR <abinaya.s@kekahr.com>', date: '2026-06-01T00:00:00Z', body_text: 'What is new in Keka product updates please read more unsubscribe' },
+    { id: 20, subject: "We're making some changes to our PayPal legal agreements", from_address: 'PayPal <service@example.com>', date: '2026-06-01T00:00:00Z', body_text: 'Please review the updated terms.' },
+    { id: 21, subject: 'Order 574776 confirmed', from_address: 'Shop <orders@example.com>', date: '2026-06-01T00:00:00Z', body_text: 'Please find your order confirmation.' },
+    { id: 22, subject: 'AlphaGrep Multi factor Quant PMS - Latest Colaterals - May 2026', from_address: 'Sales <sales@example.com>', date: '2026-06-01T00:00:00Z', body_text: 'Please find attached the latest collateral.' },
+    { id: 23, subject: 'Reminder - ICC Property Management Board Symposium - Tomorrow', from_address: 'Events <person@example.com>', date: '2026-06-01T00:00:00Z', body_text: 'Please confirm attendance tomorrow.' },
+    { id: 24, subject: 'Pre-Reads for Our Upcoming Membership Discussion', from_address: 'Member <person@example.com>', date: '2026-06-01T00:00:00Z', body_text: 'Please review before the discussion.' },
+    { id: 25, subject: 'YPO - Status update on your payment', from_address: 'Member <person@example.com>', date: '2026-06-01T00:00:00Z', body_text: 'Please see the payment update.' },
   ]
   const stale = detectStaleEmailThreads(emails, { now: '2026-06-26T00:00:00Z', staleDays: 14 })
   assert.equal(stale.length, 0)

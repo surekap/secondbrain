@@ -7,12 +7,14 @@ const detect = (input) => detectRelationshipOpenLoops({ now: '2026-04-01T00:00:0
 test('surfaces Sivaram remittance open loop', () => {
   const out = detect({
     contacts: [{ id: 35, display_name: 'Sivaram Padmanabhan', relationship_tier: 'tier_1', relationship_type: 'professional_contact' }],
-    directMessages: [{ contact_id: 35, chat_id: '919910111649@c.us', source_id: 'sivaram-1', ts: '2026-03-30T09:42:16Z', from_me: false, body: "Good afternoon Prateek. We don't seem to have received your remittance ( 11,86, 890) against Drawdown due 27 th March. Appreciate your looking at it and ensure remittance by tomorrow please" }]
+    directMessages: [{ contact_id: 35, canonical_communication_id: 7331, chat_id: '919910111649@c.us', source_id: 'sivaram-1', ts: '2026-03-30T09:42:16Z', from_me: false, body: "Good afternoon Prateek. We don't seem to have received your remittance ( 11,86, 890) against Drawdown due 27 th March. Appreciate your looking at it and ensure remittance by tomorrow please" }]
   })
   assert.equal(out.length, 1)
   assert.equal(out[0].opportunity_type, 'follow_up')
   assert.match(out[0].title, /Sivaram/)
   assert.match(out[0].description, /remittance|Drawdown/i)
+  assert.equal(out[0].evidence[0].source_table, 'relationships.communications')
+  assert.equal(out[0].evidence[0].source_id, 7331)
 })
 
 test('suppresses user-confirmed false positive Nikhil diving-trip attribution', () => {

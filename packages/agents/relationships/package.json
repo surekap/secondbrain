@@ -5,7 +5,9 @@
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
-    "init-db": "psql $DATABASE_URL < sql/schema.sql"
+    "test": "node --test __tests__/*.test.js",
+    "init-db": "node migrate.js",
+    "recover": "node recover.js"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.32.1",

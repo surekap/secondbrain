@@ -37,7 +37,9 @@ test('contact-tierer: moderate active contacts become tier_2 with 60 day cadence
 });
 
 test('contact-tierer: weak stale contacts become tier_3 and noise remains noise', () => {
-  assert.equal(recommendContactTier({ relationship_strength: 'weak', comm_count: 2 }).relationship_tier, 'tier_3');
+  const weak = recommendContactTier({ relationship_strength: 'weak', comm_count: 2 });
+  assert.equal(weak.relationship_tier, 'tier_3');
+  assert.equal(weak.next_suggested_touch_at, null);
   assert.equal(recommendContactTier({ is_noise: true, relationship_strength: 'strong', comm_count: 50 }).relationship_tier, 'noise');
 });
 

@@ -8,8 +8,18 @@ const { execFileSync } = require('child_process');
 const express = require('express');
 const { Client, Events, LocalAuth } = require('whatsapp-web.js');
 const PostgresStore = require('./lib/PostgresStore');
+const {
+    canonicalWhatsAppChatId,
+    isGroupWhatsAppChatId,
+} = require('../../shared/whatsapp-chat');
 const dispatcher = require('./lib/dispatcher');
-const { startHistoricalSync, getHistoricalSyncStatus } = require('./lib/sync');
+const {
+    getHistoricalSyncStatus,
+    requestHistoricalSyncStop,
+    resumeHistoricalSyncOnReconnect,
+    startHistoricalSync,
+    waitForHistoricalSync,
+} = require('./lib/sync');
 const { recoverMissingMedia, getMediaRecoveryStatus } = require('./lib/mediaDownloader');
 const pool = require('./lib/db');
 const {
@@ -21,6 +31,7 @@ const {
     stopMediaAnalysisWorker,
 } = require('./lib/mediaAnalyzer');
 const { cleanupOrphanedRuns, killDuplicateProcesses } = require('../../shared/cleanup');
+const { requireSameOrigin } = require('../../shared/http-security');
 
 let telemetry = null;
 try { telemetry = require('@secondbrain/telemetry'); } catch (_) {}
@@ -57,6 +68,7 @@ async function runMigrations() {
 
 // ── Express app ───────────────────────────────────────────────────────────────
 const app = express();
+app.use(requireSameOrigin());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
@@ -90,22 +102,41 @@ app.post('/api/media/recovery/run', (req, res) => {
     res.status(202).json({ ok: true, days, limit, status: getMediaRecoveryStatus() });
 });
 
-app.get('/api/sync/historical/status', (req, res) => {
-    res.json(getHistoricalSyncStatus());
+app.get('/api/sync/historical/status', async (req, res) => {
+    try {
+        res.json(await getHistoricalSyncStatus(process.env.CLIENT_ID));
+    } catch (err) {
+        res.status(500).json({ ok: false, error: err.message });
+    }
 });
 
-app.post('/api/sync/historical', (req, res) => {
+app.post('/api/sync/historical', async (req, res) => {
     const days = Math.max(1, Math.min(Number(req.body?.days || 90), 365));
     const msgLimit = Math.max(100, Math.min(Number(req.body?.msgLimit || 10000), 50000));
+    const pageSize = Math.max(25, Math.min(Number(req.body?.pageSize || 250), 1000));
     const chatDelayMs = Math.max(0, Math.min(Number(req.body?.chatDelayMs ?? 300), 10000));
     const downloadMedia = Boolean(req.body?.downloadMedia);
     const chatOffset = Math.max(0, Number(req.body?.chatOffset || 0));
     const chatBatchSize = req.body?.chatBatchSize ? Math.max(1, Math.min(Number(req.body.chatBatchSize), 5000)) : null;
+    const resume = req.body?.resume !== false;
     try {
-        const status = startHistoricalSync(client, process.env.CLIENT_ID, _runId, { days, msgLimit, chatDelayMs, downloadMedia, chatOffset, chatBatchSize });
+        const status = await startHistoricalSync(client, process.env.CLIENT_ID, _runId, {
+            days,
+            msgLimit,
+            pageSize,
+            chatDelayMs,
+            downloadMedia,
+            chatOffset,
+            chatBatchSize,
+            resume,
+            trigger: 'manual',
+        });
         res.status(202).json({ ok: true, status });
     } catch (err) {
-        if (err.code === 'SYNC_RUNNING') return res.status(409).json({ ok: false, error: err.message, status: getHistoricalSyncStatus() });
+        if (err.code === 'SYNC_RUNNING') {
+            const status = await getHistoricalSyncStatus(process.env.CLIENT_ID).catch(() => null);
+            return res.status(409).json({ ok: false, error: err.message, status });
+        }
         res.status(500).json({ ok: false, error: err.message });
     }
 });
@@ -127,6 +158,7 @@ app.post('/api/pairing-code', async (req, res) => {
 });
 
 const PORT = parseInt(process.env.PORT ?? '3000', 10);
+const HOST = process.env.WHATSAPP_BIND_HOST || '127.0.0.1';
 
 // ── WhatsApp client ───────────────────────────────────────────────────────────
 const store = new PostgresStore(process.env.CLIENT_ID);
@@ -244,7 +276,9 @@ async function shutdown(reason, exitCode = 0) {
     if (shuttingDown) return;
     shuttingDown = true;
     console.log(`[boot] shutting down (${reason})`);
-    stopMediaAnalysisWorker();
+    try { await stopMediaAnalysisWorker(); } catch (err) { console.warn('[media-analysis] shutdown drain failed:', err.message); }
+    requestHistoricalSyncStop(`shutdown: ${reason}`);
+    try { await waitForHistoricalSync(); } catch (err) { console.warn('[sync] shutdown wait failed:', err.message); }
     try { await client.destroy(); } catch (err) { console.warn('[wa] browser cleanup failed:', err.message); }
     try { await pool.end(); } catch (_) {}
     process.exit(exitCode);
@@ -265,16 +299,26 @@ process.once('unhandledRejection', err => {
 // reach a connected socket without whatsapp-web.js emitting READY, so verify the
 // underlying state after authentication as a compatibility fallback.
 let connectedHandled = false;
+let connectedOnce = false;
 async function markConnected(source) {
     if (connectedHandled) return;
     connectedHandled = true;
     console.log(`[wa] ready (${source})`);
     setWaState('CONNECTED');
     if (telemetry) _runId = await telemetry.startRun({ agentId: 'whatsapp', workflowName: 'message_bridge' });
-    if (process.env.WHATSAPP_AUTO_SYNC_ON_READY === '1') {
-        startHistoricalSync(client, process.env.CLIENT_ID, _runId);
-    } else {
-        console.log('[sync] startup historical sync skipped; use POST /api/sync/historical for manual backfills');
+    const isReconnect = connectedOnce;
+    connectedOnce = true;
+    try {
+        if (!isReconnect && process.env.WHATSAPP_AUTO_SYNC_ON_READY === '1') {
+            await startHistoricalSync(client, process.env.CLIENT_ID, _runId, { trigger: 'startup', resume: true });
+        } else if (process.env.WHATSAPP_RECONNECT_SYNC_DISABLED !== '1') {
+            const overlapMinutes = Math.max(15, Math.min(Number(process.env.WHATSAPP_RECONNECT_OVERLAP_MINUTES || 120), 10080));
+            await resumeHistoricalSyncOnReconnect(client, process.env.CLIENT_ID, _runId, { overlapMinutes });
+        } else {
+            console.log('[sync] reconnect overlap sync disabled; use POST /api/sync/historical for manual backfills');
+        }
+    } catch (err) {
+        if (err.code !== 'SYNC_RUNNING') console.warn('[sync] reconnect resume failed:', err.message);
     }
 }
 
@@ -301,6 +345,8 @@ client.on(Events.DISCONNECTED, async (reason) => {
     console.log('[wa] disconnected:', reason);
     connectedHandled = false;
     setWaState('DISCONNECTED');
+    requestHistoricalSyncStop(`WhatsApp disconnected: ${reason}`);
+    await waitForHistoricalSync().catch(err => console.warn('[sync] disconnect checkpoint failed:', err.message));
     if (telemetry && _runId) { await telemetry.endRun(_runId, { status: 'completed' }); _runId = null; }
 });
 client.on('qr', qr => {
@@ -318,11 +364,13 @@ for (const eventName of new Set(Object.values(Events))) {
             const messageId = result?.rows?.[0]?.id ?? null;
 
             // Persist chat name if available on live message events
-            if ((eventName === 'message' || eventName === 'message_create') && data.chatName && data.from) {
-                const chatId = data.id?.remote || data.from;
-                const isGroup = chatId?.endsWith('@g.us') || false;
+            if ((eventName === 'message' || eventName === 'message_create') && data.chatName) {
+                const chatId = canonicalWhatsAppChatId(data, {
+                    selfJid: process.env.WHATSAPP_SELF_JID || process.env.MY_WA_JID,
+                });
+                const isGroup = isGroupWhatsAppChatId(chatId);
                 // Fire-and-forget: use setImmediate to avoid concurrent query warning
-                setImmediate(async () => {
+                if (chatId) setImmediate(async () => {
                     try {
                         await pool.query(
                             `INSERT INTO chat_metadata (chat_id, name, is_group, updated_at) VALUES ($1, $2, $3, NOW()) ON CONFLICT (chat_id) DO UPDATE SET name = EXCLUDED.name, updated_at = NOW()`,
@@ -346,12 +394,15 @@ for (const eventName of new Set(Object.values(Events))) {
                 const messageTime = new Date((data.timestamp ?? 0) * 1000);
                 if (Date.now() - messageTime > 5 * 60 * 1000) return;
 
+                const chatId = canonicalWhatsAppChatId(data, {
+                    selfJid: process.env.WHATSAPP_SELF_JID || process.env.MY_WA_JID,
+                });
                 dispatcher.dispatch({
                     id:        messageId,
                     client_id: process.env.CLIENT_ID,
                     event:     eventName,
-                    chat_id:   data.from ?? null,
-                    group_id:  data.isGroup ? (data.id?._serialized ?? null) : null,
+                    chat_id:   chatId,
+                    group_id:  isGroupWhatsAppChatId(chatId) ? chatId : null,
                     data,
                     ts:        new Date().toISOString(),
                 });
@@ -370,7 +421,7 @@ for (const eventName of new Set(Object.values(Events))) {
         await runMigrations();
         await cleanupStaleSessionLock();
         startMediaAnalysisWorker();
-        app.listen(PORT, () => console.log(`[http] listening on http://localhost:${PORT}/admin/`));
+        app.listen(PORT, HOST, () => console.log(`[http] listening on http://${HOST}:${PORT}/admin/`));
         client.initialize().catch(err => {
             console.error('[wa] initialization failed:', err);
             shutdown('initialization failure', 1);

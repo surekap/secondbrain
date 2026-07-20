@@ -2,6 +2,10 @@
 
 const fs   = require('fs');
 const pool = require('./db');
+const {
+  canonicalWhatsAppChatId,
+  isGroupWhatsAppChatId,
+} = require('../../../shared/whatsapp-chat');
 
 class PostgresStore {
   constructor(clientId) {
@@ -75,8 +79,10 @@ class PostgresStore {
     let msgType = null;
 
     try {
-      chatId  = data?.from ?? data?.id?._serialized ?? null;
-      groupId = (data?.isGroup && data?.id?._serialized) ? data.id._serialized : null;
+      chatId = canonicalWhatsAppChatId(data, {
+        selfJid: process.env.WHATSAPP_SELF_JID || process.env.MY_WA_JID,
+      });
+      groupId = isGroupWhatsAppChatId(chatId) ? chatId : null;
       msgType = data?.type ?? null;
     } catch (_) { /* keep nulls if payload shape is unexpected */ }
 

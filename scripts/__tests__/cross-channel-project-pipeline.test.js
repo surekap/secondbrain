@@ -12,8 +12,10 @@ const schemaSource = fs.readFileSync(path.join(__dirname, '../../packages/agents
 test('intelligence pipeline promotes cross-channel project opportunities', () => {
   assert.match(indexSource, /detectCrossChannelProjectSignals/)
   assert.match(indexSource, /cross_channel_project_opportunities/)
-  assert.match(indexSource, /public\.messages m[\s\S]*m\.chat_id LIKE '%@g\.us'/)
-  assert.match(indexSource, /JOIN relationships\.contacts c ON c\.wa_jids @> ARRAY\[m\.chat_id\]::text\[\]/)
+  assert.match(indexSource, /FROM relationships\.communications rc/)
+  assert.match(indexSource, /whatsappResult\.rows[\s\S]*\.filter\(row => row\.is_group\)/)
+  assert.match(indexSource, /\.filter\(row => !row\.is_group && row\.contact_id\)/)
+  assert.doesNotMatch(indexSource, /const groupMessagesResult = await pool\.query/)
   assert.match(indexSource, /source_ref LIKE 'cross_channel_project:%'/)
   assert.match(indexSource, /Auto-dismissed: cross-channel detector no longer validates/)
   assert.match(indexSource, /source_table IN \('opportunities', 'intelligence\.opportunities'\)/)

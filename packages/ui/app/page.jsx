@@ -74,12 +74,10 @@ const PRIORITY_COLOR = {
   low:    'oklch(50% 0.08 250)',
 }
 
-function InsightCard({ item, type, onAction, onDismiss, groupsMap }) {
+function InsightCard({ item, onAction, onDismiss, groupsMap }) {
   const color = PRIORITY_COLOR[item.priority] || 'var(--text-3)'
-  const label = type === 'relationship' ? item.contact_name : item.project_name
-  const href  = type === 'relationship'
-    ? (item.contact_id ? `/relationships?contact=${item.contact_id}` : null)
-    : (item.project_id ? `/projects?project=${item.project_id}` : null)
+  const label = item.primary_contact_name || item.primary_project_name
+  const href = traceHref(item)
   const title = resolveGroupIds(item.title || item.content, groupsMap)
   const desc  = resolveGroupIds(item.description, groupsMap)
   const body = (
@@ -87,7 +85,7 @@ function InsightCard({ item, type, onAction, onDismiss, groupsMap }) {
       <div className="ic-top">
         {label && <span className="ic-label">{label}</span>}
         {!href && <span className="ic-label" style={{ color: 'var(--amber)' }}>unlinked</span>}
-        <span className="ic-type">{(item.insight_type || '').replace(/_/g, ' ')}</span>
+        <span className="ic-type">{String(item.item_type || item.opportunity_type || 'signal').replace(/_/g, ' ')}</span>
       </div>
       <div className="ic-title">{title}</div>
       {desc && <div className="ic-desc">{desc}</div>}
@@ -151,8 +149,6 @@ async function fetchJsonDetailed(path, { fallback = null, timeoutMs = 8000 } = {
 }
 
 export default function DashboardPage() {
-  const [relInsights, setRelInsights]     = useState([])
-  const [projInsights, setProjInsights]   = useState([])
   const [relStats, setRelStats]           = useState(null)
   const [projStats, setProjStats]         = useState(null)
   const [recentActivity, setRecentActivity] = useState([])
@@ -166,20 +162,16 @@ export default function DashboardPage() {
   const [loading, setLoading]             = useState(true)
 
   async function load() {
-    const [ri, pi, rs, ps, ra, gr, aq, ds] = await Promise.all([
-      fetchJsonDetailed('/api/relationships/insights', { fallback: [], timeoutMs: 8000 }),
-      fetchJsonDetailed('/api/projects/insights/open', { fallback: [], timeoutMs: 8000 }),
+    const [rs, ps, ra, gr, aq, ds] = await Promise.all([
       fetchJsonDetailed('/api/relationships/stats', { fallback: null, timeoutMs: 8000 }),
       fetchJsonDetailed('/api/projects/stats', { fallback: null, timeoutMs: 8000 }),
       fetchJsonDetailed('/api/projects/activity/recent', { fallback: [], timeoutMs: 8000 }),
       fetchJsonDetailed('/api/relationships/groups', { fallback: [], timeoutMs: 3000 }),
-      fetchJsonDetailed('/api/intelligence/attention?limit=5', { fallback: [], timeoutMs: 5000 }),
+      fetchJsonDetailed('/api/intelligence/attention?limit=50', { fallback: [], timeoutMs: 8000 }),
       fetchJsonDetailed('/api/intelligence/duplicates/summary?limit=3', { fallback: null, timeoutMs: 5000 }),
     ])
 
     const feedErrors = [
-      ['relationships insights', ri.error],
-      ['projects insights', pi.error],
       ['relationships stats', rs.error],
       ['projects stats', ps.error],
       ['recent activity', ra.error],
@@ -188,8 +180,6 @@ export default function DashboardPage() {
       ['duplicate summary', ds.error],
     ].filter(([, error]) => error).map(([name, error]) => `${name}: ${error}`)
 
-    if (Array.isArray(ri.data)) setRelInsights(ri.data)
-    if (Array.isArray(pi.data)) setProjInsights(pi.data)
     if (rs.data && !rs.error) setRelStats(rs.data)
     if (ps.data && !ps.error) setProjStats(ps.data)
     if (Array.isArray(ra.data)) setRecentActivity(ra.data.slice(0, 8))
@@ -206,28 +196,13 @@ export default function DashboardPage() {
 
   useEffect(() => { load() }, [])
 
-  async function handleAction(id) {
-    await fetch(`/api/relationships/insights/${id}/action`, { method: 'POST' })
-    setRelInsights(prev => prev.filter(x => x.id !== id))
-  }
-
-  async function handleDismiss(id) {
-    await fetch(`/api/relationships/insights/${id}/dismiss`, { method: 'POST' })
-    setRelInsights(prev => prev.filter(x => x.id !== id))
-  }
-
-  async function handleProjResolve(id) {
-    await fetch(`/api/projects/insights/${id}/resolve`, { method: 'POST' })
-    setProjInsights(prev => prev.filter(x => x.id !== id))
-  }
-
-  async function updateOpportunityStatus(id, status) {
-    await fetch(`/api/intelligence/opportunities/${id}`, {
+  async function updateOpportunityStatus(id, status, feedbackAction = null) {
+    const response = await fetch(`/api/intelligence/opportunities/${id}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ status }),
+      body: JSON.stringify({ status, ...(feedbackAction ? { feedback_action: feedbackAction } : {}) }),
     })
-    setAttentionItems(prev => prev.filter(x => x.id !== id))
+    if (response.ok) setAttentionItems(prev => prev.filter(x => x.id !== id))
   }
 
   async function inspectDuplicate(group) {
@@ -267,15 +242,13 @@ export default function DashboardPage() {
     setDupComms(prev => ({ ...prev, [entityId]: data?.communications || [] }))
   }
 
-  // Build Eisenhower matrix — combine rel + proj insights
-  const allInsights = [
-    ...relInsights.map(i => ({ ...i, _type: 'relationship' })),
-    ...projInsights.map(i => ({ ...i, _type: 'project', title: i.content })),
-  ]
+  // The evidence-gated canonical queue is the only dashboard intelligence
+  // source. Legacy relationship/project tables are compatibility projections.
+  const allInsights = attentionItems
 
   const matrix = { q1: [], q2: [], q3: [], q4: [] }
   for (const item of allInsights) {
-    const q = toQuadrant(item.priority, item.insight_type)
+    const q = toQuadrant(item.priority, item.item_type || item.opportunity_type)
     matrix[q].push(item)
   }
 
@@ -485,8 +458,8 @@ export default function DashboardPage() {
                 <div className="sc-lbl">Contacts</div>
               </Link>
               <Link href="/relationships" className="stat-card sc-link">
-                <div className="sc-val">{Number(relStats.pending_insights ?? relInsights.length ?? 0).toLocaleString()}</div>
-                <div className="sc-lbl">Open Insights</div>
+                <div className="sc-val">{Number(attentionItems.length).toLocaleString()}</div>
+                <div className="sc-lbl">Evidence-backed Signals</div>
               </Link>
             </>
           )}
@@ -497,8 +470,8 @@ export default function DashboardPage() {
                 <div className="sc-lbl">Projects</div>
               </Link>
               <Link href="/projects" className="stat-card sc-link">
-                <div className="sc-val">{Number(projInsights.length || 0).toLocaleString()}</div>
-                <div className="sc-lbl">Project Insights</div>
+                <div className="sc-val">{Number(attentionItems.filter(item => item.primary_project_id).length).toLocaleString()}</div>
+                <div className="sc-lbl">Project Signals</div>
               </Link>
             </>
           )}
@@ -510,7 +483,7 @@ export default function DashboardPage() {
             <div className="identity-head">
               <span className="identity-title">Identity Resolution</span>
               <span className="section-count">{duplicateGroups} duplicate groups</span>
-              <span className="identity-sub">Audit only — no auto-merge.</span>
+              <span className="identity-sub">Exact identities merge automatically; ambiguous matches require confirmation.</span>
               <a className="section-link" href="/api/intelligence/duplicates/summary?limit=25">API →</a>
             </div>
             <div className="duplicate-list">
@@ -653,7 +626,7 @@ export default function DashboardPage() {
                   </div>
                   <div className="attention-actions">
                     <button className="ic-btn" onClick={() => updateOpportunityStatus(item.id, 'actioned')} title="Mark actioned">✓</button>
-                    <button className="ic-btn ic-btn-dim" onClick={() => updateOpportunityStatus(item.id, 'dismissed')} title="Dismiss">✕</button>
+                    <button className="ic-btn ic-btn-dim" onClick={() => updateOpportunityStatus(item.id, 'dismissed', 'not_useful')} title="Not useful">✕</button>
                   </div>
                 </div>
               ))}
@@ -693,25 +666,18 @@ export default function DashboardPage() {
                     ) : (
                       items.slice(0, 5).map(item => (
                         <InsightCard
-                          key={`${item._type}-${item.id}`}
+                          key={item.id}
                           item={item}
-                          type={item._type}
-                          onAction={item._type === 'relationship' ? handleAction : null}
-                          onDismiss={item._type === 'relationship' ? handleDismiss : handleProjResolve}
+                          onAction={id => updateOpportunityStatus(id, 'actioned')}
+                          onDismiss={id => updateOpportunityStatus(id, 'dismissed', 'not_useful')}
                           groupsMap={groupsMap}
                         />
                       ))
                     )}
                     {items.length > 5 && (() => {
-                      const overflow = items.slice(5)
-                      const hasRel  = overflow.some(i => i._type === 'relationship')
-                      const hasProj = overflow.some(i => i._type === 'project')
                       return (
                         <div style={{ padding: '.5rem .875rem', fontSize: '.72rem', color: 'var(--text-3)' }}>
-                          +{items.length - 5} more —{' '}
-                          {hasRel && <Link href="/relationships" style={{ color: 'var(--accent)', textDecoration: 'none' }}>relationships</Link>}
-                          {hasRel && hasProj && <span> · </span>}
-                          {hasProj && <Link href="/projects" style={{ color: 'var(--accent)', textDecoration: 'none' }}>projects</Link>}
+                          +{items.length - 5} more in the <Link href="/intelligence" style={{ color: 'var(--accent)', textDecoration: 'none' }}>intelligence queue</Link>
                         </div>
                       )
                     })()}

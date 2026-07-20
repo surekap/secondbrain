@@ -1,19 +1,23 @@
 #!/usr/bin/env node
 'use strict'
 
-require('dotenv').config({ path: require('path').resolve(__dirname, '../../../.env.local') })
-
 const cron       = require('node-cron')
+const crypto     = require('node:crypto')
 const db         = require('@secondbrain/db')
-const { cleanupOrphanedRuns, killDuplicateProcesses } = require('../shared/cleanup')
+const { cleanupOrphanedRuns } = require('../shared/cleanup')
 
 const discoverer = require('./services/discoverer')
 const classifier = require('./services/classifier')
 const analyzer   = require('./services/analyzer')
+const { acquireRunLease } = require('../shared/run-lease')
+let schemaReadiness = null
 
 let telemetry = null
 try { telemetry = require('@secondbrain/telemetry') } catch (_) {}
 let _runId = null
+let _analysisPromise = null
+let _shutdownPromise = null
+const RUN_ONCE = process.argv.includes('--once')
 
 console.log('🗂  Projects Agent v1.0')
 console.log('📊 Discovers and tracks projects from WhatsApp, Email & Limitless\n')
@@ -21,84 +25,92 @@ console.log('📊 Discovers and tracks projects from WhatsApp, Email & Limitless
 // ── Schema bootstrap ───────────────────────────────────────────────────────────
 
 async function ensureSchema() {
+  if (schemaReadiness) return schemaReadiness
   const fs   = require('fs')
   const path = require('path')
-  try {
+  schemaReadiness = (async () => {
     const sql = fs.readFileSync(path.resolve(__dirname, 'sql/schema.sql'), 'utf8')
     await db.query(sql)
     console.log('✅ Schema ready')
-  } catch (err) {
-    console.error('❌ Schema setup error:', err.message)
+  })()
+  try {
+    await schemaReadiness
+  } catch (error) {
+    schemaReadiness = null
+    throw error
   }
 }
 
 // ── Upsert project by name ────────────────────────────────────────────────────
 
-function nameWords(name) {
-  return new Set(
-    (name || '').toLowerCase()
-      .replace(/[^a-z0-9\s]/g, ' ')
-      .split(/\s+/)
-      .filter(w => w.length > 2 && !['and','the','for','with','from','this','that'].includes(w))
-  )
-}
-
-function wordOverlap(a, b) {
-  const wa = nameWords(a)
-  const wb = nameWords(b)
-  if (!wa.size || !wb.size) return 0
-  let common = 0
-  for (const w of wa) if (wb.has(w)) common++
-  return common / Math.min(wa.size, wb.size)
-}
-
 async function upsertProject(proj) {
   try {
-    // First try exact case-insensitive match
+    // Existing identity is explicit. Exact names provide idempotency only for
+    // genuinely new candidates; similarity never merges project lifecycles.
     const { rows: existing } = await db.query(`
       SELECT id, name FROM projects.projects
-      WHERE LOWER(TRIM(name)) = LOWER(TRIM($1))
+      WHERE (id = $2::bigint OR ($2::bigint IS NULL AND LOWER(TRIM(name)) = LOWER(TRIM($1))))
         AND is_archived = FALSE
       LIMIT 1
-    `, [proj.name])
+    `, [proj.name, proj.existing_project_id || null])
 
-    // Fall back to fuzzy word-overlap match (>= 70% of shorter name's words match)
     let matchId = existing[0]?.id
-    if (!matchId) {
-      const { rows: allProjs } = await db.query(`
-        SELECT id, name FROM projects.projects WHERE is_archived = FALSE
-      `)
-      const fuzzy = allProjs.find(p => wordOverlap(p.name, proj.name) >= 0.70)
-      if (fuzzy) {
-        console.log(`   🔀 Fuzzy match: "${proj.name}" → "${fuzzy.name}"`)
-        matchId = fuzzy.id
-      }
-    }
 
     if (matchId) {
       const id = matchId
-      // On re-discovery, update description/tags — but respect manual overrides
+      // Discovery refreshes lineage, not established project definitions.
+      // Mutable model prose/tags would destabilize catalog identity and force
+      // unnecessary full communication reclassification.
       await db.query(`
         UPDATE projects.projects SET
-          description = CASE WHEN manual_overrides ? 'description' THEN description ELSE COALESCE($1, description) END,
-          tags        = CASE WHEN manual_overrides ? 'tags' THEN tags
-                             WHEN array_length($2::text[], 1) > 0 THEN $2::text[]
-                             ELSE tags END,
-          updated_at  = NOW()
+          discovery_evidence_refs = CASE WHEN jsonb_array_length($1::jsonb) > 0 THEN $1::jsonb ELSE discovery_evidence_refs END,
+          discovery_version = COALESCE($2, discovery_version)
         WHERE id = $3
       `, [
-        proj.description || null,
-        proj.tags        || [],
+        JSON.stringify(proj.evidence_refs || []),
+        proj.discovery_version || null,
         id,
       ])
       return { id, isNew: false }
     }
 
-    // Insert new
+    // Novel model suggestions are candidates, not immediate catalog truth.
+    // Require recurrence and at least two independent canonical references.
+    const candidateFingerprint = crypto.createHash('sha256')
+      .update(proj.name.toLowerCase().replace(/\s+/g, ' ').trim())
+      .digest('hex')
+    const { rows: candidates } = await db.query(`
+      INSERT INTO projects.project_candidates (
+        candidate_fingerprint, proposed_name, payload, evidence_refs
+      ) VALUES ($1, $2, $3::jsonb, $4::jsonb)
+      ON CONFLICT (candidate_fingerprint) DO UPDATE SET
+        proposed_name = EXCLUDED.proposed_name,
+        payload = EXCLUDED.payload,
+        evidence_refs = (
+          SELECT COALESCE(jsonb_agg(ref ORDER BY ref), '[]'::jsonb)
+          FROM (
+            SELECT DISTINCT ref
+            FROM jsonb_array_elements_text(
+              projects.project_candidates.evidence_refs || EXCLUDED.evidence_refs
+            ) ref
+          ) merged
+        ),
+        occurrences = projects.project_candidates.occurrences + 1,
+        last_seen_at = NOW()
+      RETURNING occurrences, evidence_refs, status, admitted_project_id
+    `, [candidateFingerprint, proj.name, JSON.stringify(proj), JSON.stringify(proj.evidence_refs || [])])
+    const candidate = candidates[0]
+    if (candidate.status !== 'admitted' && (
+      Number(candidate.occurrences) < 2 || (candidate.evidence_refs || []).length < 2
+    )) {
+      return { id: null, isNew: false, pending: true }
+    }
+
+    // Insert a recurrent, independently evidenced candidate.
     const { rows: inserted } = await db.query(`
       INSERT INTO projects.projects
-        (name, description, status, health, priority, tags)
-      VALUES ($1, $2, $3, $4, $5, $6)
+        (name, description, status, health, priority, tags, discovery_evidence_refs, discovery_version)
+      VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8)
       RETURNING id
     `, [
       proj.name,
@@ -107,41 +119,30 @@ async function upsertProject(proj) {
       proj.health      || 'unknown',
       proj.priority    || 'medium',
       proj.tags        || [],
+      JSON.stringify(proj.evidence_refs || []),
+      proj.discovery_version || null,
     ])
+    await db.query(`
+      UPDATE projects.project_candidates
+      SET status = 'admitted', admitted_project_id = $2, last_seen_at = NOW()
+      WHERE candidate_fingerprint = $1
+    `, [candidateFingerprint, inserted[0].id])
     return { id: inserted[0].id, isNew: true }
   } catch (err) {
     console.error('[index] upsertProject error:', err.message)
-    return null
+    throw err
   }
 }
 
-// ── Check if analysis is running ──────────────────────────────────────────────
-
-async function cleanupStaleRuns() {
-  try {
-    const { rows } = await db.query(`
-      UPDATE projects.analysis_runs
-      SET status = 'failed', completed_at = NOW(), error = 'Agent crashed or was restarted'
-      WHERE status = 'running'
-        AND started_at < NOW() - INTERVAL '3 hours'
-      RETURNING id
-    `)
-    if (rows.length > 0) {
-      console.log(`🧹 Cleaned up ${rows.length} stale analysis run(s)`)
-    }
-  } catch { /* ignore */ }
-}
-
-async function isAnalysisRunning() {
-  try {
-    const { rows } = await db.query(`
-      SELECT id FROM projects.analysis_runs
-      WHERE status = 'running'
-        AND started_at > NOW() - INTERVAL '3 hours'
-      LIMIT 1
-    `)
-    return rows.length > 0
-  } catch { return false }
+async function recoverInterruptedRuns() {
+  const { rows } = await db.query(`
+    UPDATE projects.analysis_runs
+    SET status = 'failed', completed_at = NOW(),
+        error = COALESCE(error, 'Agent process was replaced before the run completed')
+    WHERE status = 'running'
+    RETURNING id
+  `)
+  if (rows.length > 0) console.log(`🧹 Recovered ${rows.length} interrupted analysis run(s)`)
 }
 
 // ── Main analysis ─────────────────────────────────────────────────────────────
@@ -159,12 +160,18 @@ async function getLastRunAt() {
 }
 
 async function runAnalysis() {
-  await cleanupStaleRuns()
-  const alreadyRunning = await isAnalysisRunning()
-  if (alreadyRunning) {
-    console.log('⏭  Analysis already running, skipping')
-    return
+  const lease = await acquireRunLease(db, 207202602)
+  if (!lease.acquired) {
+    console.log('⏭  Another projects process owns the analysis lease')
+    return { status: 'skipped' }
   }
+
+  try {
+  await ensureSchema()
+  await recoverInterruptedRuns()
+
+  let telemetryStatus = 'failed'
+  let telemetryError = null
 
   if (telemetry) {
     _runId = await telemetry.startRun({ agentId: 'projects', workflowName: 'project_discovery' })
@@ -185,32 +192,33 @@ async function runAnalysis() {
 
     // Create run record
     const { rows } = await db.query(`
-      INSERT INTO projects.analysis_runs (status) VALUES ('running') RETURNING id
+      INSERT INTO projects.analysis_runs (status) VALUES ('running')
+      ON CONFLICT DO NOTHING
+      RETURNING id
     `)
+    if (!rows.length) return { status: 'skipped' }
     runId = rows[0].id
     console.log(`\n🔍 Starting analysis run #${runId}`)
 
     // ── 1. Gather discovery data ───────────────────────────────────────────
     console.log('📡 Gathering communications data...')
     const data = await discoverer.gatherDiscoveryData()
-    console.log(`   Email subjects: ${data.emailSubjects.length}, Lifelogs: ${data.lifelogTitles.length}, WhatsApp chats: ${data.whatsappChats.length}`)
+    console.log(`   Canonical episodes: ${data.episodes.length}`)
 
-    // ── 2. Discover projects via Claude ───────────────────────────────────
-    console.log('🤖 Discovering projects with Claude...')
+    // ── 2. Discover projects via the configured reasoning model ───────────
+    console.log('🤖 Discovering projects with the reasoning model...')
     const discoveredProjects = await discoverer.discoverProjects(data)
     console.log(`   Discovered ${discoveredProjects.length} projects`)
-
-    if (!discoveredProjects.length) {
-      throw new Error('No projects discovered — check data sources')
-    }
 
     // ── 3. Upsert projects into DB ─────────────────────────────────────────
     const projectsWithIds = []
     for (const proj of discoveredProjects) {
       if (!proj.name) continue
       const result = await upsertProject(proj)
-      if (!result) continue
-
+      if (result.pending) {
+        console.log(`   🧪 ${proj.name} (pending recurrent evidence)`)
+        continue
+      }
       projectsWithIds.push({
         ...proj,
         id: result.id,
@@ -229,11 +237,14 @@ async function runAnalysis() {
     }
 
     // ── 4. Classify NEW communications only ───────────────────────────────
-    const projectsForClassification = projectsWithIds.map(p => ({
-      id:       p.id,
-      name:     p.name,
-      keywords: p.keywords || [],
-    }))
+    const { rows: projectsForClassification } = await db.query(`
+      SELECT id, name, description, tags AS keywords
+      FROM projects.projects
+      WHERE is_archived = FALSE
+        AND status NOT IN ('completed')
+      ORDER BY priority = 'high' DESC, updated_at DESC
+    `)
+    if (!projectsForClassification.length) throw new Error('No active outcome-bearing projects are available for classification')
 
     const sinceLabel = lastRunAt ? `since ${new Date(lastRunAt).toLocaleDateString()}` : 'all'
 
@@ -258,16 +269,24 @@ async function runAnalysis() {
     // ── 5. Update comm_count and last_activity_at on each project ─────────
     console.log('\n📊 Updating project communication counts...')
     await db.query(`
+      WITH current_stats AS (
+        SELECT p.id AS project_id,
+               COUNT(pc.id)::integer AS cnt,
+               MAX(pc.occurred_at) AS latest
+        FROM projects.projects p
+        LEFT JOIN projects.project_communications pc ON pc.project_id = p.id
+        GROUP BY p.id
+      )
       UPDATE projects.projects p SET
-        comm_count       = sub.cnt,
-        last_activity_at = sub.latest,
+        comm_count       = current_stats.cnt,
+        last_activity_at = current_stats.latest,
         updated_at       = NOW()
-      FROM (
-        SELECT project_id, COUNT(*) AS cnt, MAX(occurred_at) AS latest
-        FROM projects.project_communications
-        GROUP BY project_id
-      ) sub
-      WHERE p.id = sub.project_id
+      FROM current_stats
+      WHERE p.id = current_stats.project_id
+        AND (
+          p.comm_count IS DISTINCT FROM current_stats.cnt
+          OR p.last_activity_at IS DISTINCT FROM current_stats.latest
+        )
     `)
 
     // ── 6. Re-analyze only projects that received new communications ───────
@@ -283,16 +302,18 @@ async function runAnalysis() {
       `)
       projectsToAnalyze = rows
     } else {
-      // Re-analyze projects that got new comms since lastRunAt OR have comms but no ai_summary yet
+      // Re-analyze changes to both links and classifications. Projects whose
+      // final link was removed are included so stale insights can be closed.
       const { rows } = await db.query(`
         SELECT DISTINCT p.* FROM projects.projects p
         WHERE p.is_archived = FALSE
-          AND p.comm_count > 0
           AND (
-            p.ai_summary IS NULL
+            (p.comm_count > 0 AND p.ai_summary IS NULL)
             OR EXISTS (
               SELECT 1 FROM projects.project_communications pc
-              WHERE pc.project_id = p.id AND pc.created_at > $1
+              WHERE pc.project_id = p.id
+                AND COALESCE(pc.updated_at, pc.created_at) > $1
+                AND pc.occurred_at > $1
             )
           )
         ORDER BY p.last_activity_at DESC NULLS LAST
@@ -301,15 +322,21 @@ async function runAnalysis() {
     }
 
     console.log(`   ${projectsToAnalyze.length} projects to analyze`)
+    const analysisErrors = []
     for (const project of projectsToAnalyze) {
       try {
-        const comms = await analyzer.getProjectCommunications(project.id, 30)
+        const comms = await analyzer.getProjectCommunications(project.id, 100)
         console.log(`   Analyzing "${project.name}" (${comms.length} comms)...`)
         await analyzer.analyzeProject(project, comms)
         await analyzer.sleep(3000)
       } catch (err) {
         console.error(`   ✗ Error analyzing "${project.name}":`, err.message)
+        analysisErrors.push(`${project.id}:${err.message}`)
       }
+    }
+
+    if (analysisErrors.length) {
+      throw new Error(`${analysisErrors.length} project analyses failed: ${analysisErrors.slice(0, 5).join('; ')}`)
     }
 
     // ── 7. Mark run complete ───────────────────────────────────────────────
@@ -325,8 +352,11 @@ async function runAnalysis() {
     console.log(`\n✅ Analysis run #${runId} complete`)
     console.log(`   Projects found:      ${projectsFound}`)
     console.log(`   Comms classified:    ${commsClassified}\n`)
+    telemetryStatus = 'completed'
+    return { run_id: runId, projects_found: projectsFound, communications_classified: commsClassified }
 
   } catch (err) {
+    telemetryError = err.message
     console.error('❌ Analysis run failed:', err.message)
     if (runId) {
       try {
@@ -337,32 +367,72 @@ async function runAnalysis() {
         `, [err.message, runId])
       } catch { /* ignore */ }
     }
+    throw err
+  } finally {
+    const telemetryRunId = _runId
+    _runId = null
+    if (telemetry && telemetryRunId) {
+      try {
+        await telemetry.endRun(telemetryRunId, {
+          status: telemetryStatus,
+          error: telemetryError,
+          projectsFound,
+          communicationsClassified: commsClassified,
+        })
+        await telemetry.flush()
+      } catch (error) {
+        console.warn('[telemetry] endRun failed:', error.message)
+      }
+    }
+  }
+  } finally {
+    await lease.release()
+  }
+}
+
+async function startAnalysis() {
+  if (_analysisPromise) {
+    console.log('⏭  Analysis already active in this process, skipping')
+    return _analysisPromise
+  }
+  _analysisPromise = runAnalysis()
+  try {
+    return await _analysisPromise
+  } finally {
+    _analysisPromise = null
   }
 }
 
 // ── Schedule & start ──────────────────────────────────────────────────────────
 
 async function main() {
-  killDuplicateProcesses()
   await ensureSchema()
   await cleanupOrphanedRuns(db, 'projects')
 
   // Run immediately on startup
   console.log('🏁 Starting initial analysis...\n')
-  await runAnalysis()
+  await startAnalysis()
+
+  if (RUN_ONCE) {
+    await db.end()
+    console.log('✅ One-shot projects analysis complete')
+    return
+  }
 
   // Then every 12 hours
   console.log('⏰ Scheduling analysis every 12 hours')
   cron.schedule('0 */12 * * *', () => {
     console.log('⏰ Scheduled analysis triggered')
-    runAnalysis().catch(err => console.error('❌ Scheduled analysis error:', err.message))
+    startAnalysis().catch(err => console.error('❌ Scheduled analysis error:', err.message))
   })
 }
 
-main().catch(err => {
-  console.error('❌ Fatal startup error:', err.message)
-  process.exit(1)
-})
+if (require.main === module) {
+  main().catch(err => {
+    console.error('❌ Fatal startup error:', err.message)
+    process.exit(1)
+  })
+}
 
 process.on('uncaughtException', (err) => {
   console.error('Uncaught exception:', err.message)
@@ -371,16 +441,30 @@ process.on('unhandledRejection', (reason) => {
   console.error('Unhandled rejection:', reason)
 })
 
-process.on('SIGINT', async () => {
-  console.log('\n🛑 Graceful shutdown...')
-  if (telemetry && _runId) {
-    await telemetry.flush()
-    await telemetry.endRun(_runId, { status: 'completed' })
-  }
-  try {
-    await db.end()
-    console.log('✅ Database closed')
-  } catch { /* ignore */ }
-  console.log('👋 Projects Agent stopped')
+async function shutdown() {
+  if (_shutdownPromise) return _shutdownPromise
+  _shutdownPromise = (async () => {
+    console.log('\n🛑 Graceful shutdown requested...')
+    if (_analysisPromise) await _analysisPromise.catch(() => {})
+    if (telemetry) await telemetry.flush().catch(() => {})
+    try {
+      await db.end()
+      console.log('✅ Database closed')
+    } catch { /* ignore */ }
+    console.log('👋 Projects Agent stopped')
+  })()
+  await _shutdownPromise
   process.exit(0)
-})
+}
+
+process.once('SIGINT', shutdown)
+process.once('SIGTERM', shutdown)
+
+module.exports = {
+  ensureSchema,
+  main,
+  recoverInterruptedRuns,
+  runAnalysis,
+  startAnalysis,
+  upsertProject,
+}

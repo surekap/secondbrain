@@ -75,6 +75,35 @@ CREATE TABLE IF NOT EXISTS system.config (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- Desired state and restart history for UI-supervised long-running agents.
+-- This is operational metadata only; PID files remain a local recovery hint.
+CREATE TABLE IF NOT EXISTS system.agent_runtime_state (
+  agent_id              TEXT PRIMARY KEY,
+  desired_state         TEXT NOT NULL DEFAULT 'stopped'
+    CHECK (desired_state IN ('running', 'stopped')),
+  consecutive_failures  INT NOT NULL DEFAULT 0,
+  restart_count         INT NOT NULL DEFAULT 0,
+  last_started_at       TIMESTAMPTZ,
+  last_exit_at          TIMESTAMPTZ,
+  last_exit_code        INT,
+  last_error            TEXT,
+  next_restart_at       TIMESTAMPTZ,
+  updated_at            TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Authoritative ledger for ordered upgrade migrations. Declarative package
+-- schemas remain the fresh-install/bootstrap layer during the transition.
+CREATE TABLE IF NOT EXISTS system.schema_migrations (
+  version       TEXT PRIMARY KEY,
+  name          TEXT NOT NULL,
+  checksum      TEXT NOT NULL CHECK (checksum ~ '^[0-9a-f]{64}$'),
+  status        TEXT NOT NULL CHECK (status IN ('running', 'completed', 'failed')),
+  started_at    TIMESTAMPTZ NOT NULL,
+  completed_at  TIMESTAMPTZ,
+  error         TEXT,
+  attempt_count INT NOT NULL DEFAULT 1 CHECK (attempt_count > 0)
+);
+
 -- Per-agent config tables (created only if the agent schema already exists)
 DO $$ BEGIN
   IF EXISTS (SELECT 1 FROM information_schema.schemata WHERE schema_name = 'email') THEN

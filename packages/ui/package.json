@@ -3,9 +3,9 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "dev": "next dev --webpack -p 4000 -H 0.0.0.0",
+    "dev": "next dev --webpack -p 4000 -H 127.0.0.1",
     "build": "next build",
-    "start": "next start -p 4000 -H 0.0.0.0",
+    "start": "next start -p 4000 -H 127.0.0.1",
     "api": "node server.js"
   },
   "dependencies": {

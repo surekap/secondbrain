@@ -3,7 +3,7 @@
 const llm = require('../../shared/llm')
 const db = require('@secondbrain/db')
 const { extractText } = require('../../shared/docParser')
-const fs = require('fs')
+const { messageTextForAnalysis } = require('./communication')
 
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms))
@@ -32,6 +32,23 @@ function parseJSON(text) {
   }
 }
 
+async function createStructured(options, attempts = 2) {
+  let lastError = null
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    const response = await llm.create('relationships', options)
+    try {
+      return parseJSON(response.text || '')
+    } catch (err) {
+      lastError = err
+      if (attempt < attempts) {
+        console.warn(`[analyzer] invalid structured output; retrying (${attempt}/${attempts})`)
+        await sleep(250)
+      }
+    }
+  }
+  throw new Error(`invalid structured output after ${attempts} attempts: ${lastError?.message || 'unknown parse error'}`)
+}
+
 /**
  * Analyze a WhatsApp direct chat contact using Claude.
  * Returns structured contact profile.
@@ -57,7 +74,7 @@ async function analyzeDirectChatContact(chatId, contactData, messages, existingO
     const sample = messages.slice(0, 20).map(m => {
       const who = m.from_me ? 'Me' : (m.notify_name || displayName)
       const date = m.ts ? new Date(m.ts).toLocaleDateString() : ''
-      return `[${who}] (${date}): ${(m.body || '').slice(0, 200)}`
+      return `[${who}] (${date}): ${messageTextForAnalysis(m).slice(0, 500)}`
     }).join('\n')
 
     // Try to extract text from documents
@@ -92,7 +109,7 @@ async function analyzeDirectChatContact(chatId, contactData, messages, existingO
     }).slice(0, 3)
 
     const imageNote = imageMessages.length > 0
-      ? `\n\nNote: ${imageMessages.length} image(s) from this conversation are attached for visual context.`
+      ? `\n\nNote: ${imageMessages.length} image message(s) occur in this sample. Use their media-analysis text when present; do not invent missing visual details.`
       : ''
 
     const prompt = `You are analyzing a WhatsApp contact from the perspective of the account owner.
@@ -132,47 +149,15 @@ Return ONLY valid JSON:
 Set is_noise=true for: bots, spam, automated alerts, OTP services, delivery notifications, bank alerts, unknown contacts with only automated messages.
 relationship_strength=noise means this contact is not meaningful (same as is_noise).`
 
-    // Build multi-modal content from complete downloaded files. Message bodies
-    // may contain captions or truncated thumbnails and are not valid image data.
-    let userContent
-    if (imageMessages.length > 0) {
-      const contentBlocks = []
-      for (const imgMsg of imageMessages) {
-        if (!imgMsg.wa_msg_id) continue
-        const { rows } = await db.query(
-          `SELECT file_path, mime_type FROM public.media_files
-           WHERE wa_msg_id = $1 AND mime_type LIKE 'image/%'
-           LIMIT 1`,
-          [imgMsg.wa_msg_id]
-        )
-        const media = rows[0]
-        if (media?.file_path && fs.existsSync(media.file_path)) {
-          const stat = fs.statSync(media.file_path)
-          if (stat.size > 0 && stat.size <= 15 * 1024 * 1024) {
-            const b64 = fs.readFileSync(media.file_path).toString('base64')
-            contentBlocks.push({
-              type: 'image',
-              source: { type: 'base64', media_type: media.mime_type, data: b64 }
-            })
-          }
-        }
-      }
-      contentBlocks.push({ type: 'text', text: prompt })
-      userContent = contentBlocks
-    } else {
-      userContent = prompt
-    }
-
-    const response = await llm.create('relationships', {
+    const result = await createStructured({
       profile: 'bulk_structured',
       task_type: 'relationship_contact_extract_json',
       workflow_name: 'relationship_analysis',
       max_tokens: 600,
-      messages: [{ role: 'user', content: userContent }],
+      // Media has its own versioned semantic-analysis stage. Relationship
+      // synthesis consumes that canonical text instead of re-sending raw files.
+      messages: [{ role: 'user', content: prompt }],
     })
-
-    const text = response.text || ''
-    const result = parseJSON(text)
 
     return {
       display_name: result.display_name || defaults.display_name,
@@ -187,7 +172,7 @@ relationship_strength=noise means this contact is not meaningful (same as is_noi
     }
   } catch (err) {
     console.error('[analyzer] analyzeDirectChatContact error:', err.message)
-    return defaults
+    return { ...defaults, analysis_error: err.message }
   }
 }
 
@@ -222,7 +207,7 @@ async function analyzeGroup(group, messages) {
     const sample = messages.slice(0, 50).map(m => {
       const who  = m.from_me ? 'Me' : (m.notify_name || 'Other')
       const date = m.ts ? new Date(m.ts).toLocaleDateString('en-GB') : ''
-      return `[${who}] (${date}): ${(m.body || '').slice(0, 180)}`
+      return `[canonical_ref=${m.source_id}; ${who}; ${date}]: ${messageTextForAnalysis(m).slice(0, 500)}`
     }).join('\n')
 
     // Extract unique participant names for context
@@ -252,7 +237,7 @@ Analyze and return ONLY valid JSON:
     {"name": "...", "role_or_context": "...", "why_notable": "..."}
   ],
   "opportunities": [
-    {"title": "...", "description": "...", "priority": "high|medium|low"}
+    {"title": "...", "description": "...", "priority": "high|medium|low", "evidence_refs": ["exact canonical_ref value"]}
   ],
   "is_noise": false
 }
@@ -274,7 +259,7 @@ Definitions:
 
 - notable_contacts: Only populate if group_type is "community" OR if there are 1-2 specific people worth connecting with directly. Empty array otherwise.
 
-- opportunities: Missed business/relationship opportunities visible in the chat. Only real, specific opportunities — not generic advice. For community groups especially look hard for: business leads, introductions offered, market intelligence, events mentioned. Empty array if none.
+- opportunities: Missed business/relationship opportunities visible in the chat. Only real, specific opportunities — not generic advice. Every opportunity must cite at least one exact canonical_ref from a supporting message; omit opportunities without direct support. For community groups especially look hard for: business leads, introductions offered, market intelligence, events mentioned. Empty array if none.
 
 - communication_advice:
   * For board_peers: strategic, concise, agenda-focused
@@ -285,7 +270,7 @@ Definitions:
 
 - is_noise: true only for spam/broadcast/automated groups with no real human conversation`
 
-    const response = await llm.create('relationships', {
+    const result = await createStructured({
       profile: 'bulk_structured',
       task_type: 'relationship_group_extract_json',
       workflow_name: 'relationship_analysis',
@@ -293,8 +278,15 @@ Definitions:
       messages: [{ role: 'user', content: prompt }],
     })
 
-    const text   = response.text || ''
-    const result = parseJSON(text)
+    const allowedRefs = new Set(messages.map(message => String(message.source_id || '')).filter(Boolean))
+    const supportedOpportunities = (Array.isArray(result.opportunities) ? result.opportunities : [])
+      .map(opportunity => ({
+        ...opportunity,
+        evidence_refs: (Array.isArray(opportunity?.evidence_refs) ? opportunity.evidence_refs : [])
+          .map(String)
+          .filter(ref => allowedRefs.has(ref)),
+      }))
+      .filter(opportunity => opportunity.evidence_refs.length > 0)
 
     return {
       group_type:           result.group_type           || 'unknown',
@@ -303,12 +295,12 @@ Definitions:
       key_topics:           Array.isArray(result.key_topics)        ? result.key_topics        : [],
       communication_advice: result.communication_advice || null,
       notable_contacts:     Array.isArray(result.notable_contacts)  ? result.notable_contacts  : [],
-      opportunities:        Array.isArray(result.opportunities)     ? result.opportunities     : [],
+      opportunities:        supportedOpportunities,
       is_noise:             Boolean(result.is_noise),
     }
   } catch (err) {
     console.error('[analyzer] analyzeGroup error:', err.message)
-    return defaults
+    return { ...defaults, analysis_error: err.message }
   }
 }
 
@@ -340,16 +332,13 @@ Return ONLY a JSON array:
 
 Only include real named people. Skip generic terms like "someone", "they", etc.`
 
-    const response = await llm.create('relationships', {
+    const result = await createStructured({
       profile: 'bulk_structured',
       task_type: 'relationship_participant_extract_json',
       workflow_name: 'relationship_analysis',
       max_tokens: 1000,
       messages: [{ role: 'user', content: prompt }],
     })
-
-    const text = response.text || ''
-    const result = parseJSON(text)
     return Array.isArray(result) ? result : []
   } catch (err) {
     console.error('[analyzer] analyzeLimitlessParticipants error:', err.message)
@@ -391,16 +380,13 @@ Return ONLY a JSON array of insights (max 3):
 
 Only return insights that are genuinely actionable. Empty array if nothing notable.`
 
-    const response = await llm.create('relationships', {
+    const result = await createStructured({
       profile: 'reasoning_synthesis',
       task_type: 'relationship_insight_synthesis_json',
       workflow_name: 'relationship_analysis',
       max_tokens: 600,
       messages: [{ role: 'user', content: prompt }],
     })
-
-    const text = response.text || ''
-    const result = parseJSON(text)
     return Array.isArray(result) ? result : []
   } catch (err) {
     console.error('[analyzer] generateContactInsights error:', err.message)
@@ -410,6 +396,8 @@ Only return insights that are genuinely actionable. Empty array if nothing notab
 
 module.exports = {
   sleep,
+  parseJSON,
+  createStructured,
   analyzeDirectChatContact,
   analyzeGroup,
   analyzeLimitlessParticipants,

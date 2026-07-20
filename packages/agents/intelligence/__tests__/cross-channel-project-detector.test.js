@@ -1,6 +1,22 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
-const { detectCrossChannelProjectSignals } = require('../services/cross-channel-project-detector')
+const {
+  buildContactMentionIndex,
+  contactsMentionedInText,
+  detectCrossChannelProjectSignals,
+} = require('../services/cross-channel-project-detector')
+
+test('indexes contact-name mentions instead of scanning the full address book per message', () => {
+  const contacts = Array.from({ length: 10000 }, (_, index) => ({
+    id: index + 1,
+    display_name: `Person ${String(index + 1).padStart(5, '0')} Distinctive${index + 1}`,
+  }))
+  const index = buildContactMentionIndex(contacts)
+  const matches = contactsMentionedInText('Please ask Person 09999 Distinctive9999 to review this.', index)
+
+  assert.deepEqual(matches.map(contact => contact.id), [9999])
+  assert.ok(index.size > 0)
+})
 
 test('detects project work spanning WhatsApp group and direct member chat', () => {
   const projects = [{
@@ -22,7 +38,7 @@ test('detects project work spanning WhatsApp group and direct member chat', () =
     { chat_id: '120@g.us', participant: '919999999999@c.us', body: 'Need fitment guide content before website launch', ts: '2026-06-25T09:00:00Z' },
   ]
   const directMessages = [
-    { contact_id: 99, chat_id: '919999999999@c.us', body: 'Pending catalogue fitment data. Please confirm approval and send latest tyre content.', ts: '2026-06-25T11:00:00Z' },
+    { contact_id: 99, canonical_communication_id: 991, chat_id: '919999999999@c.us', body: 'Pending catalogue fitment data. Please confirm approval and send latest tyre content.', ts: '2026-06-25T11:00:00Z' },
   ]
 
   const opportunities = detectCrossChannelProjectSignals({ projects, groups, contacts, groupMessages, directMessages })
@@ -31,7 +47,9 @@ test('detects project work spanning WhatsApp group and direct member chat', () =
   assert.equal(opportunities[0].primary_contact_id, 99)
   assert.equal(opportunities[0].opportunity_type, 'meeting_action')
   assert.match(opportunities[0].description, /direct conversation/i)
-  assert.ok(opportunities[0].evidence.length >= 2)
+  assert.ok(opportunities[0].evidence.length >= 1)
+  assert.ok(opportunities[0].evidence.every(item => item.source_table === 'relationships.communications'))
+  assert.equal(opportunities[0].evidence[0].source_id, 991)
 })
 
 test('uses group context to connect direct tasks whose wording differs from project name', () => {

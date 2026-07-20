@@ -3,6 +3,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { canonicalWhatsAppChatIdSql } = require('../packages/agents/shared/whatsapp-chat');
 
 try {
   require('dotenv').config({ path: path.resolve(__dirname, '../.env.local') });
@@ -196,6 +197,437 @@ async function runQualityIndicators() {
   report.quality_indicators.project_communications_with_null_contact_id = nullContactRows ? nullContactRows[0] : { skipped: true };
 }
 
+async function runCanonicalQualityGates() {
+  if (!(await tableExists('relationships.communications'))) {
+    report.quality_indicators.canonical_quality_gates = { skipped: true };
+    return;
+  }
+
+  const { rows: canonicalRows } = await pool.query(`
+    WITH duplicate_keys AS (
+      SELECT source, source_id, COUNT(*)::bigint AS copies
+      FROM relationships.communications
+      GROUP BY source, source_id
+      HAVING COUNT(*) > 1
+    )
+    SELECT
+      COUNT(*)::bigint AS canonical_events,
+      COUNT(*) FILTER (WHERE contact_id IS NOT NULL)::bigint AS linked_events,
+      COUNT(*) FILTER (WHERE contact_id IS NULL)::bigint AS unresolved_events,
+      COALESCE((SELECT SUM(copies - 1) FROM duplicate_keys), 0)::bigint AS duplicate_events,
+      MAX(occurred_at) AS latest_canonical_at
+    FROM relationships.communications
+  `);
+  const canonical = canonicalRows[0];
+  const canonicalCount = countVal(canonical, 'canonical_events');
+  const duplicateCount = countVal(canonical, 'duplicate_events');
+  const duplicateRate = canonicalCount ? duplicateCount / canonicalCount : 0;
+  report.quality_indicators.canonical_communications = {
+    ...canonical,
+    duplicate_rate: Number(duplicateRate.toFixed(6)),
+  };
+  if (duplicateRate >= 0.001) {
+    status('FAIL', 'canonical communication duplicate rate is above the 0.1% gate', { duplicate_count: duplicateCount, duplicate_rate: duplicateRate });
+  }
+
+  const rawBySource = {};
+  if (await tableExists('email.emails')) {
+    const { rows } = await pool.query(`
+      SELECT COUNT(*)::bigint AS count, MAX(COALESCE(date, received_at, created_at)) AS latest_at
+      FROM email.emails
+      WHERE id IS NOT NULL AND COALESCE(date, received_at, created_at) IS NOT NULL
+    `);
+    rawBySource.email = rows[0];
+  }
+  if (await tableExists('public.messages')) {
+    const selfJid = process.env.WHATSAPP_SELF_JID || process.env.MY_WA_JID || '';
+    const chatSql = canonicalWhatsAppChatIdSql({
+      dataExpression: 'm.data',
+      storedChatExpression: 'm.chat_id',
+      selfExpression: '$1',
+    });
+    const { rows } = await pool.query(`
+      SELECT COUNT(DISTINCT COALESCE(NULLIF(m.wa_msg_id, ''), NULLIF(m.data->'id'->>'_serialized', '')))::bigint AS native_count,
+             COUNT(*) FILTER (WHERE COALESCE(NULLIF(m.wa_msg_id, ''), NULLIF(m.data->'id'->>'_serialized', '')) IS NULL)::bigint AS fallback_rows,
+             MAX(m.ts) AS latest_at
+      FROM public.messages m
+      CROSS JOIN LATERAL (SELECT ${chatSql} AS chat_id) chat
+      WHERE m.event IN ('message','message_create','message_historical')
+        AND chat.chat_id IS NOT NULL
+    `, [selfJid]);
+    rawBySource.whatsapp = rows[0];
+  }
+  if (await tableExists('limitless.lifelogs')) {
+    const { rows } = await pool.query(`
+      SELECT COUNT(*)::bigint AS count, MAX(COALESCE(start_time, created_at)) AS latest_at
+      FROM limitless.lifelogs
+      WHERE id IS NOT NULL
+        AND COALESCE(NULLIF(markdown, ''), NULLIF(contents, ''), NULLIF(title, '')) IS NOT NULL
+        AND COALESCE(start_time, created_at) IS NOT NULL
+    `);
+    rawBySource.limitless = rows[0];
+  }
+  const { rows: canonicalBySource } = await pool.query(`
+    SELECT source, COUNT(*)::bigint AS count, MAX(occurred_at) AS latest_at
+    FROM relationships.communications
+    GROUP BY source
+  `);
+  const canonicalMap = Object.fromEntries(canonicalBySource.map(row => [row.source, row]));
+  const coverage = {};
+  for (const [source, raw] of Object.entries(rawBySource)) {
+    const rawCount = source === 'whatsapp'
+      ? countVal(raw, 'native_count') + countVal(raw, 'fallback_rows')
+      : countVal(raw, 'count');
+    const normalized = countVal(canonicalMap[source], 'count');
+    let missingCount = Math.max(rawCount - normalized, 0);
+    const detail = {};
+    if (source === 'whatsapp') {
+      const { rows: whatsappCanonical } = await pool.query(`
+        SELECT
+          COUNT(*) FILTER (WHERE source_id LIKE 'wa:%' AND source_id NOT LIKE 'wa:fallback:%')::bigint AS native_count,
+          COUNT(*) FILTER (WHERE source_id LIKE 'wa:fallback:%')::bigint AS fallback_count
+        FROM relationships.communications
+        WHERE source = 'whatsapp'
+      `);
+      const canonicalNative = countVal(whatsappCanonical[0], 'native_count');
+      missingCount = Math.max(countVal(raw, 'native_count') - canonicalNative, 0);
+      Object.assign(detail, {
+        raw_native_count: countVal(raw, 'native_count'),
+        raw_fallback_rows: countVal(raw, 'fallback_rows'),
+        canonical_native_count: canonicalNative,
+        canonical_fallback_count: countVal(whatsappCanonical[0], 'fallback_count'),
+        note: 'Fallback rows use deterministic content fingerprints; raw row count is not an event-parity denominator.',
+      });
+    }
+    coverage[source] = {
+      raw_count: rawCount,
+      canonical_count: normalized,
+      missing_count: missingCount,
+      raw_latest_at: raw.latest_at,
+      canonical_latest_at: canonicalMap[source]?.latest_at || null,
+      ...detail,
+    };
+    if (coverage[source].missing_count > 0) {
+      status('WARN', `${source} raw-to-canonical recovery is incomplete`, coverage[source]);
+    }
+  }
+  report.quality_indicators.raw_to_canonical_coverage = coverage;
+
+  if (await tableExists('public.media_files')) {
+    const selfJid = process.env.WHATSAPP_SELF_JID || process.env.MY_WA_JID || '';
+    const chatSql = canonicalWhatsAppChatIdSql({
+      dataExpression: 'm.data',
+      storedChatExpression: 'm.chat_id',
+      selfExpression: '$1',
+    });
+    const { rows } = await pool.query(`
+      WITH eligible_media AS (
+        SELECT DISTINCT ON (mf.id) mf.*
+        FROM public.media_files mf
+        JOIN public.messages m
+          ON COALESCE(NULLIF(m.wa_msg_id, ''), NULLIF(m.data->'id'->>'_serialized', '')) = mf.wa_msg_id
+        CROSS JOIN LATERAL (SELECT ${chatSql} AS chat_id) chat
+        WHERE m.event IN ('message','message_create','message_historical')
+          AND chat.chat_id IS NOT NULL
+        ORDER BY mf.id, m.id DESC
+      )
+      SELECT
+        COUNT(*) FILTER (WHERE COALESCE(NULLIF(mf.semantic_text, ''), NULLIF(mf.extracted_text, '')) IS NOT NULL)::bigint AS analyzed,
+        COUNT(*) FILTER (
+          WHERE COALESCE(NULLIF(mf.semantic_text, ''), NULLIF(mf.extracted_text, '')) IS NOT NULL
+            AND communication.id IS NULL
+        )::bigint AS analyzed_without_canonical_event,
+        COUNT(*) FILTER (
+          WHERE COALESCE(NULLIF(mf.semantic_text, ''), NULLIF(mf.extracted_text, '')) IS NOT NULL
+            AND communication.id IS NOT NULL
+            AND NULLIF(communication.metadata->>'media_semantic_text', '') IS NULL
+        )::bigint AS canonical_event_missing_semantics
+      FROM eligible_media mf
+      LEFT JOIN relationships.communications communication
+        ON communication.source = 'whatsapp'
+       AND communication.source_id = 'wa:' || mf.wa_msg_id
+    `, [selfJid]);
+    report.quality_indicators.media_semantic_coverage = rows[0];
+    if (countVal(rows[0], 'analyzed_without_canonical_event') || countVal(rows[0], 'canonical_event_missing_semantics')) {
+      status('WARN', 'analyzed media has not fully converged into canonical communications', rows[0]);
+    }
+  }
+
+  if (await tableExists('intelligence.opportunities') && await tableExists('intelligence.opportunity_evidence')) {
+    const { rows } = await pool.query(`
+      SELECT
+        COUNT(*) FILTER (WHERE opportunity.status = 'open')::bigint AS open_items,
+        COUNT(*) FILTER (WHERE opportunity.status = 'open' AND evidence.opportunity_id IS NULL)::bigint AS open_without_evidence,
+        COUNT(*) FILTER (
+          WHERE opportunity.status = 'open'
+            AND opportunity.primary_contact_id IS NULL
+            AND opportunity.primary_project_id IS NULL
+        )::bigint AS open_without_entity
+      FROM intelligence.opportunities opportunity
+      LEFT JOIN (
+        SELECT DISTINCT opportunity_id FROM intelligence.opportunity_evidence
+      ) evidence ON evidence.opportunity_id = opportunity.id
+    `);
+    report.quality_indicators.intelligence_evidence_coverage = rows[0];
+    if (countVal(rows[0], 'open_without_evidence')) status('FAIL', 'open intelligence items without evidence exist', rows[0]);
+  }
+
+  if (await tableExists('intelligence.attention_queue')) {
+    const { rows } = await pool.query(`SELECT COUNT(*)::bigint AS count FROM intelligence.attention_queue WHERE evidence_count = 0`);
+    report.quality_indicators.attention_without_evidence = rows[0];
+    if (countVal(rows[0], 'count')) status('FAIL', 'attention queue contains items without evidence', rows[0]);
+  }
+
+  if (await tableExists('relationships.identity_conflicts')) {
+    const { rows } = await pool.query(`SELECT COUNT(*) FILTER (WHERE status = 'pending')::bigint AS pending FROM relationships.identity_conflicts`);
+    report.quality_indicators.identity_conflicts = rows[0];
+  }
+
+  if (await tableExists('intelligence.pipeline_runs')) {
+    const { rows } = await pool.query(`
+      SELECT status, started_at, heartbeat_at, completed_at, error
+      FROM intelligence.pipeline_runs
+      ORDER BY started_at DESC
+      LIMIT 1
+    `);
+    report.derived_freshness.latest_intelligence_pipeline = rows[0] || null;
+    if (!rows[0] || rows[0].status !== 'completed') status('WARN', 'latest durable intelligence run is not completed', rows[0] || null);
+  }
+}
+
+async function runReleaseContractGates() {
+  const gates = {};
+  const selfJid = process.env.WHATSAPP_SELF_JID || process.env.MY_WA_JID || '';
+  const releaseChatSql = canonicalWhatsAppChatIdSql({
+    dataExpression: 'm.data',
+    storedChatExpression: 'm.chat_id',
+    selfExpression: '$1',
+  });
+
+  const keySets = await pool.query(`
+    WITH expected_email AS (
+      SELECT 'email:' || id::text AS source_id
+      FROM email.emails
+      WHERE id IS NOT NULL AND COALESCE(date, received_at, created_at) IS NOT NULL
+    ), actual_email AS (
+      SELECT source_id FROM relationships.communications WHERE source = 'email'
+    ), expected_limitless AS (
+      SELECT 'limitless:' || id::text AS source_id
+      FROM limitless.lifelogs
+      WHERE id IS NOT NULL
+        AND COALESCE(NULLIF(markdown, ''), NULLIF(contents, ''), NULLIF(title, '')) IS NOT NULL
+        AND COALESCE(start_time, created_at) IS NOT NULL
+    ), actual_limitless AS (
+      SELECT source_id FROM relationships.communications WHERE source = 'limitless'
+    )
+    SELECT
+      (SELECT COUNT(*) FROM (SELECT source_id FROM expected_email EXCEPT SELECT source_id FROM actual_email) missing)::bigint AS email_missing,
+      (SELECT COUNT(*) FROM (SELECT source_id FROM actual_email EXCEPT SELECT source_id FROM expected_email) extra)::bigint AS email_extra,
+      (SELECT COUNT(*) FROM (SELECT source_id FROM expected_limitless EXCEPT SELECT source_id FROM actual_limitless) missing)::bigint AS limitless_missing,
+      (SELECT COUNT(*) FROM (SELECT source_id FROM actual_limitless EXCEPT SELECT source_id FROM expected_limitless) extra)::bigint AS limitless_extra
+  `);
+  gates.bidirectional_source_keys = keySets.rows[0];
+  if (Object.values(keySets.rows[0]).some(value => Number(value) !== 0)) {
+    status('FAIL', 'email/Limitless canonical key sets do not exactly match immutable source rows', keySets.rows[0]);
+  }
+
+  const whatsapp = await pool.query(`
+    WITH eligible_raw AS (
+      SELECT m.id,
+             COALESCE(NULLIF(m.wa_msg_id, ''), NULLIF(m.data->'id'->>'_serialized', '')) AS native_id
+      FROM public.messages m
+      CROSS JOIN LATERAL (SELECT ${releaseChatSql} AS canonical_chat_id) chat
+      WHERE m.event IN ('message','message_create','message_historical')
+        AND chat.canonical_chat_id IS NOT NULL
+    ), raw_matches AS (
+      SELECT raw.id
+      FROM eligible_raw raw
+      JOIN relationships.communication_source_rows lineage
+        ON lineage.source = 'whatsapp' AND lineage.source_row_id = raw.id
+      JOIN relationships.communications communication
+        ON communication.id = lineage.communication_id AND communication.source = 'whatsapp'
+      UNION
+      SELECT raw.id
+      FROM eligible_raw raw
+      JOIN relationships.communications communication
+        ON COALESCE(communication.metadata->>'source_row_id', '') = raw.id::text
+       AND communication.source = 'whatsapp'
+      UNION
+      SELECT raw.id
+      FROM eligible_raw raw
+      JOIN relationships.communications communication
+        ON communication.source = 'whatsapp'
+       AND raw.native_id IS NOT NULL
+       AND communication.source_id = 'wa:' || raw.native_id
+    ), candidate_pairs AS (
+      SELECT fallback.id fallback_id, native.id native_id
+      FROM relationships.communications fallback
+      JOIN public.messages raw
+        ON COALESCE(fallback.metadata->>'source_row_id', '') ~ '^[0-9]+$'
+       AND raw.id = (fallback.metadata->>'source_row_id')::bigint
+      JOIN relationships.communications native
+        ON native.source = 'whatsapp'
+       AND native.source_id = 'wa:' || COALESCE(NULLIF(raw.wa_msg_id, ''), NULLIF(raw.data->'id'->>'_serialized', ''))
+      WHERE fallback.source = 'whatsapp'
+        AND fallback.source_id LIKE 'wa:fallback:%'
+        AND COALESCE(NULLIF(raw.wa_msg_id, ''), NULLIF(raw.data->'id'->>'_serialized', '')) IS NOT NULL
+        AND fallback.id <> native.id
+    ), verified_communication_ids AS (
+      SELECT communication.id
+      FROM relationships.communications communication
+      JOIN relationships.communication_source_rows lineage
+        ON lineage.communication_id = communication.id AND lineage.source = 'whatsapp'
+      JOIN public.messages raw ON raw.id = lineage.source_row_id
+      WHERE communication.source = 'whatsapp'
+      UNION
+      SELECT communication.id
+      FROM relationships.communications communication
+      JOIN public.messages raw
+        ON COALESCE(communication.metadata->>'source_row_id', '') ~ '^[0-9]+$'
+       AND raw.id = (communication.metadata->>'source_row_id')::bigint
+      WHERE communication.source = 'whatsapp'
+      UNION
+      SELECT communication.id
+      FROM public.messages raw
+      JOIN relationships.communications communication
+        ON communication.source = 'whatsapp'
+       AND communication.source_id = 'wa:' || COALESCE(NULLIF(raw.wa_msg_id, ''), NULLIF(raw.data->'id'->>'_serialized', ''))
+      WHERE COALESCE(NULLIF(raw.wa_msg_id, ''), NULLIF(raw.data->'id'->>'_serialized', '')) IS NOT NULL
+    ), active_rawless AS (
+      SELECT communication.id
+      FROM relationships.communications communication
+      WHERE communication.source = 'whatsapp'
+        AND NOT EXISTS (SELECT 1 FROM verified_communication_ids verified WHERE verified.id = communication.id)
+        AND COALESCE(communication.metadata->>'lineage_status', '') <> 'quarantined_missing_raw'
+    )
+    SELECT
+      (SELECT COUNT(*) FROM eligible_raw raw
+       WHERE NOT EXISTS (SELECT 1 FROM raw_matches matched WHERE matched.id = raw.id))::bigint AS raw_rows_without_canonical,
+      (SELECT COUNT(*) FROM candidate_pairs)::bigint AS logical_fallback_native_pairs,
+      (SELECT COUNT(*) FROM active_rawless)::bigint AS active_canonical_without_raw,
+      (SELECT COUNT(*) FROM relationships.communications
+       WHERE source = 'whatsapp' AND metadata->>'lineage_status' = 'quarantined_missing_raw')::bigint AS quarantined_without_raw
+  `, [selfJid]);
+  gates.whatsapp_lineage = whatsapp.rows[0];
+  for (const key of ['raw_rows_without_canonical', 'logical_fallback_native_pairs', 'active_canonical_without_raw']) {
+    if (countVal(whatsapp.rows[0], key)) status('FAIL', `WhatsApp lineage gate failed: ${key}`, whatsapp.rows[0]);
+  }
+
+  const identity = await pool.query(`
+    SELECT
+      COUNT(*) FILTER (WHERE conflict.status = 'pending')::bigint AS pending_conflicts,
+      (SELECT COUNT(*) FROM relationships.contact_identities identity
+       JOIN relationships.contacts contact ON contact.id = identity.contact_id
+       LEFT JOIN relationships.contact_merge_redirects redirect ON redirect.from_contact_id = contact.id
+       WHERE identity.is_active AND (contact.is_noise OR redirect.from_contact_id IS NOT NULL))::bigint AS active_on_noise_or_redirect,
+      (SELECT COUNT(*) FROM (
+        SELECT source, identity_type, identity_value
+        FROM relationships.contact_identities WHERE is_active
+        GROUP BY source, identity_type, identity_value HAVING COUNT(*) > 1
+      ) duplicates)::bigint AS active_identity_collisions
+    FROM relationships.identity_conflicts conflict
+  `);
+  gates.identity = identity.rows[0];
+  if (Object.values(identity.rows[0]).some(value => Number(value) !== 0)) status('FAIL', 'identity convergence gate failed', identity.rows[0]);
+
+  const evidence = await pool.query(`
+    WITH resolved AS (
+      SELECT evidence.id, evidence.opportunity_id,
+        CASE
+          WHEN evidence.source_table = 'relationships.communications' THEN EXISTS (
+            SELECT 1 FROM relationships.communications row
+            WHERE row.id = CASE WHEN evidence.source_id ~ '^[0-9]+$' THEN evidence.source_id::bigint ELSE -1 END
+              AND COALESCE(row.metadata->>'lineage_status', 'verified') <> 'quarantined_missing_raw'
+          )
+          ELSE FALSE
+        END AS resolves_directly
+      FROM intelligence.opportunity_evidence evidence
+    )
+    SELECT
+      COUNT(*) FILTER (WHERE NOT resolves_directly)::bigint AS dangling_or_derived_evidence,
+      COUNT(DISTINCT opportunity.id) FILTER (
+        WHERE opportunity.status = 'open' AND opportunity.lifecycle_state = 'active'
+          AND NOT EXISTS (SELECT 1 FROM resolved row WHERE row.opportunity_id = opportunity.id AND row.resolves_directly)
+      )::bigint AS active_without_direct_evidence,
+      COUNT(DISTINCT opportunity.id) FILTER (
+        WHERE opportunity.status = 'open' AND opportunity.lifecycle_state = 'active'
+          AND opportunity.primary_contact_id IS NULL AND opportunity.primary_project_id IS NULL
+      )::bigint AS active_without_entity,
+      COUNT(DISTINCT opportunity.id) FILTER (
+        WHERE opportunity.lifecycle_state IS DISTINCT FROM CASE opportunity.status
+          WHEN 'actioned' THEN 'resolved' WHEN 'dismissed' THEN 'dismissed'
+          WHEN 'expired' THEN 'expired' ELSE opportunity.lifecycle_state END
+      )::bigint AS lifecycle_mismatches
+    FROM intelligence.opportunities opportunity
+    LEFT JOIN resolved ON resolved.opportunity_id = opportunity.id
+  `);
+  gates.evidence_and_lifecycle = evidence.rows[0];
+  if (Object.values(evidence.rows[0]).some(value => Number(value) !== 0)) status('FAIL', 'evidence/lifecycle convergence gate failed', evidence.rows[0]);
+
+  const projects = await pool.query(`
+    WITH aggregate AS (
+      SELECT project.id,
+             COUNT(communication.id)::int AS actual_count,
+             MAX(communication.occurred_at) AS actual_last_activity
+      FROM projects.projects project
+      LEFT JOIN projects.project_communications communication ON communication.project_id = project.id
+      GROUP BY project.id
+    )
+    SELECT
+      COUNT(*) FILTER (WHERE project.comm_count IS DISTINCT FROM aggregate.actual_count)::bigint AS count_mismatches,
+      COUNT(*) FILTER (WHERE project.last_activity_at IS DISTINCT FROM aggregate.actual_last_activity)::bigint AS last_activity_mismatches,
+      (SELECT COUNT(*) FROM projects.project_insights insight
+       WHERE insight.is_resolved AND insight.resolution_status = 'open')::bigint AS resolved_marked_open,
+      (SELECT COUNT(*) FROM projects.project_insights insight
+       WHERE NOT insight.is_resolved AND insight.resolution_status = 'open'
+         AND (COALESCE(jsonb_array_length(CASE WHEN jsonb_typeof(insight.evidence_refs) = 'array' THEN insight.evidence_refs ELSE '[]'::jsonb END), 0) = 0
+              OR insight.insight_fingerprint IS NULL))::bigint AS open_without_lineage
+    FROM projects.projects project JOIN aggregate USING (id)
+  `);
+  gates.projects = projects.rows[0];
+  if (Object.values(projects.rows[0]).some(value => Number(value) !== 0)) status('FAIL', 'project convergence gate failed', projects.rows[0]);
+
+  const clarifications = await pool.query(`
+    SELECT
+      COUNT(*) FILTER (WHERE status = 'answered' AND answer_guidance_fact_id IS NULL)::bigint AS answered_without_guidance,
+      COUNT(*) FILTER (WHERE status = 'pending' AND impact <> 'high' AND occurrences >= 3)::bigint AS low_level_interruptions,
+      COUNT(*) FILTER (WHERE status IN ('answered','auto_resolved') AND COALESCE(answered_at, resolved_at) IS NULL)::bigint AS closed_without_timestamp
+    FROM intelligence.clarification_questions
+  `);
+  gates.clarifications = clarifications.rows[0];
+  if (Object.values(clarifications.rows[0]).some(value => Number(value) !== 0)) status('FAIL', 'clarification/guidance lifecycle gate failed', clarifications.rows[0]);
+
+  const timeAndRuns = await pool.query(`
+    SELECT
+      (SELECT COUNT(*) FROM email.emails WHERE COALESCE(date, received_at, created_at) > NOW() + INTERVAL '6 hours')::bigint AS future_email_rows,
+      (SELECT COUNT(*) FROM relationships.communications WHERE occurred_at > NOW() + INTERVAL '6 hours')::bigint AS future_canonical_rows,
+      (SELECT status FROM relationships.analysis_runs ORDER BY started_at DESC LIMIT 1) AS latest_relationship_run,
+      (SELECT status FROM projects.analysis_runs ORDER BY started_at DESC LIMIT 1) AS latest_project_run,
+      (SELECT status FROM intelligence.pipeline_runs ORDER BY started_at DESC LIMIT 1) AS latest_intelligence_run
+  `);
+  gates.time_and_runs = timeAndRuns.rows[0];
+  if (countVal(timeAndRuns.rows[0], 'future_email_rows') || countVal(timeAndRuns.rows[0], 'future_canonical_rows')) {
+    status('FAIL', 'source or canonical timestamps are implausibly future-dated', timeAndRuns.rows[0]);
+  }
+  for (const key of ['latest_relationship_run', 'latest_project_run', 'latest_intelligence_run']) {
+    if (timeAndRuns.rows[0][key] !== 'completed') status('FAIL', `${key} is not completed`, timeAndRuns.rows[0][key]);
+  }
+
+  if (await tableExists('public.media_files')) {
+    const media = await pool.query(`
+      SELECT
+        COUNT(*) FILTER (WHERE analysis_status IN ('pending','processing'))::bigint AS unfinished,
+        COUNT(*) FILTER (WHERE analysis_status = 'failed')::bigint AS failed,
+        COUNT(*) FILTER (WHERE analysis_status = 'completed' AND COALESCE(NULLIF(semantic_text, ''), NULLIF(extracted_text, '')) IS NULL)::bigint AS completed_without_semantics
+      FROM public.media_files
+    `);
+    gates.media = media.rows[0];
+    if (Object.values(media.rows[0]).some(value => Number(value) !== 0)) status('FAIL', 'media semantic processing is not converged', media.rows[0]);
+  }
+
+  report.quality_indicators.release_contract = gates;
+}
+
 async function runStatsSmoke() {
   const expected = {
     relationships: ['total_contacts', 'pending_insights', 'strong_contacts', 'last_analysis_at'],
@@ -363,7 +795,7 @@ async function runSchemaDrift() {
   for (const [table, cols] of Object.entries(expected)) {
     if (!(await tableExists(table))) {
       report.schema_drift[table] = { skipped: true, reason: 'table missing' };
-      status('WARN', `schema drift skipped: ${table} missing`);
+      status('FAIL', `required table is missing: ${table}`);
       continue;
     }
     const [schema, name] = table.split('.');
@@ -376,8 +808,8 @@ async function runSchemaDrift() {
     const live = rows.map(r => r.column_name);
     const missing = cols.filter(c => !live.includes(c));
     const extra = live.filter(c => !cols.includes(c));
-    if (missing.length || extra.length) status('WARN', `schema drift in ${table}`, { missing, extra });
-    report.schema_drift[table] = { ok: missing.length === 0 && extra.length === 0, missing, extra };
+    if (missing.length) status('FAIL', `required columns are missing from ${table}`, { missing });
+    report.schema_drift[table] = { ok: missing.length === 0, missing, additive_columns: extra };
   }
 }
 
@@ -427,6 +859,8 @@ async function main() {
   await runSourceFreshness();
   await runDerivedFreshness();
   await runQualityIndicators();
+  await runCanonicalQualityGates();
+  await runReleaseContractGates();
   await runStatsSmoke();
   await runMyRolePatchSmoke();
   await runWhatsAppSelfJidCheck();

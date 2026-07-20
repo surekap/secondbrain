@@ -201,6 +201,105 @@ CREATE INDEX IF NOT EXISTS opportunities_type_idx
 CREATE INDEX IF NOT EXISTS opportunities_last_seen_idx
   ON intelligence.opportunities (last_seen_at DESC);
 
+-- `opportunities` remains the write-compatible table used by existing APIs,
+-- while these columns make it the single typed intelligence-item ledger.
+ALTER TABLE intelligence.opportunities
+  ADD COLUMN IF NOT EXISTS item_type TEXT NOT NULL DEFAULT 'opportunity'
+    CHECK (item_type IN ('opportunity','issue','insight','action','risk','decision')),
+  ADD COLUMN IF NOT EXISTS item_fingerprint TEXT,
+  ADD COLUMN IF NOT EXISTS lifecycle_state TEXT NOT NULL DEFAULT 'active'
+    CHECK (lifecycle_state IN ('candidate','active','resolved','dismissed','expired')),
+  ADD COLUMN IF NOT EXISTS first_corroborated_at TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS last_corroborated_at TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS last_contradicted_at TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS last_presented_at TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS detector_version TEXT;
+CREATE UNIQUE INDEX IF NOT EXISTS opportunities_item_fingerprint_idx
+  ON intelligence.opportunities (item_fingerprint)
+  WHERE item_fingerprint IS NOT NULL;
+CREATE INDEX IF NOT EXISTS opportunities_item_lifecycle_idx
+  ON intelligence.opportunities (item_type, lifecycle_state, expected_value_score DESC NULLS LAST);
+
+CREATE TABLE IF NOT EXISTS intelligence.item_lifecycle_events (
+  id               BIGSERIAL PRIMARY KEY,
+  opportunity_id   BIGINT NOT NULL REFERENCES intelligence.opportunities(id) ON DELETE CASCADE,
+  from_status      TEXT,
+  to_status        TEXT NOT NULL,
+  from_state       TEXT,
+  to_state         TEXT NOT NULL,
+  actor             TEXT NOT NULL,
+  producer          TEXT,
+  producer_version  TEXT,
+  reason            TEXT NOT NULL,
+  evidence_refs     JSONB NOT NULL DEFAULT '[]',
+  claim_refs        JSONB NOT NULL DEFAULT '[]',
+  occurred_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  metadata          JSONB NOT NULL DEFAULT '{}'
+);
+CREATE INDEX IF NOT EXISTS item_lifecycle_events_item_idx
+  ON intelligence.item_lifecycle_events (opportunity_id, occurred_at DESC);
+
+-- Normalize the legacy status-only ledger once. Keep an auditable migration
+-- transition rather than allowing thousands of dismissed rows to remain active.
+WITH mismatched AS (
+  SELECT id, status AS from_status, lifecycle_state AS from_state,
+         CASE status
+           WHEN 'actioned' THEN 'resolved'
+           WHEN 'dismissed' THEN 'dismissed'
+           WHEN 'expired' THEN 'expired'
+           ELSE lifecycle_state
+         END AS to_state
+  FROM intelligence.opportunities
+  WHERE lifecycle_state IS DISTINCT FROM CASE status
+    WHEN 'actioned' THEN 'resolved'
+    WHEN 'dismissed' THEN 'dismissed'
+    WHEN 'expired' THEN 'expired'
+    ELSE lifecycle_state
+  END
+), updated AS (
+  UPDATE intelligence.opportunities o
+  SET lifecycle_state = mismatched.to_state,
+      updated_at = NOW()
+  FROM mismatched
+  WHERE o.id = mismatched.id
+  RETURNING o.id
+)
+INSERT INTO intelligence.item_lifecycle_events (
+  opportunity_id, from_status, to_status, from_state, to_state,
+  actor, producer, producer_version, reason, metadata
+)
+SELECT mismatched.id, mismatched.from_status, mismatched.from_status,
+       mismatched.from_state, mismatched.to_state,
+       'system', 'schema_migration', 'lifecycle-normalization-v1',
+       'Normalized legacy status/lifecycle mismatch', '{"migration":true}'::jsonb
+FROM mismatched JOIN updated USING (id);
+
+CREATE OR REPLACE FUNCTION intelligence.record_item_lifecycle_event()
+RETURNS TRIGGER LANGUAGE plpgsql AS $$
+BEGIN
+  IF OLD.status IS DISTINCT FROM NEW.status
+     OR OLD.lifecycle_state IS DISTINCT FROM NEW.lifecycle_state THEN
+    INSERT INTO intelligence.item_lifecycle_events (
+      opportunity_id, from_status, to_status, from_state, to_state,
+      actor, producer, producer_version, reason, evidence_refs, claim_refs, metadata
+    ) VALUES (
+      NEW.id, OLD.status, NEW.status, OLD.lifecycle_state, NEW.lifecycle_state,
+      COALESCE(NULLIF(current_setting('secondbrain.lifecycle_actor', true), ''), 'system'),
+      NULLIF(current_setting('secondbrain.lifecycle_producer', true), ''),
+      NULLIF(current_setting('secondbrain.lifecycle_version', true), ''),
+      COALESCE(NULLIF(current_setting('secondbrain.lifecycle_reason', true), ''), 'Lifecycle fields changed'),
+      COALESCE(NULLIF(current_setting('secondbrain.lifecycle_evidence_refs', true), '')::jsonb, '[]'::jsonb),
+      COALESCE(NULLIF(current_setting('secondbrain.lifecycle_claim_refs', true), '')::jsonb, '[]'::jsonb),
+      '{}'::jsonb
+    );
+  END IF;
+  RETURN NEW;
+END $$;
+DROP TRIGGER IF EXISTS opportunities_lifecycle_audit_trigger ON intelligence.opportunities;
+CREATE TRIGGER opportunities_lifecycle_audit_trigger
+AFTER UPDATE OF status, lifecycle_state ON intelligence.opportunities
+FOR EACH ROW EXECUTE FUNCTION intelligence.record_item_lifecycle_event();
+
 -- ── Participant/link tables ──────────────────────────────────────────────────
 
 CREATE TABLE IF NOT EXISTS intelligence.opportunity_contacts (
@@ -226,14 +325,14 @@ CREATE INDEX IF NOT EXISTS opportunity_projects_project_idx
   ON intelligence.opportunity_projects (project_id, role);
 
 -- ── Evidence links ───────────────────────────────────────────────────────────
--- Points to existing source/derived records without forcing a new canonical
--- evidence table on day one. `source_table`/`source_id` may refer to email,
--- WhatsApp, Limitless, relationships.communications, insights, projects, etc.
+-- Item evidence always points to a canonical communication. Derived insight,
+-- group, project, and raw-source provenance belongs in item/evidence metadata;
+-- it must never substitute for inspectable canonical source evidence.
 
 CREATE TABLE IF NOT EXISTS intelligence.opportunity_evidence (
   id             BIGSERIAL PRIMARY KEY,
   opportunity_id BIGINT NOT NULL REFERENCES intelligence.opportunities(id) ON DELETE CASCADE,
-  source_table   TEXT NOT NULL,
+  source_table   TEXT NOT NULL CHECK (source_table = 'relationships.communications'),
   source_id      TEXT NOT NULL,
   source_ref     TEXT,
   occurred_at    TIMESTAMPTZ,
@@ -249,6 +348,77 @@ CREATE INDEX IF NOT EXISTS opportunity_evidence_source_idx
   ON intelligence.opportunity_evidence (source_table, source_id);
 CREATE INDEX IF NOT EXISTS opportunity_evidence_occurred_idx
   ON intelligence.opportunity_evidence (occurred_at DESC NULLS LAST);
+
+CREATE TABLE IF NOT EXISTS intelligence.opportunity_evidence_quarantine (
+  evidence_id      BIGINT PRIMARY KEY,
+  opportunity_id   BIGINT NOT NULL,
+  source_snapshot  JSONB NOT NULL,
+  reason           TEXT NOT NULL,
+  quarantined_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+WITH invalid AS (
+  SELECT evidence.*
+  FROM intelligence.opportunity_evidence evidence
+  WHERE NOT (
+    (evidence.source_table = 'relationships.communications' AND EXISTS (
+      SELECT 1 FROM relationships.communications source_row
+      WHERE source_row.id = CASE WHEN evidence.source_id ~ '^[0-9]+$' THEN evidence.source_id::bigint ELSE -1 END
+        AND COALESCE(source_row.metadata->>'lineage_status', 'verified') <> 'quarantined_missing_raw'
+    ))
+  )
+)
+INSERT INTO intelligence.opportunity_evidence_quarantine (
+  evidence_id, opportunity_id, source_snapshot, reason
+)
+SELECT invalid.id, invalid.opportunity_id, to_jsonb(invalid),
+       'Unsupported, derived, or dangling evidence pointer removed from canonical item ledger'
+FROM invalid
+ON CONFLICT (evidence_id) DO NOTHING;
+
+DELETE FROM intelligence.opportunity_evidence evidence
+USING intelligence.opportunity_evidence_quarantine quarantine
+WHERE evidence.id = quarantine.evidence_id;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_constraint constraint_row
+    JOIN pg_class table_row ON table_row.oid = constraint_row.conrelid
+    JOIN pg_namespace schema_row ON schema_row.oid = table_row.relnamespace
+    WHERE schema_row.nspname = 'intelligence'
+      AND table_row.relname = 'opportunity_evidence'
+      AND constraint_row.conname = 'opportunity_evidence_canonical_source_check'
+  ) THEN
+    ALTER TABLE intelligence.opportunity_evidence
+      ADD CONSTRAINT opportunity_evidence_canonical_source_check
+      CHECK (source_table = 'relationships.communications');
+  END IF;
+END $$;
+
+-- Unsupported items leave active attention automatically. Unlinked items stay
+-- as candidates for later entity resolution rather than interrupting the user.
+UPDATE intelligence.opportunities opportunity
+SET status = 'expired', lifecycle_state = 'expired',
+    expires_at = COALESCE(expires_at, NOW()),
+    metadata = metadata || '{"self_correction":"missing_inspectable_direct_evidence"}'::jsonb,
+    updated_at = NOW()
+WHERE opportunity.status = 'open'
+  AND opportunity.lifecycle_state IN ('active', 'candidate')
+  AND NOT EXISTS (
+    SELECT 1 FROM intelligence.opportunity_evidence evidence
+    WHERE evidence.opportunity_id = opportunity.id
+  );
+
+UPDATE intelligence.opportunities opportunity
+SET lifecycle_state = 'candidate',
+    metadata = metadata || '{"candidate_reason":"unresolved_canonical_entity"}'::jsonb,
+    updated_at = NOW()
+WHERE opportunity.status = 'open'
+  AND opportunity.lifecycle_state = 'active'
+  AND opportunity.primary_contact_id IS NULL
+  AND opportunity.primary_project_id IS NULL;
 
 -- ── Communication event extraction ───────────────────────────────────────────
 
@@ -318,6 +488,175 @@ CREATE INDEX IF NOT EXISTS signals_project_idx
   ON intelligence.signals (project_id)
   WHERE project_id IS NOT NULL;
 
+-- ── Evidence-backed semantic claims ─────────────────────────────────────────
+-- Claims are the semantic layer between raw/canonical communication evidence
+-- and surfaced intelligence items. Counter-evidence updates lifecycle without
+-- mutating the source record.
+
+CREATE TABLE IF NOT EXISTS intelligence.claims (
+  id                BIGSERIAL PRIMARY KEY,
+  claim_key         TEXT NOT NULL UNIQUE,
+  claim_type        TEXT NOT NULL CHECK (claim_type IN (
+                      'need','offer','event','risk','location','capability','interest','intent','decision','status','commitment','other'
+                    )),
+  subject_type      TEXT NOT NULL CHECK (subject_type IN ('contact','project','organization','group','unknown')),
+  subject_id        TEXT,
+  predicate         TEXT NOT NULL,
+  object_type       TEXT,
+  object_id         TEXT,
+  polarity          TEXT NOT NULL DEFAULT 'positive' CHECK (polarity IN ('positive','negative','uncertain')),
+  lifecycle_state   TEXT NOT NULL DEFAULT 'active' CHECK (lifecycle_state IN ('proposed','active','fulfilled','resolved','cancelled','unknown')),
+  valid_from        TIMESTAMPTZ,
+  valid_until       TIMESTAMPTZ,
+  confidence        NUMERIC(5,4) CHECK (confidence IS NULL OR (confidence >= 0 AND confidence <= 1)),
+  extractor_version TEXT NOT NULL,
+  first_seen_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  last_seen_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  last_contradicted_at TIMESTAMPTZ,
+  metadata          JSONB NOT NULL DEFAULT '{}',
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS claims_subject_idx
+  ON intelligence.claims (subject_type, subject_id, claim_type, lifecycle_state);
+CREATE INDEX IF NOT EXISTS claims_recent_idx
+  ON intelligence.claims (last_seen_at DESC);
+
+CREATE TABLE IF NOT EXISTS intelligence.claim_evidence (
+  id           BIGSERIAL PRIMARY KEY,
+  claim_id     BIGINT NOT NULL REFERENCES intelligence.claims(id) ON DELETE CASCADE,
+  source_table TEXT NOT NULL,
+  source_id    TEXT NOT NULL,
+  source_ref   TEXT,
+  occurred_at  TIMESTAMPTZ,
+  quote        TEXT NOT NULL,
+  content_hash TEXT NOT NULL,
+  metadata     JSONB NOT NULL DEFAULT '{}',
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (claim_id, source_table, source_id, content_hash)
+);
+CREATE INDEX IF NOT EXISTS claim_evidence_source_idx
+  ON intelligence.claim_evidence (source_table, source_id);
+
+CREATE TABLE IF NOT EXISTS intelligence.item_claims (
+  opportunity_id BIGINT NOT NULL REFERENCES intelligence.opportunities(id) ON DELETE CASCADE,
+  claim_id       BIGINT NOT NULL REFERENCES intelligence.claims(id) ON DELETE CASCADE,
+  role           TEXT NOT NULL DEFAULT 'supporting' CHECK (role IN ('primary','supporting','contradicting')),
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (opportunity_id, claim_id, role)
+);
+CREATE INDEX IF NOT EXISTS item_claims_claim_idx
+  ON intelligence.item_claims (claim_id, role);
+
+-- ── Durable user-guidance overlay and clarification lifecycle ───────────────
+
+CREATE TABLE IF NOT EXISTS intelligence.guidance_facts (
+  id               BIGSERIAL PRIMARY KEY,
+  guidance_key     TEXT NOT NULL UNIQUE,
+  scope_type       TEXT NOT NULL CHECK (scope_type IN ('global','contact','project','organization','group','topic')),
+  scope_id         TEXT,
+  fact_type        TEXT NOT NULL,
+  fact_value       JSONB NOT NULL,
+  provenance       TEXT NOT NULL CHECK (provenance IN ('user_clarification','user_fact','inferred','imported')),
+  source_ref       TEXT,
+  confidence       NUMERIC(5,4) NOT NULL DEFAULT 1 CHECK (confidence >= 0 AND confidence <= 1),
+  state            TEXT NOT NULL DEFAULT 'active' CHECK (state IN ('active','superseded','contradicted','expired')),
+  valid_from       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  valid_until      TIMESTAMPTZ,
+  supersedes_id    BIGINT REFERENCES intelligence.guidance_facts(id) ON DELETE SET NULL,
+  superseded_by_id BIGINT REFERENCES intelligence.guidance_facts(id) ON DELETE SET NULL,
+  metadata         JSONB NOT NULL DEFAULT '{}',
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS guidance_facts_scope_idx
+  ON intelligence.guidance_facts (scope_type, scope_id, fact_type)
+  WHERE state = 'active';
+
+CREATE TABLE IF NOT EXISTS intelligence.clarification_questions (
+  id                      BIGSERIAL PRIMARY KEY,
+  ambiguity_key           TEXT NOT NULL UNIQUE,
+  scope_type              TEXT NOT NULL CHECK (scope_type IN ('global','contact','project','organization','group','topic')),
+  scope_id                TEXT,
+  question                TEXT NOT NULL,
+  impact                  TEXT NOT NULL DEFAULT 'low' CHECK (impact IN ('low','medium','high')),
+  status                  TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','answered','auto_resolved','dismissed')),
+  occurrences             INTEGER NOT NULL DEFAULT 0 CHECK (occurrences >= 0),
+  first_observed_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  last_observed_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  answered_at             TIMESTAMPTZ,
+  resolved_at             TIMESTAMPTZ,
+  answer_guidance_fact_id BIGINT REFERENCES intelligence.guidance_facts(id) ON DELETE SET NULL,
+  metadata                JSONB NOT NULL DEFAULT '{}',
+  created_at              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at              TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS clarification_questions_pending_idx
+  ON intelligence.clarification_questions (impact, occurrences DESC, last_observed_at DESC)
+  WHERE status = 'pending';
+
+ALTER TABLE intelligence.clarification_questions
+  DROP CONSTRAINT IF EXISTS clarification_questions_occurrences_check;
+ALTER TABLE intelligence.clarification_questions
+  ALTER COLUMN occurrences SET DEFAULT 0;
+ALTER TABLE intelligence.clarification_questions
+  ADD CONSTRAINT clarification_questions_occurrences_check CHECK (occurrences >= 0);
+
+CREATE TABLE IF NOT EXISTS intelligence.clarification_observations (
+  id               BIGSERIAL PRIMARY KEY,
+  clarification_id BIGINT NOT NULL REFERENCES intelligence.clarification_questions(id) ON DELETE CASCADE,
+  evidence_key     TEXT NOT NULL,
+  source_ref       TEXT,
+  occurred_at      TIMESTAMPTZ,
+  metadata         JSONB NOT NULL DEFAULT '{}',
+  observed_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (clarification_id, evidence_key)
+);
+CREATE INDEX IF NOT EXISTS clarification_observations_question_idx
+  ON intelligence.clarification_observations (clarification_id, observed_at DESC);
+
+-- Historic occurrence counters did not preserve evidence identity. Retain one
+-- conservative observation rather than treating detector reruns as independent
+-- communications.
+INSERT INTO intelligence.clarification_observations (clarification_id, evidence_key, metadata)
+SELECT id, 'legacy:' || id::text, '{"migration":"legacy_counter"}'::jsonb
+FROM intelligence.clarification_questions
+WHERE occurrences > 0
+ON CONFLICT (clarification_id, evidence_key) DO NOTHING;
+
+UPDATE intelligence.clarification_questions q
+SET occurrences = observations.distinct_count
+FROM (
+  SELECT clarification_id, COUNT(*)::integer AS distinct_count
+  FROM intelligence.clarification_observations
+  GROUP BY clarification_id
+) observations
+WHERE q.id = observations.clarification_id;
+
+-- ── Durable pipeline execution ledger ───────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS intelligence.pipeline_runs (
+  id             BIGSERIAL PRIMARY KEY,
+  trigger        TEXT NOT NULL DEFAULT 'manual' CHECK (trigger IN ('manual','schedule','startup','api','recovery')),
+  status         TEXT NOT NULL DEFAULT 'running' CHECK (status IN ('running','completed','failed','skipped')),
+  runner_id      TEXT,
+  stats          JSONB NOT NULL DEFAULT '{}',
+  checkpoints    JSONB NOT NULL DEFAULT '{}',
+  error          TEXT,
+  started_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  heartbeat_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  completed_at   TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS pipeline_runs_status_idx
+  ON intelligence.pipeline_runs (status, started_at DESC);
+
+-- Read-compatible unified surface. Existing APIs continue writing
+-- `opportunities`; new consumers should read `items` and use item_type.
+CREATE OR REPLACE VIEW intelligence.items AS
+SELECT
+  o.*
+FROM intelligence.opportunities o;
+
 -- ── Feedback events ──────────────────────────────────────────────────────────
 
 CREATE TABLE IF NOT EXISTS intelligence.opportunity_feedback_events (
@@ -328,6 +667,11 @@ CREATE TABLE IF NOT EXISTS intelligence.opportunity_feedback_events (
   created_by     TEXT DEFAULT 'user',
   created_at     TIMESTAMPTZ DEFAULT NOW()
 );
+ALTER TABLE intelligence.opportunity_feedback_events ADD COLUMN IF NOT EXISTS action TEXT;
+ALTER TABLE intelligence.opportunity_feedback_events ADD COLUMN IF NOT EXISTS metadata JSONB NOT NULL DEFAULT '{}';
+ALTER TABLE intelligence.opportunity_feedback_events DROP CONSTRAINT IF EXISTS opportunity_feedback_events_feedback_check;
+ALTER TABLE intelligence.opportunity_feedback_events ADD CONSTRAINT opportunity_feedback_events_feedback_check
+  CHECK (feedback IN ('useful','not_useful','false_positive','too_late','too_low_value'));
 CREATE INDEX IF NOT EXISTS opportunity_feedback_opp_idx
   ON intelligence.opportunity_feedback_events (opportunity_id, created_at DESC);
 
@@ -363,12 +707,13 @@ CREATE INDEX IF NOT EXISTS opportunity_suppressions_match_idx
 -- Read-only daily surface: currently opportunities only. Future revisions can
 -- UNION relationship/project/group risks and events once scoring is normalized.
 
+DROP VIEW IF EXISTS intelligence.daily_attention_queue;
 DROP VIEW IF EXISTS intelligence.attention_queue;
 CREATE VIEW intelligence.attention_queue AS
 WITH scored_inputs AS (
   SELECT
     o.id,
-    'opportunity'::text AS item_type,
+    o.item_type,
     o.title,
     o.description,
     o.recommended_next_action,
@@ -376,6 +721,7 @@ WITH scored_inputs AS (
     o.priority,
     o.status,
     o.opportunity_type,
+    o.source_system,
     o.expected_value_score,
     o.confidence,
     o.feedback,
@@ -406,6 +752,20 @@ WITH scored_inputs AS (
     WHERE e.opportunity_id = o.id
   ) ev ON true
   WHERE o.status = 'open'
+    AND o.lifecycle_state = 'active'
+    AND (o.primary_contact_id IS NOT NULL OR o.primary_project_id IS NOT NULL)
+    AND (o.primary_project_id IS NULL OR COALESCE(p.is_archived, FALSE) = FALSE)
+    AND EXISTS (
+      SELECT 1
+      FROM intelligence.opportunity_evidence direct_evidence
+      WHERE direct_evidence.opportunity_id = o.id
+        AND direct_evidence.source_table = 'relationships.communications'
+        AND EXISTS (
+          SELECT 1 FROM relationships.communications source_row
+          WHERE source_row.id = CASE WHEN direct_evidence.source_id ~ '^[0-9]+$' THEN direct_evidence.source_id::bigint ELSE -1 END
+            AND COALESCE(source_row.metadata->>'lineage_status', 'verified') <> 'quarantined_missing_raw'
+        )
+    )
     AND (o.snoozed_until IS NULL OR o.snoozed_until <= NOW())
     AND (o.expires_at IS NULL OR o.expires_at > NOW())
     AND NOT EXISTS (
@@ -429,18 +789,18 @@ WITH scored_inputs AS (
   SELECT
     scored_inputs.*,
     CASE
-      WHEN o.opportunity_type IN ('project_match', 'project_opportunity') THEN 'project'
-      WHEN o.opportunity_type = 'research_opportunity' THEN 'capital'
-      WHEN o.opportunity_type IN ('meeting_action', 'urgent_message') THEN 'admin'
-      WHEN o.opportunity_type IN ('follow_up', 'relationship_health', 'check_in') THEN 'closure'
-      WHEN o.source_system IN ('manual', 'import') THEN 'internal'
+      WHEN opportunity_type IN ('project_match', 'project_opportunity') THEN 'project'
+      WHEN opportunity_type = 'research_opportunity' THEN 'capital'
+      WHEN opportunity_type IN ('meeting_action', 'urgent_message') THEN 'admin'
+      WHEN opportunity_type IN ('follow_up', 'relationship_health', 'check_in') THEN 'closure'
+      WHEN source_system IN ('manual', 'import') THEN 'internal'
       ELSE 'relationship'
     END AS surface_bucket,
     CASE
-      WHEN o.source_system = 'manual' THEN 8
-      WHEN o.source_system = 'research' THEN 6
-      WHEN o.source_system = 'projects' THEN 4
-      WHEN o.source_system = 'signals' THEN 2
+      WHEN source_system = 'manual' THEN 8
+      WHEN source_system = 'research' THEN 6
+      WHEN source_system = 'projects' THEN 4
+      WHEN source_system = 'signals' THEN 2
       ELSE 0
     END AS source_priority_bonus
   FROM scored_inputs
@@ -605,3 +965,9 @@ ORDER BY
   CASE priority WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END,
   COALESCE(source_last_seen_at, last_seen_at) DESC NULLS LAST,
   created_at DESC;
+
+-- Precision-first daily budget. The complete ranked queue remains available for
+-- audit/review, while ordinary daily consumers should read these ten items.
+CREATE OR REPLACE VIEW intelligence.daily_attention_queue AS
+SELECT * FROM intelligence.attention_queue
+LIMIT 10;

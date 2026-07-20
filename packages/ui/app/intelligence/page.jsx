@@ -96,13 +96,13 @@ function evidenceTraceHref(ev, item) {
 }
 
 function ItemCard({ item, onRemove, evidence, evidenceLoading, evidenceOpen, onToggleEvidence }) {
-  async function setStatus(status) {
-    await fetch(`/api/intelligence/opportunities/${item.id}`, {
+  async function setStatus(status, feedbackAction = null) {
+    const res = await fetch(`/api/intelligence/opportunities/${item.id}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ status }),
+      body: JSON.stringify({ status, ...(feedbackAction ? { feedback_action: feedbackAction } : {}) }),
     }).catch(() => {})
-    onRemove(item.id)
+    if (res?.ok) onRemove(item.id)
   }
 
   const evidenceCount = Number(item.evidence_count || 0)
@@ -178,7 +178,9 @@ function ItemCard({ item, onRemove, evidence, evidenceLoading, evidenceOpen, onT
       </div>
       <div className="intel-actions">
         <button onClick={() => setStatus('actioned')}>Actioned</button>
-        <button className="ghost" onClick={() => setStatus('dismissed')}>Dismiss</button>
+        <button className="ghost" onClick={() => setStatus('dismissed', 'not_useful')}>Not useful</button>
+        {item.primary_contact_id && <button className="ghost" onClick={() => setStatus('dismissed', 'wrong_person')}>Wrong person</button>}
+        {item.primary_project_id && <button className="ghost" onClick={() => setStatus('dismissed', 'wrong_project')}>Wrong project</button>}
       </div>
     </article>
   )
@@ -189,8 +191,13 @@ export default function IntelligencePage() {
   const [opps, setOpps] = useState([])
   const [stats, setStats] = useState(null)
   const [refresh, setRefresh] = useState(null)
+  const [pipelineHealth, setPipelineHealth] = useState(null)
+  const [refreshError, setRefreshError] = useState(null)
   const [loading, setLoading] = useState(true)
   const [loadIssues, setLoadIssues] = useState([])
+  const [clarifications, setClarifications] = useState([])
+  const [clarificationAnswers, setClarificationAnswers] = useState({})
+  const [clarificationError, setClarificationError] = useState(null)
   const [q, setQ] = useState('')
   const [surface, setSurface] = useState('all')
   const [expandedEvidence, setExpandedEvidence] = useState({})
@@ -202,21 +209,27 @@ export default function IntelligencePage() {
     const attentionPath = surface && surface !== 'all'
       ? `/api/intelligence/attention?limit=50&surface=${encodeURIComponent(surface)}`
       : '/api/intelligence/attention?limit=50'
-    const [attention, opportunities, searchStats, refreshStatus] = await Promise.all([
+    const [attention, opportunities, searchStats, refreshStatus, clarificationStatus, healthStatus] = await Promise.all([
       fetchJsonDetailed(attentionPath, []),
       fetchJsonDetailed('/api/intelligence/opportunities?limit=50', []),
       fetchJsonDetailed('/api/search/stats', null),
       fetchJsonDetailed('/api/intelligence/refresh/status', null),
+      fetchJsonDetailed('/api/intelligence/clarifications', []),
+      fetchJsonDetailed('/api/intelligence/health', null),
     ])
     setItems(Array.isArray(attention.data) ? attention.data : [])
     setOpps(Array.isArray(opportunities.data) ? opportunities.data : [])
     setStats(searchStats.data)
     setRefresh(refreshStatus.data)
+    setClarifications(Array.isArray(clarificationStatus.data) ? clarificationStatus.data : [])
+    setPipelineHealth(healthStatus.data)
     setLoadIssues([
       attention.error && `attention: ${attention.error}`,
       opportunities.error && `opportunities: ${opportunities.error}`,
       searchStats.error && `search stats: ${searchStats.error}`,
       refreshStatus.error && `refresh status: ${refreshStatus.error}`,
+      clarificationStatus.error && `clarifications: ${clarificationStatus.error}`,
+      healthStatus.error && `pipeline health: ${healthStatus.error}`,
     ].filter(Boolean))
     setLoading(false)
   }
@@ -231,7 +244,56 @@ export default function IntelligencePage() {
     setEvidenceLoadingById(prev => ({ ...prev, [id]: false }))
   }
 
+  async function runAnalysis() {
+    setRefreshError(null)
+    const response = await fetch('/api/intelligence/refresh', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ trigger: 'intelligence-page' }),
+    }).catch(error => ({ ok: false, status: 0, json: async () => ({ error: error?.message || 'request failed' }) }))
+    const data = await response.json().catch(() => ({}))
+    if (!response.ok && response.status !== 409) {
+      setRefreshError(data.error || `Refresh failed (HTTP ${response.status})`)
+      return
+    }
+    const status = await fetchJsonDetailed('/api/intelligence/refresh/status', null)
+    setRefresh(status.data?.current
+      ? status.data
+      : { ...(status.data || {}), current: { id: data.run_id || 'queued', status: 'queued' } })
+  }
+
+  async function answerClarification(item) {
+    const answer = String(clarificationAnswers[item.ambiguity_key] || '').trim()
+    if (!answer) return
+    setClarificationError(null)
+    const response = await fetch(`/api/intelligence/clarifications/${encodeURIComponent(item.ambiguity_key)}/answer`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ fact_type: item.metadata?.fact_type || 'clarification', fact_value: answer }),
+    }).catch(error => ({ ok: false, json: async () => ({ error: error?.message || 'request failed' }) }))
+    const data = await response.json().catch(() => ({}))
+    if (!response.ok) {
+      setClarificationError(data.error || 'Could not save clarification')
+      return
+    }
+    setClarifications(previous => previous.filter(row => row.ambiguity_key !== item.ambiguity_key))
+    setClarificationAnswers(previous => ({ ...previous, [item.ambiguity_key]: '' }))
+  }
+
   useEffect(() => { load() }, [surface])
+
+  useEffect(() => {
+    if (!refresh?.current?.id) return undefined
+    const timer = window.setInterval(async () => {
+      const status = await fetchJsonDetailed('/api/intelligence/refresh/status', null)
+      if (status.data) setRefresh(status.data)
+      if (status.data && !status.data.current) {
+        window.clearInterval(timer)
+        await load()
+      }
+    }, 3000)
+    return () => window.clearInterval(timer)
+  }, [refresh?.current?.id])
 
   const filtered = items.filter(item => {
     const needle = q.trim().toLowerCase()
@@ -258,8 +320,16 @@ export default function IntelligencePage() {
         .health-banner ul { margin:.35rem 0 0; padding-left:1.1rem; }
         .health-banner li + li { margin-top:.2rem; }
         .health-link { color:inherit; font-weight:600; text-decoration:underline; white-space:nowrap; }
-        .refresh-btn, .intel-actions button { border:1px solid var(--border); background:var(--surface); color:var(--text); border-radius:8px; padding:.45rem .7rem; cursor:pointer; font-size:.78rem; }
-        .refresh-btn:hover, .intel-actions button:hover { border-color:var(--border-strong); background:var(--surface-2); }
+        .clarifications { border:1px solid color-mix(in oklab, var(--accent) 28%, var(--border)); background:color-mix(in oklab, var(--accent) 5%, var(--surface)); border-radius:12px; padding:1rem; margin:1rem 0 1.25rem; }
+        .clarifications h2 { margin:0 0 .25rem; font-size:.95rem; color:var(--text); }
+        .clarification-intro { color:var(--text-3); font-size:.75rem; line-height:1.45; margin-bottom:.75rem; }
+        .clarification-row { border-top:1px solid var(--border); padding:.75rem 0 0; margin-top:.75rem; }
+        .clarification-question { color:var(--text); font-size:.84rem; line-height:1.45; }
+        .clarification-meta { color:var(--text-3); font-size:.68rem; margin:.25rem 0 .5rem; }
+        .clarification-answer { display:flex; gap:.5rem; }
+        .clarification-answer input { flex:1; border:1px solid var(--border); background:var(--surface); color:var(--text); border-radius:8px; padding:.55rem .65rem; }
+        .refresh-btn, .intel-actions button, .clarification-answer button { border:1px solid var(--border); background:var(--surface); color:var(--text); border-radius:8px; padding:.45rem .7rem; cursor:pointer; font-size:.78rem; }
+        .refresh-btn:hover, .intel-actions button:hover, .clarification-answer button:hover { border-color:var(--border-strong); background:var(--surface-2); }
         .intel-actions .ghost { color:var(--text-3); }
         .intel-stats { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:.75rem; margin:1rem 0 1.5rem; }
         @media(max-width:760px){ .intel-stats { grid-template-columns:1fr 1fr; } .intel-head { flex-direction:column; } .intel-card { grid-template-columns:1fr !important; } }
@@ -314,8 +384,14 @@ export default function IntelligencePage() {
           <h1>Intelligence</h1>
           <div className="intel-sub">Attention-ranked opportunities, open loops, project signals, and email-derived intelligence.</div>
         </div>
-        <button className="refresh-btn" onClick={load}>{loading ? 'Loading…' : 'Refresh'}</button>
+        <button className="refresh-btn" onClick={runAnalysis} disabled={Boolean(refresh?.current)}>
+          {refresh?.current ? 'Analysis running…' : 'Run analysis'}
+        </button>
       </div>
+
+      {refreshError && (
+        <div className="health-banner"><div><strong>Analysis could not start.</strong> {refreshError}</div></div>
+      )}
 
       {loadIssues.length > 0 && (
         <div className="health-banner">
@@ -329,11 +405,47 @@ export default function IntelligencePage() {
         </div>
       )}
 
+      {pipelineHealth?.status === 'degraded' && (
+        <div className="health-banner">
+          <div>
+            <strong>Data correction is still catching up.</strong>
+            <ul>
+              {(pipelineHealth.warnings || []).slice(0, 5).map(warning => (
+                <li key={warning}>{String(warning).replace(/_/g, ' ')}</li>
+              ))}
+            </ul>
+          </div>
+          <a className="health-link" href="/api/intelligence/health">Inspect health</a>
+        </div>
+      )}
+
+      {clarifications.length > 0 && (
+        <section className="clarifications">
+          <h2>One decision needs your context</h2>
+          <div className="clarification-intro">Only repeated, high-impact ambiguities appear here. Your answer is saved as guidance for future analysis; source messages are never changed.</div>
+          {clarifications.map(item => (
+            <div className="clarification-row" key={item.ambiguity_key}>
+              <div className="clarification-question">{item.question}</div>
+              <div className="clarification-meta">Seen {item.occurrences} times · {item.scope_type}{item.scope_id ? ` ${item.scope_id}` : ''}</div>
+              <div className="clarification-answer">
+                <input
+                  value={clarificationAnswers[item.ambiguity_key] || ''}
+                  onChange={event => setClarificationAnswers(previous => ({ ...previous, [item.ambiguity_key]: event.target.value }))}
+                  placeholder="Add the fact or decision SecondBrain should remember"
+                />
+                <button onClick={() => answerClarification(item)}>Remember</button>
+              </div>
+            </div>
+          ))}
+          {clarificationError && <div className="clarification-meta">{clarificationError}</div>}
+        </section>
+      )}
+
       <div className="intel-stats">
         <div className="stat"><div className="stat-val">{items.length}</div><div className="stat-lbl">Attention items</div></div>
         <div className="stat"><div className="stat-val">{opps.length}</div><div className="stat-lbl">Open opportunities loaded</div></div>
         <div className="stat"><div className="stat-val">{emailStats ? Number(emailStats.total).toLocaleString() : '—'}</div><div className="stat-lbl">Emails ingested</div></div>
-        <div className="stat"><div className="stat-val">{lastRefresh?.status || '—'}</div><div className="stat-lbl">Last refresh</div></div>
+        <div className="stat"><div className="stat-val">{refresh?.current?.status || lastRefresh?.status || '—'}</div><div className="stat-lbl">Analysis status</div></div>
       </div>
 
       <div className="toolbar">

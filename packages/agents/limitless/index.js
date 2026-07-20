@@ -1,110 +1,86 @@
 #!/usr/bin/env node
-require('dotenv').config({ path: require('path').resolve(__dirname, '../../../.env.local') });
-const LifelogAgent = require('./agent');
-const cron = require('node-cron');
-const { cleanupOrphanedRuns, killDuplicateProcesses } = require('../shared/cleanup');
+'use strict'
+
+require('dotenv').config({ path: require('path').resolve(__dirname, '../../../.env.local') })
+
+const fs = require('fs')
+const path = require('path')
+const cron = require('node-cron')
+const db = require('@secondbrain/db')
+const { run: fetchFromLimitless } = require('./cron/fetchLifelogs')
+const { cleanupOrphanedRuns, killDuplicateProcesses } = require('../shared/cleanup')
 
 let telemetry = null
 try { telemetry = require('@secondbrain/telemetry') } catch (_) {}
-let _runId = null
 
-console.log('🚀 LIMITLESS v2.0 - Agent-based Lifelog Processor');
-console.log('🤖 Powered by Claude + MCP tools\n');
-
-const agent = new LifelogAgent();
-
-let _recordingsImported = 0
-let _transcriptsProcessed = 0
-
-async function fetchLifelogs() {
-    if (telemetry && !_runId) {
-        _runId = await telemetry.startRun({ agentId: 'limitless', workflowName: 'lifelog_processing' })
-        _recordingsImported = 0
-        _transcriptsProcessed = 0
-    }
-    try {
-        console.log('📥 Fetching new lifelogs...');
-        const { run } = require('./cron/fetchLifelogs');
-        await run();
-        console.log('✅ Lifelog fetch completed');
-        _recordingsImported++
-        if (telemetry && _runId) {
-            telemetry.progress(_runId, 'recordings_imported', { completed: _recordingsImported })
-        }
-    } catch (error) {
-        console.error('❌ Lifelog fetch failed:', error.message);
-    }
-}
-
-console.log('⏰ Setting up production schedules:');
-console.log('   📥 Fetch lifelogs: every 5 minutes');
-console.log('   🤖 Process lifelogs: every 30 seconds\n');
-
-cron.schedule('*/5 * * * *', fetchLifelogs);
-
-cron.schedule('*/30 * * * * *', async () => {
-    try {
-        const processed = await agent.processBatch(5);
-        _transcriptsProcessed += (processed || 0)
-        if (telemetry && _runId) {
-            telemetry.progress(_runId, 'transcripts_processed', { completed: _transcriptsProcessed })
-        }
-    } catch (error) {
-        console.error('❌ Batch processing error:', error);
-    }
-});
+let fetchInProgress = false
 
 async function ensureSchema() {
-    const fs   = require('fs');
-    const path = require('path');
-    try {
-        const sql = fs.readFileSync(path.resolve(__dirname, 'sql/schema.sql'), 'utf8');
-        await agent.db.query(sql);
-        console.log('✅ Schema ready');
-    } catch (err) {
-        console.error('❌ Schema setup error:', err.message);
-    }
+  const sql = fs.readFileSync(path.resolve(__dirname, 'sql/schema.sql'), 'utf8')
+  await db.query(sql)
+  console.log('[limitless] Schema ready')
 }
 
-console.log('🏁 Starting initial fetch and process...\n');
-killDuplicateProcesses();
-ensureSchema()
-  .then(() => cleanupOrphanedRuns(agent.db, 'limitless'))
-  .then(() => fetchLifelogs())
-  .then(() => {
-    setTimeout(async () => {
-        const processed = await agent.processBatch(10);
-        _transcriptsProcessed += (processed || 0)
-        if (telemetry && _runId) {
-            telemetry.progress(_runId, 'transcripts_processed', { completed: _transcriptsProcessed })
-        }
-    }, 2000);
-});
+async function fetchLifelogs(trigger = 'schedule') {
+  if (fetchInProgress) {
+    console.warn('[limitless] Fetch already in progress; skipping overlapping run')
+    return { skipped: true }
+  }
 
-process.on('SIGINT', async () => {
-    console.log('\n🛑 Graceful shutdown initiated...');
-    if (telemetry && _runId) {
-        await telemetry.flush()
-        await telemetry.endRun(_runId, { status: 'completed' })
+  fetchInProgress = true
+  let runId = null
+  try {
+    if (telemetry) {
+      runId = await telemetry.startRun({ agentId: 'limitless', workflowName: 'lifelog_ingestion' })
     }
-    try {
-        if (agent.db && agent.db.end) {
-            await agent.db.end();
-            console.log('✅ Database connections closed');
-        }
-    } catch (error) {
-        console.error('❌ Shutdown error:', error.message);
+    console.log(`[limitless] Fetching lifelogs (${trigger})`)
+    const result = await fetchFromLimitless()
+    if (telemetry && runId) {
+      telemetry.progress(runId, 'recordings_imported', { completed: result?.saved || 0 })
+      await telemetry.endRun(runId, { status: 'completed' })
+      await telemetry.flush()
     }
-    console.log('👋 Limitless Agent shutdown complete');
-    process.exit(0);
-});
+    console.log(`[limitless] Fetch complete: ${result?.saved || 0} rows upserted`)
+    return result
+  } catch (error) {
+    console.error('[limitless] Fetch failed:', error.message)
+    if (telemetry && runId) {
+      await telemetry.endRun(runId, { status: 'failed' }).catch(() => {})
+      await telemetry.flush().catch(() => {})
+    }
+    throw error
+  } finally {
+    fetchInProgress = false
+  }
+}
 
-console.log('\u2728 Limitless Agent v2.0 is running in production mode');
-console.log('   Press Ctrl+C to stop\n');
+async function shutdown(signal) {
+  console.log(`[limitless] ${signal}; closing database connection`)
+  await db.end().catch(() => {})
+  process.exit(0)
+}
 
-process.on('uncaughtException', (err) => {
-  console.error('Uncaught exception:', err.message);
-});
-process.on('unhandledRejection', (reason) => {
-  console.error('Unhandled rejection:', reason);
-});
+async function main() {
+  killDuplicateProcesses()
+  await ensureSchema()
+  await cleanupOrphanedRuns(db, 'limitless')
+  await fetchLifelogs('startup')
+  cron.schedule(process.env.FETCH_INTERVAL_CRON || '*/5 * * * *', () => {
+    fetchLifelogs('schedule').catch(() => {})
+  })
+  console.log('[limitless] Ingestion agent running')
+}
+
+process.on('SIGINT', () => shutdown('SIGINT'))
+process.on('SIGTERM', () => shutdown('SIGTERM'))
+process.on('uncaughtException', error => console.error('[limitless] Uncaught exception:', error.message))
+process.on('unhandledRejection', error => console.error('[limitless] Unhandled rejection:', error?.message || error))
+
+if (require.main === module) {
+  main().catch(error => {
+    console.error('[limitless] Fatal:', error.message)
+    process.exit(1)
+  })
+}
+
+module.exports = { ensureSchema, fetchLifelogs, main }

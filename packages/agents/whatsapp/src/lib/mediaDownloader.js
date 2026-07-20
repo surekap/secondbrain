@@ -1,7 +1,9 @@
 'use strict';
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const pool = require('./db');
+const { canonicalWhatsAppChatId } = require('../../../shared/whatsapp-chat');
 
 const MEDIA_DIR = process.env.MEDIA_DIR || path.join(require('os').homedir(), '.secondbrain-media', 'wa');
 
@@ -47,20 +49,32 @@ async function downloadAndStore(msg) {
     const filepath = path.join(MEDIA_DIR, filename);
 
     const buf = Buffer.from(media.data, 'base64');
+    const contentSha256 = crypto.createHash('sha256').update(buf).digest('hex');
     fs.writeFileSync(filepath, buf);
 
     await pool.query(
-      `INSERT INTO public.media_files AS mf (wa_msg_id, chat_id, file_path, mime_type, file_size, analysis_status)
-       VALUES ($1, $2, $3, $4, $5, 'pending')
+      `INSERT INTO public.media_files AS mf
+         (wa_msg_id, chat_id, file_path, mime_type, file_size, content_sha256, analysis_status)
+       VALUES ($1, $2, $3, $4, $5, $6, 'pending')
        ON CONFLICT (wa_msg_id) DO UPDATE
        SET file_path = EXCLUDED.file_path,
            mime_type = EXCLUDED.mime_type,
            file_size = EXCLUDED.file_size,
+           content_sha256 = EXCLUDED.content_sha256,
            analysis_status = CASE
              WHEN mf.semantic_text IS NULL THEN 'pending'
              ELSE mf.analysis_status
            END`,
-      [msgId, msg.from || msg.id.remote, filepath, media.mimetype, buf.length]
+      [
+        msgId,
+        canonicalWhatsAppChatId(msg, {
+          selfJid: process.env.WHATSAPP_SELF_JID || process.env.MY_WA_JID,
+        }),
+        filepath,
+        media.mimetype,
+        buf.length,
+        contentSha256,
+      ]
     );
 
     return { filepath, mimetype: media.mimetype };

@@ -22,6 +22,7 @@
     "email:fetch": "npm run fetch --workspace=packages/agents/email",
     "relationships": "npm start --workspace=packages/agents/relationships",
     "projects": "npm start --workspace=packages/agents/projects",
+    "intelligence": "npm start --workspace=packages/agents/intelligence",
     "ai:claude": "npm start --workspace=packages/agents/ai",
     "ai:openai": "npm run openai --workspace=packages/agents/ai",
     "ai:gemini": "npm run gemini --workspace=packages/agents/ai",
@@ -33,7 +34,10 @@
     "collector": "node packages/collector/index.js",
     "sampler": "node packages/sampler/index.js",
     "observe": "node packages/observe/server.js",
-    "smoke:live": "node scripts/secondbrain-live-smoke.js"
+    "smoke:live": "node scripts/secondbrain-live-smoke.js",
+    "test": "npm test --workspaces --if-present && node --test packages/agents/shared/__tests__/*.test.js scripts/__tests__/*.test.js",
+    "audit:quality": "node scripts/audit-secondbrain-quality.js --strict",
+    "eval:intelligence": "node scripts/evaluate-intelligence-quality.js"
   },
   "devDependencies": {
     "concurrently": "^9.2.3",
