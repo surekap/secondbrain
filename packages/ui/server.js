@@ -9,7 +9,11 @@ const crypto     = require('crypto');
 const { Pool }   = require('pg');
 const indexer    = require('./services/indexer');
 const { embedBatch, toSql, getEmbeddingConfig } = require('./services/embedder');
-const { getProviderDefinitions, DEFAULT_OLLAMA_BASE_URL } = require('../agents/shared/model-catalog');
+const {
+  getProviderDefinitions,
+  DEFAULT_OLLAMA_BASE_URL,
+  isValidProviderType,
+} = require('../agents/shared/model-catalog');
 const { listOllamaModelOptions } = require('../agents/shared/ollama');
 const { getAvailableModels } = require('../agents/shared/model-fetcher');
 const llm = require('../agents/shared/llm');
@@ -3427,14 +3431,18 @@ app.post('/api/system/providers', async (req, res) => {
   if (!db) return res.status(503).json({ error: 'No database' });
   const { name, provider_type, api_key, base_url, model } = req.body;
   if (!name || !provider_type) return res.status(400).json({ error: 'name and provider_type required' });
-  const normalizedBaseUrl = provider_type === 'ollama'
+  const providerType = String(provider_type).trim();
+  if (!isValidProviderType(providerType)) {
+    return res.status(400).json({ error: 'provider_type must be a lowercase provider slug' });
+  }
+  const normalizedBaseUrl = providerType === 'ollama'
     ? (base_url || DEFAULT_OLLAMA_BASE_URL)
     : (base_url || null);
   try {
     const { rows } = await db.query(
       `INSERT INTO system.llm_providers (name, provider_type, api_key, base_url, model)
        VALUES ($1, $2, $3, $4, $5) RETURNING *`,
-      [name, provider_type, api_key || null, normalizedBaseUrl, model || null]
+      [name, providerType, api_key || null, normalizedBaseUrl, model || null]
     );
     res.json(rows[0]);
   } catch (err) {

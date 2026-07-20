@@ -3,6 +3,11 @@
 const { getOpenRouterProviders } = require("./openrouter-catalog");
 
 const DEFAULT_OLLAMA_BASE_URL = "http://127.0.0.1:11434";
+const PROVIDER_TYPE_PATTERN = /^[a-z0-9][a-z0-9_-]*$/;
+
+function isValidProviderType(providerType) {
+  return typeof providerType === "string" && PROVIDER_TYPE_PATTERN.test(providerType);
+}
 
 // Providers OpenRouter's catalog doesn't (and can't) describe: ollama and
 // claude_cli are local execution paths, not hosted APIs; gemini and jina's
@@ -91,7 +96,9 @@ function getStaticModels({ providerType, capability } = {}) {
 module.exports = {
   DEFAULT_OLLAMA_BASE_URL,
   FIXED_PROVIDERS,
+  PROVIDER_TYPE_PATTERN,
   STATIC_MODELS,
   getProviderDefinitions,
   getStaticModels,
+  isValidProviderType,
 };
