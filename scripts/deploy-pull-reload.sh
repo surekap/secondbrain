@@ -7,6 +7,8 @@ STATUS_FILE="$REPO_DIR/.agent-logs/deploy-reload-status.json"
 LOG_FILE="$REPO_DIR/.agent-logs/deploy-reload.log"
 LOCK_DIR="$REPO_DIR/.agent-logs/deploy-reload.lock"
 PID_FILE="$REPO_DIR/.agent-pids/deploy-ui-api.pids"
+LAUNCHD_LABEL="${SECOND_BRAIN_LAUNCHD_LABEL:-com.secondbrain.ui}"
+LAUNCHD_TARGET="gui/$(id -u)/$LAUNCHD_LABEL"
 RUN_BUILD="${SECOND_BRAIN_DEPLOY_BUILD:-1}"
 RUN_INSTALL="${SECOND_BRAIN_DEPLOY_INSTALL:-0}"
 
@@ -139,46 +141,61 @@ append_ancestors() {
   done
 }
 
-write_status "running" "stop" "Stopping the previous UI/API process tree"
+USE_LAUNCHD=0
+if command -v launchctl >/dev/null 2>&1 && launchctl print "$LAUNCHD_TARGET" >/dev/null 2>&1; then
+  USE_LAUNCHD=1
+fi
+
+write_status "running" "stop" "Preparing the UI/API supervisor"
 PIDS=""
 LISTENER_PIDS=""
-if command -v lsof >/dev/null 2>&1; then
-  LISTENER_PIDS="$(lsof -ti tcp:4000 -sTCP:LISTEN 2>/dev/null || true) $(lsof -ti tcp:4001 -sTCP:LISTEN 2>/dev/null || true)"
-elif command -v fuser >/dev/null 2>&1; then
-  LISTENER_PIDS="$(fuser 4000/tcp 2>/dev/null || true) $(fuser 4001/tcp 2>/dev/null || true)"
-fi
-for pid in $LISTENER_PIDS; do
-  append_pid "$pid"
-  append_descendants "$pid"
-  append_ancestors "$pid"
-done
 if [ -f "$PID_FILE" ]; then
   while IFS= read -r pid; do
     append_pid "$pid"
     append_descendants "$pid"
   done < "$PID_FILE"
 fi
+if [ "$USE_LAUNCHD" != "1" ]; then
+  if command -v lsof >/dev/null 2>&1; then
+    LISTENER_PIDS="$(lsof -ti tcp:4000 -sTCP:LISTEN 2>/dev/null || true) $(lsof -ti tcp:4001 -sTCP:LISTEN 2>/dev/null || true)"
+  elif command -v fuser >/dev/null 2>&1; then
+    LISTENER_PIDS="$(fuser 4000/tcp 2>/dev/null || true) $(fuser 4001/tcp 2>/dev/null || true)"
+  fi
+  for pid in $LISTENER_PIDS; do
+    append_pid "$pid"
+    append_descendants "$pid"
+    append_ancestors "$pid"
+  done
+fi
 PIDS="$(echo "$PIDS" | xargs || true)"
 if [ -n "$PIDS" ]; then
-  log "Stopping pids: $PIDS"
+  log "Stopping fallback deploy pids: $PIDS"
   kill $PIDS 2>/dev/null || true
   sleep 2
   kill -9 $PIDS 2>/dev/null || true
-else
+elif [ "$USE_LAUNCHD" != "1" ]; then
   log "No listeners found on 4000/4001"
 fi
 rm -f "$PID_FILE"
 
-write_status "running" "start" "Starting API and UI processes"
-log "Starting API"
-nohup node packages/ui/server.js >> "$REPO_DIR/.agent-logs/ui.log" 2>&1 &
-API_PID=$!
-log "API launched pid=$API_PID"
-log "Starting Next.js UI"
-nohup npm start --workspace=packages/ui >> "$REPO_DIR/.agent-logs/ui.log" 2>&1 &
-NEXT_PID=$!
-log "Next.js UI launched pid=$NEXT_PID"
-printf '%s\n%s\n' "$API_PID" "$NEXT_PID" > "$PID_FILE"
+API_PID=""
+NEXT_PID=""
+if [ "$USE_LAUNCHD" = "1" ]; then
+  write_status "running" "start" "Restarting $LAUNCHD_LABEL"
+  log "Restarting launchd supervisor $LAUNCHD_TARGET"
+  launchctl kickstart -k "$LAUNCHD_TARGET"
+else
+  write_status "running" "start" "Starting API and UI processes"
+  log "Starting API"
+  nohup node packages/ui/server.js >> "$REPO_DIR/.agent-logs/ui.log" 2>&1 &
+  API_PID=$!
+  log "API launched pid=$API_PID"
+  log "Starting Next.js UI"
+  nohup npm start --workspace=packages/ui >> "$REPO_DIR/.agent-logs/ui.log" 2>&1 &
+  NEXT_PID=$!
+  log "Next.js UI launched pid=$NEXT_PID"
+  printf '%s\n%s\n' "$API_PID" "$NEXT_PID" > "$PID_FILE"
+fi
 
 VERIFY_TIMEOUT_SECONDS="${SECOND_BRAIN_DEPLOY_VERIFY_TIMEOUT_SECONDS:-90}"
 VERIFY_INTERVAL_SECONDS=2
@@ -188,8 +205,10 @@ STABILITY_SECONDS="${SECOND_BRAIN_DEPLOY_STABILITY_SECONDS:-10}"
 write_status "running" "verify" "Waiting up to ${VERIFY_TIMEOUT_SECONDS}s for UI/API readiness"
 if command -v curl >/dev/null 2>&1; then
   while [ "$SECONDS" -lt "$VERIFY_DEADLINE" ]; do
-    if ! kill -0 "$API_PID" 2>/dev/null || ! kill -0 "$NEXT_PID" 2>/dev/null; then
-      break
+    if [ "$USE_LAUNCHD" = "1" ]; then
+      if ! launchctl print "$LAUNCHD_TARGET" >/dev/null 2>&1; then break; fi
+    else
+      if ! kill -0 "$API_PID" 2>/dev/null || ! kill -0 "$NEXT_PID" 2>/dev/null; then break; fi
     fi
     if curl -fsS --max-time 3 http://127.0.0.1:4001/api/health >/dev/null \
        && curl -fsS --max-time 3 http://127.0.0.1:4000/ >/dev/null; then
@@ -205,17 +224,19 @@ if command -v curl >/dev/null 2>&1; then
     sleep "$VERIFY_INTERVAL_SECONDS"
   done
 fi
-PIDS=""
-for pid in "$API_PID" "$NEXT_PID"; do
-  append_pid "$pid"
-  append_descendants "$pid"
-done
-PIDS="$(echo "$PIDS" | xargs || true)"
-if [ -n "$PIDS" ]; then
-  kill $PIDS 2>/dev/null || true
-  sleep 2
-  kill -9 $PIDS 2>/dev/null || true
+if [ "$USE_LAUNCHD" != "1" ]; then
+  PIDS=""
+  for pid in "$API_PID" "$NEXT_PID"; do
+    append_pid "$pid"
+    append_descendants "$pid"
+  done
+  PIDS="$(echo "$PIDS" | xargs || true)"
+  if [ -n "$PIDS" ]; then
+    kill $PIDS 2>/dev/null || true
+    sleep 2
+    kill -9 $PIDS 2>/dev/null || true
+  fi
+  rm -f "$PID_FILE"
 fi
-rm -f "$PID_FILE"
 write_status "failed" "verify" "Reload command launched but UI/API did not become ready within ${VERIFY_TIMEOUT_SECONDS}s"
 exit 1
