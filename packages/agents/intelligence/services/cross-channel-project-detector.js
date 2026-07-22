@@ -179,6 +179,11 @@ function isActionable(text) {
   return ACTION_PATTERNS.some(pattern => pattern.test(text || ''))
 }
 
+function isNonSemanticMessageArtifact(text) {
+  const normalized = compactText(text, 200).toLowerCase()
+  return /^(?:👤\s*)?contact card$/.test(normalized)
+}
+
 function phoneFromJid(jid) {
   const m = String(jid || '').match(/(\d{7,15})@c\.us/)
   return m ? m[1] : null
@@ -368,6 +373,7 @@ function detectCrossChannelProjectSignals(input = {}) {
             }
           })
           .filter(x => {
+            if (isNonSemanticMessageArtifact(x.text)) return false
             if (x.score < dmThreshold || x.shared_terms.length < minSharedProjectDmTerms || !isActionable(x.text)) return false
             // For real project joins, the direct DM must carry enough project language in the broader local context.
             // This prevents a casual social DM like "send contact to buy" from inheriting unrelated group/project words.

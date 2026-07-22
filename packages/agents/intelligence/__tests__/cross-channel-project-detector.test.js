@@ -117,6 +117,20 @@ test('does not promote group-only project chatter without direct actionable memb
   assert.equal(opportunities.length, 0)
 })
 
+test('does not turn WhatsApp contact-card artifacts into cross-channel project actions', () => {
+  const opportunities = detectCrossChannelProjectSignals({
+    projects: [{ id: 49, name: 'Estate Planning & Family Trust', description: 'family trust and estate planning work' }],
+    groups: [{ id: 41, wa_chat_id: 'legal@g.us', name: 'YPO Legal Network', ai_summary: 'Members discuss estate planning and trusts.' }],
+    contacts: [{ id: 10707, display_name: 'Prashant Hingorani', wa_jids: ['919999999999@c.us'] }],
+    groupMessages: [{ chat_id: 'legal@g.us', participant: '919999999999@c.us', body: 'Estate planning and family trust discussion' }],
+    directMessages: [
+      { contact_id: 10707, canonical_communication_id: 620282, chat_id: '919999999999@c.us', body: '👤 Contact card', ts: '2026-06-08T04:23:08Z' },
+      { contact_id: 10707, canonical_communication_id: 640452, chat_id: '919999999999@c.us', body: '👤 Contact card', ts: '2026-07-12T15:14:13Z' },
+    ],
+  })
+  assert.equal(opportunities.length, 0)
+})
+
 test('does not promote self-contact or generic project buckets as cross-channel work', () => {
   const base = {
     groups: [{ id: 95, wa_chat_id: '120@g.us', name: 'YPO Travel & Dining II', ai_summary: 'Travel dining meeting coordination' }],
