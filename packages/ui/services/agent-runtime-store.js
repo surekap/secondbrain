@@ -84,13 +84,18 @@ class AgentRuntimeStore {
     return rows[0] || null
   }
 
-  async markFailure(agentId, { exitCode = null, error = null, now = new Date() } = {}) {
+  async markFailure(agentId, {
+    exitCode = null,
+    error = null,
+    now = new Date(),
+    resetAfterStableRun = true,
+  } = {}) {
     if (!this.db) return null
     const current = this.get(agentId)
     if (!current || current.desired_state !== 'running') return current
 
     const lastStartedAt = current.last_started_at ? new Date(current.last_started_at).getTime() : 0
-    const ranStably = lastStartedAt > 0 && now.getTime() - lastStartedAt >= this.stableRunMs
+    const ranStably = resetAfterStableRun && lastStartedAt > 0 && now.getTime() - lastStartedAt >= this.stableRunMs
     const failureCount = ranStably ? 1 : Number(current.consecutive_failures || 0) + 1
     const nextRestartAt = new Date(now.getTime() + restartDelayMs(failureCount))
     const lastError = error ? String(error).slice(0, 2000) : null

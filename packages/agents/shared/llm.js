@@ -5,6 +5,11 @@ const db = require('@secondbrain/db')
 const { ollamaRequest } = require('./ollama')
 const { getProfilePolicy, credentialFromEnv } = require('./model-profiles')
 
+const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1'
+const NATIVE_CHAT_PROVIDER_TYPES = new Set([
+  'anthropic', 'openai', 'claude_cli', 'gemini', 'kimi', 'groq', 'ollama', 'x-ai',
+])
+
 let telemetry = null
 function getTelemetry() {
   if (!telemetry) {
@@ -79,6 +84,42 @@ function providerEligible(provider) {
   return Boolean(provider?.is_enabled && provider?.has_credits)
 }
 
+function isOpenRouterProvider(provider) {
+  if (String(provider?.base_url || '').includes('openrouter.ai')) return true
+  return typeof provider?.model === 'string' &&
+    provider.model.includes('/') &&
+    !NATIVE_CHAT_PROVIDER_TYPES.has(provider.provider_type)
+}
+
+function providerMatchesProfileRoute(provider, route) {
+  if (!provider?.model || !route?.model) return false
+  if (provider.provider_type === route.provider_type && provider.model === route.model) return true
+  if (!provider.model.includes('/')) return false
+  const separator = provider.model.indexOf('/')
+  const author = provider.model.slice(0, separator)
+  const model = provider.model.slice(separator + 1)
+  return author === route.provider_type && model === route.model
+}
+
+function selectConfiguredProfileProviders(rows, policy) {
+  const assigned = rows.filter(provider => provider.priority != null)
+  if (assigned.length === 0) return null
+
+  // Explicit agent priority is authoritative. Profiles provide defaults only
+  // when an agent has no assignments; an assigned provider may intentionally
+  // override the profile's default model (for example XAI → OpenAI fallback).
+  return assigned.filter(providerEligible).map(provider => {
+    const matchingRoute = policy.find(route => providerMatchesProfileRoute(provider, route))
+    return {
+      ...provider,
+      // Preserve profile effort only when this is the profiled model. Other
+      // providers may not accept the same provider-specific request option.
+      reasoning_effort: matchingRoute?.reasoning_effort,
+      policy_model: matchingRoute?.model || null,
+    }
+  })
+}
+
 async function getPriorityList(agentId, profile) {
   const now = Date.now()
   const cacheKey = `${agentId}:${profile || 'legacy'}`
@@ -88,19 +129,30 @@ async function getPriorityList(agentId, profile) {
   const policy = getProfilePolicy(profile)
   if (policy) {
     const { rows } = await db.query(`
-      SELECT id, name, provider_type, api_key, base_url, model,
-             is_enabled, has_credits, last_error_at
-      FROM system.llm_providers
-      ORDER BY has_credits DESC, id ASC
-    `)
+      SELECT p.id, p.name, p.provider_type, p.api_key, p.base_url, p.model,
+             p.is_enabled, p.has_credits, p.last_error_at, alp.priority
+      FROM system.llm_providers p
+      LEFT JOIN system.agent_llm_priority alp
+        ON alp.provider_id = p.id AND alp.agent_id = $1
+      ORDER BY alp.priority ASC NULLS LAST, p.has_credits DESC, p.id ASC
+    `, [agentId])
+    const configuredProviders = selectConfiguredProfileProviders(rows, policy)
+    if (configuredProviders !== null) {
+      _priorityCache.set(cacheKey, { providers: configuredProviders, expiresAt: now + CACHE_TTL_MS })
+      return configuredProviders
+    }
+
     const providers = []
     for (const route of policy) {
-      const rowsForType = rows.filter(p => p.provider_type === route.provider_type)
-      const eligible = rowsForType.filter(providerEligible)
-      const configured = eligible.find(p => p.model === route.model) || eligible[0]
+      const matching = rows.filter(provider => providerMatchesProfileRoute(provider, route))
+      const configured = matching.find(providerEligible)
       if (configured) {
-        providers.push({ ...configured, ...route, configured_model: configured.model })
-      } else if (rowsForType.length === 0 && credentialFromEnv(route.provider_type)) {
+        providers.push({
+          ...configured,
+          reasoning_effort: route.reasoning_effort,
+          policy_model: route.model,
+        })
+      } else if (matching.length === 0 && credentialFromEnv(route.provider_type)) {
         providers.push({
           id: null,
           name: `${route.provider_type}-env`,
@@ -130,10 +182,11 @@ async function getPriorityList(agentId, profile) {
   return rows
 }
 
-async function hasEligibleProvider(profile, requiredCapability = null) {
-  const providers = await getPriorityList('__profile_preflight__', profile)
+async function hasEligibleProvider(agentId, profile, requiredCapability = null) {
+  const providers = await getPriorityList(agentId, profile)
   for (const provider of providers) {
-    if (await providerSupportsCapability(provider, requiredCapability)) return true
+    const callable = isOpenRouterProvider(provider) || NATIVE_CHAT_PROVIDER_TYPES.has(provider.provider_type)
+    if (callable && await providerSupportsCapability(provider, requiredCapability)) return true
   }
   return false
 }
@@ -611,6 +664,59 @@ async function callGroq(provider, { system, messages, tools, max_tokens }) {
   return parseOpenAICompatibleResponse(await groq.chat.completions.create(params))
 }
 
+function buildOpenRouterParams(provider, { system, messages, tools, max_tokens }) {
+  const oaiMessages = toOpenAICompatibleMessages(messages)
+  const hasSystem = oaiMessages.some(message => message.role === 'system')
+  if (system && !hasSystem) oaiMessages.unshift({ role: 'system', content: system })
+  const params = {
+    model: provider.model,
+    max_tokens: max_tokens || 4096,
+    messages: oaiMessages,
+  }
+  if (provider.reasoning_effort) params.reasoning = { effort: provider.reasoning_effort }
+  if (tools?.length) {
+    params.tools = tools.map(tool => ({
+      type: 'function',
+      function: { name: tool.name, description: tool.description, parameters: tool.input_schema },
+    }))
+  }
+  return params
+}
+
+async function callOpenRouter(provider, options) {
+  const OpenAI = require('openai')
+  if (!provider.api_key) throw Object.assign(new Error('OpenRouter API key not configured'), { status: 402 })
+  const client = new OpenAI.default({
+    apiKey: provider.api_key,
+    baseURL: String(provider.base_url || '').includes('openrouter.ai')
+      ? provider.base_url
+      : OPENROUTER_BASE_URL,
+  })
+  return parseOpenAICompatibleResponse(
+    await client.chat.completions.create(buildOpenRouterParams(provider, options))
+  )
+}
+
+function xaiModelId(model) {
+  return String(model || 'grok-4.5').replace(/^x-ai\//, '')
+}
+
+async function callXAI(provider, options) {
+  const OpenAI = require('openai')
+  if (!provider.api_key) throw Object.assign(new Error('xAI API key not configured'), { status: 402 })
+  const client = new OpenAI.default({
+    apiKey: provider.api_key,
+    baseURL: String(provider.base_url || '').includes('api.x.ai')
+      ? provider.base_url
+      : 'https://api.x.ai/v1',
+  })
+  return parseOpenAICompatibleResponse(
+    await client.chat.completions.create(
+      buildOpenRouterParams({ ...provider, model: xaiModelId(provider.model) }, options)
+    )
+  )
+}
+
 // ── Provider dispatch table ───────────────────────────────────────────────────
 
 const CALL_FNS = {
@@ -621,12 +727,14 @@ const CALL_FNS = {
   kimi:       callKimi,
   groq:       callGroq,
   ollama:     callOllama,
+  'x-ai':     callXAI,
 }
 
 async function providerSupportsCapability(provider, capability) {
   if (!capability) return true
   if (capability !== 'vision') return false
-  if (['anthropic', 'openai', 'gemini'].includes(provider.provider_type)) return true
+  if (isOpenRouterProvider(provider)) return true
+  if (['anthropic', 'openai', 'gemini', 'x-ai'].includes(provider.provider_type)) return true
   if (provider.provider_type !== 'ollama') return false
   try {
     const details = await ollamaRequest({
@@ -679,7 +787,7 @@ async function create(agentId, { system, messages, tools, max_tokens, profile, r
   for (const prov of providers) {
     if (_isProviderDead(prov.id)) continue
 
-    const fn = CALL_FNS[prov.provider_type]
+    const fn = isOpenRouterProvider(prov) ? callOpenRouter : CALL_FNS[prov.provider_type]
     if (!fn) continue
     if (!(await providerSupportsCapability(prov, required_capability))) {
       errors.push(`${prov.name}: does not support required capability ${required_capability}`)
@@ -784,5 +892,20 @@ module.exports = {
   embed,
   hasEligibleProvider,
   invalidatePriorityCache,
-  _internals: { toResponsesInput, toOllamaMessages, buildOllamaParams, providerEligible, providerSupportsCapability, parseResponsesResponse, calcCost, isCreditError, isTransientRateLimitError },
+  _internals: {
+    toResponsesInput,
+    toOllamaMessages,
+    buildOllamaParams,
+    buildOpenRouterParams,
+    isOpenRouterProvider,
+    xaiModelId,
+    providerEligible,
+    providerMatchesProfileRoute,
+    selectConfiguredProfileProviders,
+    providerSupportsCapability,
+    parseResponsesResponse,
+    calcCost,
+    isCreditError,
+    isTransientRateLimitError,
+  },
 }

@@ -4,6 +4,7 @@ const express    = require('express');
 const { spawn }  = require('child_process');
 const fs         = require('fs');
 const path       = require('path');
+const { findTailnetIPv4, listenOnHosts } = require('./services/api-listener');
 const dotenv     = require('dotenv');
 const crypto     = require('crypto');
 const { Pool }   = require('pg');
@@ -17,6 +18,7 @@ const {
 const { listOllamaModelOptions } = require('../agents/shared/ollama');
 const { getAvailableModels } = require('../agents/shared/model-fetcher');
 const llm = require('../agents/shared/llm');
+const { getAgentProfileRequirements, getProfilePolicy } = require('../agents/shared/model-profiles');
 const { createObserveRouter } = require('../observe/routes');
 const observeAlerts = require('../observe/alerts');
 const { resolveEntityAlias } = require('../agents/intelligence/services/entity-resolver');
@@ -284,6 +286,7 @@ const AGENTS = {
     description: 'Analyzes emails, WhatsApp, and Limitless to build contact profiles',
     entrypoint:  path.resolve(__dirname, '../agents/relationships/index.js'),
     core:        true,
+    requiredProfiles: getAgentProfileRequirements('relationships'),
   },
   projects: {
     id:          'projects',
@@ -291,6 +294,7 @@ const AGENTS = {
     description: 'Groups communications into projects and tracks their progress',
     entrypoint:  path.resolve(__dirname, '../agents/projects/index.js'),
     core:        true,
+    requiredProfiles: getAgentProfileRequirements('projects'),
   },
   intelligence: {
     id:          'intelligence',
@@ -475,6 +479,14 @@ async function startAgentOnce(id) {
   if (!supervisorLease.ownsLease()) return { error: 'This API process does not own the agent supervisor lease' };
   if (procs[id]?.proc) return { error: 'Already running' };
 
+  const unavailableProfiles = [];
+  for (const profile of def.requiredProfiles || []) {
+    if (!(await llm.hasEligibleProvider(id, profile))) unavailableProfiles.push(profile);
+  }
+  if (unavailableProfiles.length > 0) {
+    return { error: `Blocked: no eligible provider for ${unavailableProfiles.join(', ')}` };
+  }
+
   // Reload env so the spawned process gets latest config
   dotenv.config({ path: ENV_PATH, override: true });
 
@@ -604,7 +616,7 @@ async function restartCoreAgent(id) {
     result = { error: error.message };
   }
   if (result?.error && result.error !== 'Already running') {
-    const failedState = await runtimeStore.markFailure(id, { error: result.error });
+    const failedState = await runtimeStore.markFailure(id, { error: result.error, resetAfterStableRun: false });
     scheduleAgentRestart(id, failedState);
   }
 }
@@ -639,7 +651,7 @@ async function requestAgentStart(id) {
     result = { error: error.message };
   }
   if (def.core && result?.error && result.error !== 'Already running') {
-    const failedState = await runtimeStore.markFailure(id, { error: result.error });
+    const failedState = await runtimeStore.markFailure(id, { error: result.error, resetAfterStableRun: false });
     scheduleAgentRestart(id, failedState);
   }
   return result;
@@ -3437,7 +3449,11 @@ app.post('/api/system/providers', async (req, res) => {
   }
   const normalizedBaseUrl = providerType === 'ollama'
     ? (base_url || DEFAULT_OLLAMA_BASE_URL)
-    : (base_url || null);
+    : providerType === 'x-ai'
+      ? 'https://api.x.ai/v1'
+    : (String(model || '').includes('/')
+      ? 'https://openrouter.ai/api/v1'
+      : (base_url || null));
   try {
     const { rows } = await db.query(
       `INSERT INTO system.llm_providers (name, provider_type, api_key, base_url, model)
@@ -3516,6 +3532,20 @@ app.get('/api/system/agents/:id/llm', async (req, res) => {
       ORDER BY alp.priority
     `, [req.params.id]);
     res.json(rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/system/agents/:id/llm-status', async (req, res) => {
+  const profiles = getAgentProfileRequirements(req.params.id);
+  try {
+    const requirements = await Promise.all(profiles.map(async profile => ({
+      profile,
+      eligible: await llm.hasEligibleProvider(req.params.id, profile),
+      routes: getProfilePolicy(profile),
+    })));
+    res.json({ agent_id: req.params.id, requirements });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -3626,6 +3656,8 @@ app.get('/api/system/usage', async (req, res) => {
 async function startServer() {
   const PORT = process.env.UI_PORT || 4001;
   const HOST = process.env.SECOND_BRAIN_BIND_HOST || '127.0.0.1';
+  const tailnetIP = HOST === '127.0.0.1' ? findTailnetIPv4() : null;
+  const hosts = [HOST, tailnetIP].filter(Boolean);
   return runServerStartup({
     db,
     runSystemSchema,
@@ -3636,17 +3668,29 @@ async function startServer() {
     onSupervisorError: (err) => {
       console.error('[supervisor] startup reconciliation failed:', err.message);
     },
-    listen: () => app.listen(PORT, HOST, () => {
-      console.log(`\n  secondbrain API → http://${HOST}:${PORT}\n`);
+    listen: async () => {
+      try {
+        apiServers = await listenOnHosts(app, PORT, hosts, (boundHosts) => {
+          console.log(`\n  secondbrain API → ${boundHosts.map((host) => `http://${host}:${PORT}`).join(', ')}\n`);
+        });
+      } catch (error) {
+        if (!tailnetIP) throw error;
+        console.error(`[network] failed to bind Tailscale address ${tailnetIP}:${PORT}; keeping loopback API: ${error.message}`);
+        apiServers = await listenOnHosts(app, PORT, [HOST], (boundHosts) => {
+          console.log(`\n  secondbrain API → ${boundHosts.map((host) => `http://${host}:${PORT}`).join(', ')}\n`);
+        });
+      }
       if (db) {
         indexer.start(db);
         observeAlerts.start(db);
       }
-    }),
+      return apiServers;
+    },
   });
 }
 
 let resourcesStopped = false;
+let apiServers = [];
 
 async function stopServerResources() {
   if (resourcesStopped) return;
@@ -3657,6 +3701,8 @@ async function stopServerResources() {
   for (const id of restartTimers.keys()) clearRestartTimer(id);
   try { observeAlerts.stop(); } catch {}
   try { indexer.stop?.(); } catch {}
+  await Promise.all(apiServers.map((server) => new Promise((resolve) => server.close(() => resolve()))));
+  apiServers = [];
   const managedProcesses = Object.values(procs).filter(entry => entry?.proc).map(entry => entry.pid);
   const result = await terminateProcesses(managedProcesses, { graceMs: 8_000 });
   if (result.survivors.length > 0) {

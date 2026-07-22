@@ -4,7 +4,8 @@ const llm = require('../../shared/llm')
 const db        = require('@secondbrain/db')
 
 function parseJSON(text) {
-  const clean = text.replace(/^```(?:json)?\n?/m, '').replace(/\n?```$/m, '').trim()
+  const clean = String(text || '').replace(/^```(?:json)?\n?/m, '').replace(/\n?```$/m, '').trim()
+  if (!clean) throw new Error('Project discovery returned no text')
   try {
     return JSON.parse(clean)
   } catch {
@@ -165,7 +166,9 @@ Guidelines:
       profile: 'reasoning_synthesis',
       task_type: 'project_discovery_json',
       workflow_name: 'project_discovery',
-      max_tokens: 1800,
+      // Terra may spend substantial output budget on reasoning before the
+      // structured project envelope. Leave enough room for the JSON payload.
+      max_tokens: 8000,
       messages: [{ role: 'user', content: prompt }],
     })
 

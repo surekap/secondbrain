@@ -460,7 +460,7 @@ async function runPendingMedia(limit, options = {}) {
   state.lastError = null;
 
   try {
-    if (!options.generate && !(await llm.hasEligibleProvider('bulk_structured', 'vision'))) {
+    if (!options.generate && !(await llm.hasEligibleProvider('whatsapp', 'bulk_structured', 'vision'))) {
       state.paused = true;
       state.pausedReason = 'no eligible bulk_structured vision provider; queued media was not claimed';
       state.lastError = state.pausedReason;

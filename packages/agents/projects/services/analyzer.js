@@ -400,7 +400,7 @@ Rules:
       profile: 'reasoning_synthesis',
       task_type: 'project_status_synthesis_json',
       workflow_name: 'project_analysis',
-      max_tokens: 1800,
+      max_tokens: 4000,
       messages: [{ role: 'user', content: prompt }],
     })
     const projectState = normalizedProjectState(result, project)

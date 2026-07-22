@@ -20,6 +20,160 @@ immutable source evidence
 
 The arrows are one-way dependencies. A higher layer may point to a lower layer, but it must not mutate the lower layer to make its analysis easier.
 
+## Current system map
+
+This diagram shows the current physical implementation. Solid arrows are writes;
+dashed arrows are reads or derived-data dependencies. The detailed LLM jobs,
+prompt contracts, validation rules, and example outcomes are documented in
+[LLM_PROCESSING.md](LLM_PROCESSING.md).
+
+```mermaid
+flowchart LR
+  subgraph Sources["External and local sources"]
+    WA["WhatsApp Web"]
+    Gmail["Gmail / IMAP"]
+    LimitlessAPI["Limitless API"]
+    AIExports["ChatGPT / Gemini exports"]
+    Apple["Apple Contacts / VCF"]
+    Web["Public web research providers"]
+  end
+
+  subgraph Ingestion["Source agents · L0 raw evidence"]
+    WAAgent["WhatsApp agent"]
+    EmailAgent["Email agent"]
+    LimitlessAgent["Limitless agent"]
+    AIAgent["AI importers"]
+    AppleAgent["Apple Contacts agent"]
+    WATables["public.messages\npublic.media_files\npublic.chat_metadata"]
+    EmailTables["email.emails\nemail.accounts"]
+    LimitlessTables["limitless.lifelogs"]
+    AITables["ai.conversations\nai.messages"]
+  end
+
+  subgraph Semantic["Semantic and canonical processing"]
+    MediaLLM["Media extraction LLM\nimage description · PDF OCR/summary"]
+    Relationships["Relationships agent\nidentity · canonical communications · profiles"]
+    RelationshipLLM["Relationship LLM jobs\ncontact/group extraction · action/opportunity detection"]
+    Research["Research agent"]
+    ResearchLLM["Research LLM jobs\nweb research · dossier synthesis"]
+    Canonical["relationships.contacts\nrelationships.contact_identities\nrelationships.groups\nrelationships.communications"]
+    ResearchRows["relationships.contact_research"]
+    LegacyInsights["relationships.insights"]
+  end
+
+  subgraph Intelligence["Projects and intelligence"]
+    Projects["Projects agent"]
+    ProjectLLM["Project LLM jobs\ndiscovery · classification · status synthesis"]
+    ProjectRows["projects.projects\nprojects.communication_classifications\nprojects.project_communications\nprojects.project_insights"]
+    IntelligenceAgent["Intelligence agent\ndeterministic extraction · reconciliation · ranking"]
+    VerifierLLM["Signal verifier LLM\nactor · polarity · lifecycle · evidence"]
+    IntelligenceRows["intelligence.claims\nintelligence.opportunities\nintelligence.items\nintelligence.attention_queue"]
+  end
+
+  subgraph Delivery["Delivery and operations"]
+    API["UI/API server"]
+    UI["Dashboard · search · explanations · feedback"]
+    Telemetry["telemetry.*\nruns · LLM requests · quality · progress · system samples"]
+    Buffer["Telemetry buffer\nDB write + local spill"]
+    Collector["Collector\nspill replay · ETA · efficiency · retention"]
+    Sampler["System sampler\npower · CPU · memory · model sessions"]
+    Observe["Observe service\nmetrics · quality review · alerts"]
+    Supervisor["API process supervisor"]
+  end
+
+  WA --> WAAgent --> WATables
+  Gmail --> EmailAgent --> EmailTables
+  LimitlessAPI --> LimitlessAgent --> LimitlessTables
+  AIExports --> AIAgent --> AITables
+  Apple --> AppleAgent --> Canonical
+
+  WATables -.-> MediaLLM --> WATables
+  WATables -.-> Relationships
+  EmailTables -.-> Relationships
+  LimitlessTables -.-> Relationships
+  Relationships -.-> RelationshipLLM --> Relationships
+  Relationships --> Canonical
+  Relationships --> LegacyInsights
+
+  Canonical -.-> Research
+  Web --> Research
+  Research -.-> ResearchLLM --> ResearchRows
+  ResearchLLM --> Canonical
+
+  Canonical -.-> Projects
+  LimitlessTables -.-> Projects
+  Projects -.-> ProjectLLM --> ProjectRows
+
+  Canonical -.-> IntelligenceAgent
+  LegacyInsights -.-> IntelligenceAgent
+  ProjectRows -.-> IntelligenceAgent
+  IntelligenceAgent -.-> VerifierLLM --> IntelligenceAgent
+  IntelligenceAgent --> IntelligenceRows
+
+  Canonical -.-> API
+  ProjectRows -.-> API
+  IntelligenceRows -.-> API --> UI
+  UI -->|"feedback / guidance / lifecycle commands"| IntelligenceAgent
+  Supervisor --> WAAgent
+  Supervisor --> EmailAgent
+  Supervisor --> LimitlessAgent
+  Supervisor --> Relationships
+  Supervisor --> Projects
+  Supervisor --> IntelligenceAgent
+  Supervisor --> Sampler
+  MediaLLM -.-> Buffer
+  RelationshipLLM -.-> Buffer
+  ResearchLLM -.-> Buffer
+  ProjectLLM -.-> Buffer
+  VerifierLLM -.-> Buffer
+  Buffer --> Telemetry
+  Buffer -.->|"DB unavailable: spill files"| Collector
+  Collector --> Telemetry
+  Sampler --> Telemetry
+  Telemetry -.-> Observe
+```
+
+`ai.conversations` and `ai.messages` are currently an import-only raw archive;
+there is no active canonical or intelligence consumer for them. That gap is
+shown deliberately rather than implying a pipeline that does not exist.
+
+### Runtime component inventory
+
+| Component | Responsibility | Primary state |
+|---|---|---|
+| WhatsApp agent | Capture messages/chat metadata, download media, run leased semantic media analysis | `public.messages`, `public.chat_metadata`, `public.media_files` |
+| Email agent | Incremental IMAP synchronization for configured Gmail accounts | `email.accounts`, `email.emails` |
+| Limitless agent | Settle-aware, idempotent lifelog ingestion; no semantic actions | `limitless.lifelogs` |
+| AI importers | Idempotent ChatGPT/Gemini export archive | `ai.conversations`, `ai.messages`, `ai.sync_log` |
+| Apple Contacts agent | Import exact provider identities and provisional/canonical contact records | `relationships.contacts`, `relationships.contact_identities` |
+| Relationships agent | Canonical communications, contact/group state, relationship facts and transitional insights | `relationships.*` |
+| Research agent | Multi-provider contact research and dossier synthesis | `relationships.contact_research`, `contacts.research_summary` |
+| Projects agent | Outcome discovery, episode classification, project state and project insights | `projects.*` |
+| Intelligence agent | Claims, evidence, guidance, reconciliation, opportunity lifecycle and ranking | `intelligence.*` |
+| UI/API server | Read APIs, user commands, configuration and single-owner worker supervision | Read models plus `system.agent_runtime_state` |
+| Telemetry library/buffer | Run/request/progress/quality events with local spill fallback | `telemetry.*`, local NDJSON spill |
+| Collector | Spill replay, ETA/work-efficiency computation and retention | `telemetry.work_efficiency` and related tables |
+| Sampler | Host power, CPU, memory and local-model session samples | `telemetry.system_samples`, `telemetry.model_sessions` |
+| Observe service | Operational dashboard, manual quality review and alert evaluation | Reads/writes `telemetry.*` |
+
+## Where LLMs are allowed
+
+```mermaid
+flowchart LR
+  Evidence["Bounded evidence package"] --> Prompt["Named, versioned prompt contract"]
+  Prompt --> Route["Workload profile + optional operator routing override"]
+  Route --> Model["Configured LLM provider/model"]
+  Model --> Parse["Parse · receipt · schema · evidence validation"]
+  Parse -->|"valid"| Derived["Derived profile, claim, project state, or candidate item"]
+  Parse -->|"invalid"| Retry["Retryable failure; do not advance receipt"]
+  Derived --> Reconcile["Deterministic dedupe and lifecycle reconciliation"]
+  Reconcile --> Rank["Attention ranking and explanation"]
+```
+
+LLMs do not establish source identity, rewrite raw evidence, or directly decide
+the final attention order. Their outputs are derived assertions that must pass
+task-specific validation and retain evidence provenance.
+
 ## Responsibilities
 
 | Boundary | Owns | Must not own |
@@ -63,6 +217,7 @@ This is a pragmatic SOLID boundary, not a request for ceremony. Prefer a small p
 - [INTELLIGENCE_MODEL.md](INTELLIGENCE_MODEL.md) — claims, item types, lifecycle and ranking.
 - [QUALITY_GATES.md](QUALITY_GATES.md) — evaluation and release criteria.
 - [MODEL_ROUTING.md](MODEL_ROUTING.md) — workload routing, cost envelope, and model-change rules.
+- [LLM_PROCESSING.md](LLM_PROCESSING.md) — end-to-end LLM data flow, active prompt contracts, validation, persistence, and example outcomes.
 - [evaluation.md](evaluation.md) — executable private gold-set contract.
 - [MIGRATIONS.md](MIGRATIONS.md) — schema/backfill/cutover protocol.
 - [PROCESS_SUPERVISION.md](PROCESS_SUPERVISION.md) — single-owner worker lifecycle, orphan reaping and shutdown rules.

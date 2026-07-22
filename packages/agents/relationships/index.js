@@ -575,6 +575,7 @@ async function runAnalysis() {
     console.log('\n👥 Processing WhatsApp groups...')
     const groups = await extractor.extractGroupChats()
     let groupsAnalyzed = 0
+    const pendingGroupAnalyses = []
 
     // Recover missing group events with one source scan. Checking the full
     // messages table once per group is both redundant and O(groups × messages).
@@ -619,71 +620,86 @@ async function runAnalysis() {
             my_msg_count:    group.my_msgs,
             last_activity_at: group.last_msg_at,
           }
-          const analysis = await analyzer.analyzeGroup(groupRow, messages)
-          if (analysis.analysis_error) {
-            console.error(`   ✗ Group analysis deferred for ${groupName || group.chat_id}: ${analysis.analysis_error}`)
-            requiredFailures.push(`group:${group.chat_id}:${analysis.analysis_error}`)
-            continue
-          }
-
-          await db.query(`
-            UPDATE relationships.groups SET
-              group_type           = $1,
-              my_role              = $2,
-              ai_summary           = $3,
-              key_topics           = $4,
-              communication_advice = $5,
-              notable_contacts     = $6,
-              opportunities        = $7,
-              is_noise             = $8,
-              analyzed_at          = NOW(),
-              updated_at           = NOW()
-            WHERE wa_chat_id = $9
-          `, [
-            analysis.group_type,
-            analysis.my_role,
-            analysis.ai_summary,
-            analysis.key_topics,
-            analysis.communication_advice,
-            JSON.stringify(analysis.notable_contacts),
-            JSON.stringify(analysis.opportunities),
-            analysis.is_noise,
-            group.chat_id,
-          ])
-
-          // Surface group opportunities as legacy insights and first-class intelligence opportunities
-          for (const [idx, opp] of (analysis.opportunities || []).slice(0, 3).entries()) {
-            const sourceRef = `group:opportunity:${group.chat_id}:${idx}`
-            await upsertInsight(null, {
-              insight_type: 'opportunity',
-              title:        opp.title || 'Group opportunity',
-              description:  `[${groupName || group.chat_id}] ${opp.description || ''}`,
-              priority:     opp.priority || 'medium',
-              source_ref:   sourceRef,
-              skip_intelligence: true,
-            })
-            if (groupId) {
-              await intelligence.upsertFromGroupOpportunity(groupId, {
-                id: groupId,
-                wa_chat_id: group.chat_id,
-                name: groupName || group.chat_id,
-                group_type: analysis.group_type,
-                my_role: analysis.my_role,
-                last_activity_at: group.last_msg_at,
-              }, opp, idx)
-            }
-            insightsGenerated++
-          }
-
-          if (!analysis.is_noise) {
-            console.log(`   ✓ ${groupName || group.chat_id} → ${analysis.group_type} / ${analysis.my_role}`)
-          }
-          groupsAnalyzed++
-          await analyzer.sleep(600)
+          pendingGroupAnalyses.push({
+            group: groupRow,
+            messages,
+            groupId,
+            groupName: groupName || group.chat_id,
+            sourceGroup: group,
+          })
         }
       } catch (err) {
         console.error(`[index] group error for ${group.chat_id}:`, err.message)
         requiredFailures.push(`group:${group.chat_id}:${err.message}`)
+      }
+    }
+
+    const groupAnalysisResults = await analyzer.analyzeGroups(pendingGroupAnalyses)
+    for (const pending of pendingGroupAnalyses) {
+      const { group, groupId, groupName, sourceGroup } = pending
+      try {
+        const analysis = groupAnalysisResults.get(String(group.wa_chat_id))
+        if (analysis.analysis_error) {
+          console.error(`   ✗ Group analysis deferred for ${groupName}: ${analysis.analysis_error}`)
+          requiredFailures.push(`group:${group.wa_chat_id}:${analysis.analysis_error}`)
+          continue
+        }
+
+        await db.query(`
+          UPDATE relationships.groups SET
+            group_type           = $1,
+            my_role              = $2,
+            ai_summary           = $3,
+            key_topics           = $4,
+            communication_advice = $5,
+            notable_contacts     = $6,
+            opportunities        = $7,
+            is_noise             = $8,
+            analyzed_at          = NOW(),
+            updated_at           = NOW()
+          WHERE wa_chat_id = $9
+        `, [
+          analysis.group_type,
+          analysis.my_role,
+          analysis.ai_summary,
+          analysis.key_topics,
+          analysis.communication_advice,
+          JSON.stringify(analysis.notable_contacts),
+          JSON.stringify(analysis.opportunities),
+          analysis.is_noise,
+          group.wa_chat_id,
+        ])
+
+        for (const [idx, opp] of (analysis.opportunities || []).slice(0, 3).entries()) {
+          const sourceRef = `group:opportunity:${group.wa_chat_id}:${idx}`
+          await upsertInsight(null, {
+            insight_type: 'opportunity',
+            title:        opp.title || 'Group opportunity',
+            description:  `[${groupName}] ${opp.description || ''}`,
+            priority:     opp.priority || 'medium',
+            source_ref:   sourceRef,
+            skip_intelligence: true,
+          })
+          if (groupId) {
+            await intelligence.upsertFromGroupOpportunity(groupId, {
+              id: groupId,
+              wa_chat_id: group.wa_chat_id,
+              name: groupName,
+              group_type: analysis.group_type,
+              my_role: analysis.my_role,
+              last_activity_at: sourceGroup.last_msg_at,
+            }, opp, idx)
+          }
+          insightsGenerated++
+        }
+
+        if (!analysis.is_noise) {
+          console.log(`   ✓ ${groupName} → ${analysis.group_type} / ${analysis.my_role}`)
+        }
+        groupsAnalyzed++
+      } catch (err) {
+        console.error(`[index] group persistence error for ${group.wa_chat_id}:`, err.message)
+        requiredFailures.push(`group:${group.wa_chat_id}:${err.message}`)
       }
     }
     console.log(`   Analyzed ${groupsAnalyzed} groups (of ${groups.length} total)`)

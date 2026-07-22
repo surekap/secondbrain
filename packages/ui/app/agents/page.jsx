@@ -2,6 +2,16 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 
 const DEFAULT_OLLAMA_BASE_URL = 'http://127.0.0.1:11434'
+const CONFIGURABLE_AGENT_IDS = new Set(['email', 'limitless', 'research', 'whatsapp', 'openai', 'gemini'])
+const LLM_PRIORITY_AGENT_IDS = new Set(['relationships', 'projects', 'intelligence', 'research'])
+
+function tabsForAgent(agentId) {
+  return [
+    'logs',
+    ...(CONFIGURABLE_AGENT_IDS.has(agentId) ? ['config'] : []),
+    ...(LLM_PRIORITY_AGENT_IDS.has(agentId) ? ['llm'] : []),
+  ]
+}
 
 async function apiFetch(method, path, body) {
   const opts = { method, headers: { 'Content-Type': 'application/json' } }
@@ -726,13 +736,15 @@ function WhatsAppQrDisplay({ agentId }) {
   )
 }
 
-function AgentLlmTab({ agentId, llmList, allProviders, onSave, usageRow }) {
+function AgentLlmTab({ agentId, llmList, allProviders, onSave, usageRow, profileStatus }) {
   const [list, setList] = useState(llmList || [])
   useEffect(() => setList(llmList || []), [llmList])
 
   const available = allProviders.filter(p => p.is_enabled && !list.find(l => l.id === p.id))
   const hasExhausted = list.some(p => !p.has_credits)
   const allExhausted = list.length > 0 && list.every(p => !p.has_credits)
+  const requirements = profileStatus?.requirements || []
+  const blockedProfiles = requirements.filter(requirement => !requirement.eligible)
 
   function moveUp(idx) {
     if (idx === 0) return
@@ -753,12 +765,34 @@ function AgentLlmTab({ agentId, llmList, allProviders, onSave, usageRow }) {
 
   return (
     <div>
-      {allExhausted && (
+      {requirements.length > 0 && (
+        <div style={{ padding: '0.55rem 0.75rem', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: '5px', marginBottom: '0.65rem', fontSize: '0.78rem' }}>
+          <div style={{ fontWeight: 600, marginBottom: '0.35rem' }}>Required workload routes</div>
+          {requirements.map(requirement => (
+            <div key={requirement.profile} style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', marginTop: '0.2rem', flexWrap: 'wrap' }}>
+              <span style={{ color: requirement.eligible ? '#22c55e' : '#ef4444' }}>{requirement.eligible ? '✓' : '✕'}</span>
+              <span>{requirement.profile}</span>
+              <span style={{ color: 'var(--muted, #888)' }}>
+                {requirement.routes.map(route => `${route.provider_type}/${route.model}`).join(' → ')}
+              </span>
+            </div>
+          ))}
+          <div style={{ color: 'var(--muted, #888)', marginTop: '0.45rem', lineHeight: 1.45 }}>
+            This saved order is the agent&apos;s explicit fallback route. Disabled or quota-exhausted providers are skipped; when no priority is saved, the default workload models shown above are used.
+          </div>
+        </div>
+      )}
+      {blockedProfiles.length > 0 && (
+        <div style={{ padding: '0.4rem 0.75rem', background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)', borderRadius: '5px', marginBottom: '0.5rem', fontSize: '0.8rem', color: '#ef4444' }}>
+          ⚠ Agent blocked — add or restore an eligible provider for {blockedProfiles.map(item => item.profile).join(', ')}
+        </div>
+      )}
+      {requirements.length === 0 && allExhausted && (
         <div style={{ padding: '0.4rem 0.75rem', background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)', borderRadius: '5px', marginBottom: '0.5rem', fontSize: '0.8rem', color: '#ef4444' }}>
           ⚠ No working providers — this agent will fail to run
         </div>
       )}
-      {hasExhausted && !allExhausted && (
+      {requirements.length === 0 && hasExhausted && !allExhausted && (
         <div style={{ padding: '0.4rem 0.75rem', background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.2)', borderRadius: '5px', marginBottom: '0.5rem', fontSize: '0.8rem', color: '#f59e0b' }}>
           ⚠ Some providers have exhausted credits — fallback will be used
         </div>
@@ -830,6 +864,7 @@ export default function AgentsPage() {
 
   // Per-agent LLM priority + config state
   const [agentLlm, setAgentLlm] = useState({})      // { agentId: [rows] }
+  const [agentLlmStatus, setAgentLlmStatus] = useState({})
   const [agentConfig, setAgentConfig] = useState({}) // { agentId: { key: val } }
   const [agentTab, setAgentTab] = useState({})       // { agentId: 'logs'|'config'|'llm' }
   const [usageMtd, setUsageMtd] = useState([])
@@ -852,6 +887,13 @@ export default function AgentsPage() {
     try {
       const data = await apiFetch('GET', `/api/system/agents/${id}/llm`)
       if (Array.isArray(data)) setAgentLlm(prev => ({ ...prev, [id]: data }))
+    } catch {}
+  }
+
+  async function loadAgentLlmStatus(id) {
+    try {
+      const data = await apiFetch('GET', `/api/system/agents/${id}/llm-status`)
+      setAgentLlmStatus(prev => ({ ...prev, [id]: data }))
     } catch {}
   }
 
@@ -1051,6 +1093,7 @@ export default function AgentsPage() {
     try {
       await apiFetch('PUT', `/api/system/agents/${agentId}/llm`, list)
       await loadAgentLlm(agentId)
+      await loadAgentLlmStatus(agentId)
       showToast('LLM priority saved')
     } catch { showToast('Save failed') }
   }
@@ -1062,7 +1105,10 @@ export default function AgentsPage() {
 
   function setTab(agentId, tab) {
     setAgentTab(prev => ({ ...prev, [agentId]: tab }))
-    if (tab === 'llm' && !agentLlm[agentId]) loadAgentLlm(agentId)
+    if (tab === 'llm') {
+      if (!agentLlm[agentId]) loadAgentLlm(agentId)
+      loadAgentLlmStatus(agentId)
+    }
     if (tab === 'config') loadAgentConfig(agentId)
   }
 
@@ -1271,7 +1317,7 @@ export default function AgentsPage() {
 
                 {/* Tab buttons */}
                 <div style={{ display: 'flex', gap: '0.25rem', padding: '0.5rem 0 0 0', borderTop: '1px solid var(--border)', marginTop: '0.5rem' }}>
-                  {(['logs', 'config', ...((['limitless','relationships','projects','research'].includes(id)) ? ['llm'] : [])]).map(t => (
+                  {tabsForAgent(id).map(t => (
                     <button key={t}
                       onClick={() => setTab(id, t)}
                       style={{
@@ -1281,7 +1327,7 @@ export default function AgentsPage() {
                         border: `1px solid ${tab === t ? 'var(--text)' : 'var(--border)'}`,
                         cursor: 'pointer',
                       }}>
-                      {t === 'llm' ? 'LLM' : t.charAt(0).toUpperCase() + t.slice(1)}
+                      {t === 'llm' ? 'Provider priority' : t.charAt(0).toUpperCase() + t.slice(1)}
                     </button>
                   ))}
                 </div>
@@ -1305,14 +1351,14 @@ export default function AgentsPage() {
                       {id === 'limitless' && agentConfig[id] && (
                         <LimitlessConfigForm config={agentConfig[id]} onSave={() => loadAgentConfig(id)} />
                       )}
+                      {(id === 'openai' || id === 'gemini') && agentConfig[id] && (
+                        <AiImporterConfigForm agentId={id} config={agentConfig[id]} onSave={() => loadAgentConfig(id)} />
+                      )}
                       {id === 'research' && (
                         <ResearchConfigForm config={systemConfig} onSave={saveSystemConfig} />
                       )}
                       {id === 'whatsapp' && (
                         <WhatsAppConfigForm config={systemConfig} onSave={saveSystemConfig} />
-                      )}
-                      {!['email', 'limitless', 'research', 'openai', 'gemini', 'whatsapp'].includes(id) && (
-                        <div style={{ color: 'var(--text-3, #888)', fontSize: '.825rem' }}>No configurable options for this agent.</div>
                       )}
                     </div>
                   )}
@@ -1325,6 +1371,7 @@ export default function AgentsPage() {
                       allProviders={providers}
                       onSave={saveLlmPriority}
                       usageRow={usageRow}
+                      profileStatus={agentLlmStatus[id]}
                     />
                   )}
                 </div>

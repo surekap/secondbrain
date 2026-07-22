@@ -184,6 +184,186 @@ relationship_strength=noise means this contact is not meaningful (same as is_noi
  * @param {Array}  messages - Recent messages [{from_me, body, notify_name, ts}]
  * @returns {object} analysis result
  */
+const GROUP_ANALYSIS_BATCH_MAX_ITEMS = 8
+const GROUP_ANALYSIS_BATCH_MAX_CHARS = 80000
+
+function groupAnalysisDefaults() {
+  return {
+    group_type: 'unknown',
+    my_role: 'unknown',
+    ai_summary: null,
+    key_topics: [],
+    communication_advice: null,
+    notable_contacts: [],
+    opportunities: [],
+    is_noise: false,
+  }
+}
+
+function groupAnalysisInput(group, messages) {
+  const totalMsgs = Number(group.msg_count) || 0
+  const myMsgs = Number(group.my_msg_count) || 0
+  const myPct = totalMsgs > 0 ? Math.round((myMsgs / totalMsgs) * 100) : 0
+  const evidence = (messages || []).slice(0, 50).map(m => ({
+    canonical_ref: String(m.source_id || ''),
+    author: m.from_me ? 'Me' : (m.notify_name || 'Other'),
+    date: m.ts ? new Date(m.ts).toLocaleDateString('en-GB') : '',
+    text: messageTextForAnalysis(m).slice(0, 500),
+  }))
+  const participants = [...new Set(
+    (messages || []).filter(m => !m.from_me && m.notify_name).map(m => m.notify_name)
+  )].slice(0, 20)
+
+  return {
+    group_id: String(group.wa_chat_id),
+    name: group.name || group.wa_chat_id,
+    total_messages: totalMsgs,
+    my_messages: myMsgs,
+    my_participation_percent: myPct,
+    participants,
+    last_active: group.last_activity_at
+      ? new Date(group.last_activity_at).toLocaleDateString('en-GB')
+      : 'unknown',
+    evidence,
+  }
+}
+
+function batchGroupAnalysisInputs(items, {
+  maxItems = GROUP_ANALYSIS_BATCH_MAX_ITEMS,
+  maxChars = GROUP_ANALYSIS_BATCH_MAX_CHARS,
+} = {}) {
+  const batches = []
+  let batch = []
+  let chars = 0
+  for (const item of items || []) {
+    const input = groupAnalysisInput(item.group, item.messages)
+    const itemChars = JSON.stringify(input).length
+    if (batch.length > 0 && (batch.length >= maxItems || chars + itemChars > maxChars)) {
+      batches.push(batch)
+      batch = []
+      chars = 0
+    }
+    batch.push({ ...item, input })
+    chars += itemChars
+  }
+  if (batch.length > 0) batches.push(batch)
+  return batches
+}
+
+function normalizeGroupAnalysis(result, messages) {
+  const defaults = groupAnalysisDefaults()
+  const allowedRefs = new Set((messages || []).map(message => String(message.source_id || '')).filter(Boolean))
+  const supportedOpportunities = (Array.isArray(result?.opportunities) ? result.opportunities : [])
+    .map(opportunity => ({
+      ...opportunity,
+      evidence_refs: (Array.isArray(opportunity?.evidence_refs) ? opportunity.evidence_refs : [])
+        .map(String)
+        .filter(ref => allowedRefs.has(ref)),
+    }))
+    .filter(opportunity => opportunity.evidence_refs.length > 0)
+
+  return {
+    group_type: result?.group_type || defaults.group_type,
+    my_role: result?.my_role || defaults.my_role,
+    ai_summary: result?.ai_summary || null,
+    key_topics: Array.isArray(result?.key_topics) ? result.key_topics : [],
+    communication_advice: result?.communication_advice || null,
+    notable_contacts: Array.isArray(result?.notable_contacts) ? result.notable_contacts : [],
+    opportunities: supportedOpportunities,
+    is_noise: Boolean(result?.is_noise),
+  }
+}
+
+function validateGroupAnalysisBatch(payload, batch) {
+  const groups = Array.isArray(payload?.groups) ? payload.groups : null
+  if (!groups) throw new Error('Group batch response is missing groups')
+  const expectedIds = new Set(batch.map(item => item.input.group_id))
+  const results = new Map()
+  for (const item of groups) {
+    const groupId = String(item?.group_id || '')
+    const analysis = item?.analysis
+    if (!expectedIds.has(groupId) || results.has(groupId)) continue
+    if (!analysis || typeof analysis !== 'object' || Array.isArray(analysis)) continue
+    results.set(groupId, analysis)
+  }
+  if (results.size !== expectedIds.size) {
+    throw new Error(`Group batch response acknowledged ${results.size}/${expectedIds.size} groups`)
+  }
+  return results
+}
+
+async function analyzeGroupBatch(batch) {
+  const prompt = `Analyze these WhatsApp groups for a senior business executive. Treat each group independently and use only its evidence.
+
+Groups:
+${JSON.stringify(batch.map(item => item.input))}
+
+Return ONLY valid JSON with exactly one entry per input group_id:
+{
+  "groups": [
+    {
+      "group_id": "copy the input group_id exactly",
+      "analysis": {
+        "group_type": "board_peers|management|employees|community|unknown",
+        "my_role": "active_leader|active_participant|occasional_contributor|status_receiver|passive_observer",
+        "ai_summary": "2-3 sentences: purpose, participants, and use",
+        "key_topics": ["topic1", "topic2"],
+        "communication_advice": "specific tone, frequency, and engagement angle",
+        "notable_contacts": [{"name":"...","role_or_context":"...","why_notable":"..."}],
+        "opportunities": [{"title":"...","description":"...","priority":"high|medium|low","evidence_refs":["exact canonical_ref"]}],
+        "is_noise": false
+      }
+    }
+  ]
+}
+
+Rules:
+- Acknowledge every group_id, including groups with no opportunities.
+- group_type: board_peers = board/investor/C-suite peers; management = colleagues/direct reports/project teams; employees = staff where the executive has authority; community = associations/alumni/networking/trade/social; unknown = insufficient evidence.
+- Infer my_role from both message content and participation: active_leader usually >30%; active_participant 15-30%; occasional_contributor 5-15%; status_receiver 1-5%; passive_observer <1%.
+- notable_contacts: use only for community groups or 1-2 people clearly worth a direct connection; otherwise [].
+- opportunities: only specific business or relationship opportunities directly supported by evidence. Every opportunity must cite an exact canonical_ref from that same group; otherwise omit it. In community groups, actively check for leads, offered introductions, market intelligence, and events.
+- communication_advice must reflect both group_type and my_role: strategic/concise for board peers, collaborative/directive for management, clear/accountable for employees, and selective/value-adding for communities. For passive/status roles, do not manufacture a need to engage.
+- is_noise is true only for spam, broadcast, or automated groups without real human conversation.`
+
+  const result = await createStructured({
+    profile: 'bulk_structured',
+    task_type: 'relationship_group_batch_extract_json',
+    workflow_name: 'relationship_analysis',
+    max_tokens: Math.min(8000, Math.max(2048, batch.length * 1200)),
+    messages: [{ role: 'user', content: prompt }],
+  })
+  return validateGroupAnalysisBatch(result, batch)
+}
+
+async function analyzeGroups(items) {
+  const results = new Map()
+  const batches = batchGroupAnalysisInputs((items || []).filter(item => item.messages?.length > 0))
+
+  for (const batch of batches) {
+    try {
+      const batchResults = await analyzeGroupBatch(batch)
+      for (const item of batch) {
+        results.set(item.input.group_id, normalizeGroupAnalysis(
+          batchResults.get(item.input.group_id),
+          item.messages
+        ))
+      }
+    } catch (err) {
+      console.error(`[analyzer] analyzeGroups batch error (${batch.map(item => item.input.group_id).join(', ')}):`, err.message)
+      for (const item of batch) {
+        results.set(item.input.group_id, { ...groupAnalysisDefaults(), analysis_error: err.message })
+      }
+    }
+  }
+
+  for (const item of items || []) {
+    const groupId = String(item.group.wa_chat_id)
+    if (!results.has(groupId)) results.set(groupId, groupAnalysisDefaults())
+  }
+  return results
+}
+
 async function analyzeGroup(group, messages) {
   const defaults = {
     group_type: 'unknown',
@@ -197,111 +377,8 @@ async function analyzeGroup(group, messages) {
   }
 
   if (!messages || messages.length === 0) return defaults
-
-  try {
-    const totalMsgs = Number(group.msg_count) || 0
-    const myMsgs    = Number(group.my_msg_count) || 0
-    const myPct     = totalMsgs > 0 ? Math.round((myMsgs / totalMsgs) * 100) : 0
-
-    // Sample: up to 50 most recent messages
-    const sample = messages.slice(0, 50).map(m => {
-      const who  = m.from_me ? 'Me' : (m.notify_name || 'Other')
-      const date = m.ts ? new Date(m.ts).toLocaleDateString('en-GB') : ''
-      return `[canonical_ref=${m.source_id}; ${who}; ${date}]: ${messageTextForAnalysis(m).slice(0, 500)}`
-    }).join('\n')
-
-    // Extract unique participant names for context
-    const participants = [...new Set(
-      messages.filter(m => !m.from_me && m.notify_name).map(m => m.notify_name)
-    )].slice(0, 20)
-
-    const prompt = `You are analyzing a WhatsApp group for a senior business executive. Provide deep intelligence about this group.
-
-Group name: "${group.name || group.wa_chat_id}"
-Total messages: ${totalMsgs}
-My messages: ${myMsgs} (${myPct}% of total)
-Participants seen: ${participants.join(', ') || 'unknown'}
-Last active: ${group.last_activity_at ? new Date(group.last_activity_at).toLocaleDateString('en-GB') : 'unknown'}
-
-Recent messages (newest first):
-${sample}
-
-Analyze and return ONLY valid JSON:
-{
-  "group_type": "board_peers|management|employees|community|unknown",
-  "my_role": "active_leader|active_participant|occasional_contributor|status_receiver|passive_observer",
-  "ai_summary": "2-3 sentences: what this group is, who is in it, what it's used for",
-  "key_topics": ["topic1", "topic2", "topic3"],
-  "communication_advice": "1-2 sentences: how the executive should engage with this group given their role and the group's level/type. Be specific about tone, frequency, and angle.",
-  "notable_contacts": [
-    {"name": "...", "role_or_context": "...", "why_notable": "..."}
-  ],
-  "opportunities": [
-    {"title": "...", "description": "...", "priority": "high|medium|low", "evidence_refs": ["exact canonical_ref value"]}
-  ],
-  "is_noise": false
-}
-
-Definitions:
-- group_type:
-  * board_peers = board members, investors, senior industry peers, C-suite of other companies
-  * management = colleagues, managers, direct reports, internal project teams
-  * employees = subordinates, field staff, workers — groups where executive has authority
-  * community = industry associations, alumni, large networking groups, trade bodies, social groups
-  * unknown = can't determine
-
-- my_role (based on ${myPct}% participation):
-  * active_leader = >30% messages, sets agenda, takes decisions
-  * active_participant = 15-30%, regular contributor
-  * occasional_contributor = 5-15%, chimes in when needed
-  * status_receiver = 1-5%, mostly reading updates, low direct responsibility
-  * passive_observer = <1%, monitoring only
-
-- notable_contacts: Only populate if group_type is "community" OR if there are 1-2 specific people worth connecting with directly. Empty array otherwise.
-
-- opportunities: Missed business/relationship opportunities visible in the chat. Only real, specific opportunities — not generic advice. Every opportunity must cite at least one exact canonical_ref from a supporting message; omit opportunities without direct support. For community groups especially look hard for: business leads, introductions offered, market intelligence, events mentioned. Empty array if none.
-
-- communication_advice:
-  * For board_peers: strategic, concise, agenda-focused
-  * For management: collaborative but directive when needed
-  * For employees: clear directives, motivation, accountability
-  * For community: selective engagement, add value not noise, mine for contacts
-  * If my_role is status_receiver/passive_observer: note that direct engagement may not be expected but flag if there are moments where input would add value
-
-- is_noise: true only for spam/broadcast/automated groups with no real human conversation`
-
-    const result = await createStructured({
-      profile: 'bulk_structured',
-      task_type: 'relationship_group_extract_json',
-      workflow_name: 'relationship_analysis',
-      max_tokens: 2048,
-      messages: [{ role: 'user', content: prompt }],
-    })
-
-    const allowedRefs = new Set(messages.map(message => String(message.source_id || '')).filter(Boolean))
-    const supportedOpportunities = (Array.isArray(result.opportunities) ? result.opportunities : [])
-      .map(opportunity => ({
-        ...opportunity,
-        evidence_refs: (Array.isArray(opportunity?.evidence_refs) ? opportunity.evidence_refs : [])
-          .map(String)
-          .filter(ref => allowedRefs.has(ref)),
-      }))
-      .filter(opportunity => opportunity.evidence_refs.length > 0)
-
-    return {
-      group_type:           result.group_type           || 'unknown',
-      my_role:              result.my_role              || 'unknown',
-      ai_summary:           result.ai_summary           || null,
-      key_topics:           Array.isArray(result.key_topics)        ? result.key_topics        : [],
-      communication_advice: result.communication_advice || null,
-      notable_contacts:     Array.isArray(result.notable_contacts)  ? result.notable_contacts  : [],
-      opportunities:        supportedOpportunities,
-      is_noise:             Boolean(result.is_noise),
-    }
-  } catch (err) {
-    console.error('[analyzer] analyzeGroup error:', err.message)
-    return { ...defaults, analysis_error: err.message }
-  }
+  const results = await analyzeGroups([{ group, messages }])
+  return results.get(String(group.wa_chat_id)) || defaults
 }
 
 /**
@@ -400,6 +477,9 @@ module.exports = {
   createStructured,
   analyzeDirectChatContact,
   analyzeGroup,
+  analyzeGroups,
+  batchGroupAnalysisInputs,
+  validateGroupAnalysisBatch,
   analyzeLimitlessParticipants,
   generateContactInsights,
 }

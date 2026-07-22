@@ -411,7 +411,15 @@ async function main() {
 
   // Run immediately on startup
   console.log('🏁 Starting initial analysis...\n')
-  await startAnalysis()
+  try {
+    await startAnalysis()
+  } catch (error) {
+    // A provider or model response failure must not terminate the long-lived
+    // worker. The supervisor can keep the process healthy while the next
+    // scheduled run retries with the current provider policy.
+    console.error(`❌ Initial analysis failed; keeping worker alive: ${error.message}`)
+    if (RUN_ONCE) throw error
+  }
 
   if (RUN_ONCE) {
     await db.end()

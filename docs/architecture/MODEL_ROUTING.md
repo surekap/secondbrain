@@ -17,10 +17,20 @@ live provider registry and absent from automatic profiles because a quota
 failure must not load a multi-gigabyte local model and degrade the ingestion
 host. Embeddings currently use remote Jina and do not require Ollama.
 
-Bulk and synthesis profiles fail closed when their exact OpenAI model is not
-available. Falling through to a materially different model would make the
-declared evaluation, cost, and quality policy untrue. Durable jobs retain their
-checkpoints and resume after credits or service health are restored.
+Bulk and synthesis profiles use the exact OpenAI routes above by default and
+fail closed when no per-agent provider priority has been saved. A saved
+per-agent priority is an explicit operator override: the runtime walks every
+enabled, funded provider in that order, skips quota failures and temporary
+provider failures, and uses the first provider that succeeds. This allows a
+durable job to continue through an OpenAI quota outage without silently
+changing the defaults for other agents.
+
+Profile effort options are sent only when the selected provider and model match
+the versioned route, because provider-specific reasoning parameters are not
+portable. Schema, evidence, lifecycle, and structural quality checks remain in
+force for every fallback model. The selected provider/model and profile are
+recorded in usage telemetry so an operator override remains observable and can
+be evaluated before any fallback becomes a new default.
 
 Every model output remains a derived assertion. Models never establish source
 identity, mutate raw evidence, bypass schema validation, or surface an item

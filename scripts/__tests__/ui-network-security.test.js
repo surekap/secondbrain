@@ -10,7 +10,7 @@ const {
   isSameOriginMutation,
   secureTokenEqual,
 } = require('../../packages/agents/shared/http-security')
-const { restartDelayMs } = require('../../packages/ui/services/agent-runtime-store')
+const { AgentRuntimeStore, restartDelayMs } = require('../../packages/ui/services/agent-runtime-store')
 
 const repo = path.resolve(__dirname, '../..')
 const serverSource = fs.readFileSync(path.join(repo, 'packages/ui/server.js'), 'utf8')
@@ -66,6 +66,52 @@ test('core-agent restart delay is capped exponential backoff', () => {
   assert.equal(restartDelayMs(2), 10_000)
   assert.equal(restartDelayMs(7), 300_000)
   assert.equal(restartDelayMs(20), 300_000)
+})
+
+test('startup failures do not reset backoff from a stale successful start', async () => {
+  const db = {
+    async query(_sql, params) {
+      return { rows: [{
+        agent_id: params[0],
+        desired_state: 'running',
+        consecutive_failures: params[1],
+        restart_count: 1,
+        last_started_at: new Date('2026-01-01T00:00:00Z'),
+        next_restart_at: params[5],
+      }] }
+    },
+  }
+  const store = new AgentRuntimeStore(db)
+  store.cache.set('projects', {
+    agent_id: 'projects',
+    desired_state: 'running',
+    consecutive_failures: 3,
+    last_started_at: new Date('2026-01-01T00:00:00Z'),
+  })
+
+  const state = await store.markFailure('projects', {
+    error: 'preflight failed',
+    now: new Date('2026-01-02T00:00:00Z'),
+    resetAfterStableRun: false,
+  })
+
+  assert.equal(state.consecutive_failures, 4)
+  assert.equal(new Date(state.next_restart_at).getTime(), new Date('2026-01-02T00:00:00Z').getTime() + 40_000)
+})
+
+test('agents UI exposes provider priority and profile health', () => {
+  assert.match(agentsPage, /Provider priority/)
+  assert.match(agentsPage, /llm-status/)
+  assert.match(agentsPage, /LLM_PRIORITY_AGENT_IDS = new Set\(\['relationships', 'projects', 'intelligence', 'research'\]\)/)
+  assert.doesNotMatch(agentsPage, /LLM_PRIORITY_AGENT_IDS = new Set\([^\n]*'limitless'/)
+  assert.match(serverSource, /Blocked: no eligible provider/)
+})
+
+test('agents UI hides empty config tabs and renders importer configuration', () => {
+  assert.match(agentsPage, /CONFIGURABLE_AGENT_IDS = new Set\(\['email', 'limitless', 'research', 'whatsapp', 'openai', 'gemini'\]\)/)
+  assert.match(agentsPage, /tabsForAgent\(id\)\.map/)
+  assert.match(agentsPage, /<AiImporterConfigForm agentId=\{id\}/)
+  assert.doesNotMatch(agentsPage, /No configurable options for this agent/)
 })
 
 test('durable supervisor state is schema-owned and wired into lifecycle routes', () => {
