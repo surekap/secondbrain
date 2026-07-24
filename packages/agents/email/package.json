@@ -14,7 +14,7 @@
         "@secondbrain/telemetry": "*",
         "dotenv": "^16.0.0",
         "imapflow": "^1.4.2",
-        "mailparser": "^3.9.11",
+        "mailparser": "^3.9.14",
         "node-cron": "^4.1.0"
     }
 }
