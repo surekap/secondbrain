@@ -397,22 +397,28 @@ function detectCrossChannelProjectSignals(input = {}) {
         const projectLabel = useGroupDerivedProject ? groupDerivedProjectLabel(group, relevantDms) : project.name
         const sourcePrefix = useGroupDerivedProject ? 'cross_channel_group_project' : 'cross_channel_project'
         const projectRef = useGroupDerivedProject ? 'group-derived' : project.id
+        // A project-backed action belongs in the project surface. A group-derived
+        // relationship cue has weaker decision value and must not masquerade as an
+        // urgent operational task simply because it crossed two chats.
+        const opportunityType = useGroupDerivedProject ? 'relationship_health' : 'project_match'
+        const priority = useGroupDerivedProject ? 'medium' : 'high'
+        const expectedValueScore = useGroupDerivedProject ? 50 : 78
         const title = `${projectLabel}: direct follow-up with ${contactName} from ${group.name || group.wa_chat_id}`
         if (isLowValueAdminCandidate({ projectLabel, group, relevantDms, contact })) continue
         if (isLowValueSocialGroup(group, knownGroupDerived)) continue
         if (isLowValueSocialCandidate({ relevantDms })) continue
         out.push({
-          opportunity_type: 'meeting_action',
+          opportunity_type: opportunityType,
           title: compactText(title, 180),
           description: compactText(`Project appears active in WhatsApp group "${group.name || group.wa_chat_id}" and related direct conversation with ${contactName} contains actionable/pending language: ${relevantDms.map(x => `“${compactText(x.text, 180)}”`).join(' | ')}`, 1000),
           recommended_next_action: compactText(`Review the group context and direct chat with ${contactName}; convert the pending project item into owner/date/next message or dismiss if already closed.`, 260),
           why_now: latest ? `Cross-channel evidence last seen ${latest}: group project context plus direct actionable DM.` : 'Cross-channel group + direct-chat evidence found for an active project.',
-          priority: 'high',
+          priority,
           confidence: Math.min(0.9, 0.62 + pgScore * 0.15 + relevantDms[0].score * 0.2),
-          impact_score: 78,
-          urgency_score: 76,
+          impact_score: expectedValueScore,
+          urgency_score: useGroupDerivedProject ? 50 : 76,
           relationship_score: 72,
-          expected_value_score: 78,
+          expected_value_score: expectedValueScore,
           source_system: 'signals',
           source_ref: `${sourcePrefix}:${projectRef}:${group.id || group.wa_chat_id}:${contact.id}`,
           dedupe_key: `${sourcePrefix}:${projectRef}:${group.id || group.wa_chat_id}:${contact.id}`,

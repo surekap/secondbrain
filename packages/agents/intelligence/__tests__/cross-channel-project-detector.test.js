@@ -45,7 +45,7 @@ test('detects project work spanning WhatsApp group and direct member chat', () =
   assert.equal(opportunities.length, 1)
   assert.equal(opportunities[0].primary_project_id, 42)
   assert.equal(opportunities[0].primary_contact_id, 99)
-  assert.equal(opportunities[0].opportunity_type, 'meeting_action')
+  assert.equal(opportunities[0].opportunity_type, 'project_match')
   assert.match(opportunities[0].description, /direct conversation/i)
   assert.ok(opportunities[0].evidence.length >= 1)
   assert.ok(opportunities[0].evidence.every(item => item.source_table === 'relationships.communications'))
@@ -93,6 +93,9 @@ test('keeps only the best project candidate per group/contact pair', () => {
   assert.equal(opportunities[0].primary_project_id, null)
   assert.match(opportunities[0].title, /relationship workflow/i)
   assert.equal(opportunities[0].metadata.used_group_derived_project, true)
+  assert.equal(opportunities[0].opportunity_type, 'relationship_health')
+  assert.equal(opportunities[0].priority, 'medium')
+  assert.equal(opportunities[0].expected_value_score, 50)
 })
 
 test('does not force YPO GIC evidence into unrelated HR project names', () => {
