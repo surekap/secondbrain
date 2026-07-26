@@ -37,6 +37,8 @@ test('attention-scoring: penalizes low-value admin, generic next actions, and mi
 
   assert.match(schema, /evidence_count = 0 THEN 45 WHEN evidence_count = 1 THEN 60/, 'single-evidence items should be suppressed below corroborated attention items');
   assert.match(schema, /why_now IS NULL OR NULLIF\(TRIM\(COALESCE\(why_now, ''\)\), ''\) IS NULL THEN 35/, 'missing why-now should receive a strong penalty');
+  assert.match(schema, /attention_text LIKE '%visa%'/, 'visa administration should be flagged before it can enter attention');
+  assert.match(schema, /attention_text LIKE '%otp%'/, 'credential/OTP administration should be flagged before it can enter attention');
   assert.match(schema, /THEN 'low_value_admin'/, 'low-value admin items should be flagged');
   assert.match(schema, /THEN 18 ELSE 0 END/, 'generic next actions should receive a penalty');
   assert.match(schema, /assign an owner to validate the clustered risk/, 'generic cluster validation actions should be penalized');
