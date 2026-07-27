@@ -831,6 +831,7 @@ WITH scored_inputs AS (
                OR action_text LIKE '%save a research task%'
                OR action_text LIKE '%assign an owner to validate the clustered risk%'
                OR action_text LIKE '%review the clustered signals%'
+               OR action_text LIKE '%review the group context and direct chat with%'
                OR action_text LIKE '%either convert to one concrete action or dismiss%'
              THEN 18 ELSE 0 END
       - CASE WHEN (
@@ -895,6 +896,7 @@ WITH scored_inputs AS (
              OR action_text LIKE '%save a research task%'
              OR action_text LIKE '%assign an owner to validate the clustered risk%'
              OR action_text LIKE '%review the clustered signals%'
+             OR action_text LIKE '%review the group context and direct chat with%'
              OR action_text LIKE '%either convert to one concrete action or dismiss%'
            THEN 'generic_next_action' END,
       CASE WHEN (
@@ -972,6 +974,7 @@ WHERE duplicate_rank = 1
   AND attention_score >= 20
   AND NOT ('no_evidence' = ANY(quality_flags))
   AND NOT ('low_value_admin' = ANY(quality_flags))
+  AND NOT ('generic_next_action' = ANY(quality_flags))
 ORDER BY
   attention_score DESC NULLS LAST,
   CASE priority WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END,

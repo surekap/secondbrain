@@ -43,6 +43,7 @@ test('attention-scoring: penalizes low-value admin, generic next actions, and mi
   assert.match(schema, /THEN 18 ELSE 0 END/, 'generic next actions should receive a penalty');
   assert.match(schema, /assign an owner to validate the clustered risk/, 'generic cluster validation actions should be penalized');
   assert.match(schema, /review the clustered signals/, 'generic cluster review actions should be penalized');
+  assert.match(schema, /review the group context and direct chat with/, 'cross-channel review templates should be penalized rather than presented as actions');
   assert.match(schema, /THEN 'generic_next_action'/, 'generic next actions should be flagged');
   assert.match(schema, /THEN 'missing_why_now'/, 'items with no why-now should be flagged');
 });
