@@ -111,6 +111,8 @@ function evaluateSmoke(snapshot, opts = {}) {
   const warnings = []
   const minIndexedProgress = opts.minIndexedProgress ?? 1
   const topN = opts.topN ?? 10
+  const nowMs = Date.parse(opts.now || new Date().toISOString())
+  const whatsappStaleAfterMs = opts.whatsappStaleAfterMs ?? (48 * 60 * 60 * 1000)
 
   for (const endpoint of snapshot.endpoints || []) {
     if (!endpoint.ok) failures.push(`endpoint ${endpoint.name || endpoint.path} failed (${endpoint.status || endpoint.error || 'unknown'})`)
@@ -121,6 +123,17 @@ function evaluateSmoke(snapshot, opts = {}) {
     const agent = agents[id]
     if (!agent) failures.push(`agent ${id} missing`)
     else if (agent.status !== 'running' || !agent.pid) failures.push(`agent ${id} not running (status=${agent.status}, pid=${agent.pid})`)
+  }
+  const whatsapp = agents.whatsapp
+  if (whatsapp?.status === 'running' && whatsapp.pid) {
+    const lastMessageAt = whatsapp.stats?.last_message_at
+    const lastMessageMs = Date.parse(lastMessageAt || '')
+    if (!Number.isFinite(lastMessageMs)) {
+      failures.push('WhatsApp message ingestion has no valid last_message_at timestamp')
+    } else if (Number.isFinite(nowMs) && nowMs - lastMessageMs > whatsappStaleAfterMs) {
+      const staleHours = Math.floor((nowMs - lastMessageMs) / (60 * 60 * 1000))
+      failures.push(`WhatsApp message ingestion stale (${staleHours}h since last message at ${lastMessageAt})`)
+    }
   }
   const apple = agents['apple-contacts']
   if (apple && apple.status !== 'running' && apple.status !== 'idle') warnings.push('apple-contacts is not running; acceptable only if recently synced')

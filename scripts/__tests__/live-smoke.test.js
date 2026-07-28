@@ -90,6 +90,31 @@ test('evaluateSmoke fails when contact tier summary contains unknown tier bucket
   assert.ok(result.failures.some(f => f.includes('unknown contact tier bucket')))
 })
 
+test('evaluateSmoke fails when WhatsApp reports running but message ingestion is stale', () => {
+  const snapshot = {
+    endpoints: [{ name: 'api_agents', ok: true }],
+    agents: {
+      email: { status: 'running', pid: 1 },
+      whatsapp: { status: 'running', pid: 2, stats: { last_message_at: '2026-07-23T07:35:49.446Z' } },
+      relationships: { status: 'running', pid: 3 },
+      projects: { status: 'running', pid: 4 },
+      limitless: { status: 'running', pid: 5 },
+      research: { status: 'running', pid: 6 },
+    },
+    searchStats: { indexer: { lastRunError: null }, sources: [{ indexed: 1, pending: 0 }] },
+    graphSummary: { organizations: 1, topics: 1, object_topics: 1, tiered_contacts: 10, contacts_with_next_touch: 1 },
+    contactTiersSummary: { by_tier: [] },
+    signalsSummary: { total: 1 },
+    attentionItems: [{ title: 'Useful item', recommended_next_action: 'Ask Rahul for confirmation by Friday.', evidence_count: 2, why_now: 'Recent evidence.' }],
+    cronJobs: [],
+  }
+
+  const result = evaluateSmoke(snapshot, { topN: 1, now: '2026-07-28T04:45:46.415Z' })
+
+  assert.equal(result.ok, false)
+  assert.ok(result.failures.some(f => f.includes('WhatsApp message ingestion stale')))
+})
+
 test('evaluateSmoke fails when core services are down or attention quality is below gate', () => {
   const snapshot = {
     endpoints: [
