@@ -115,6 +115,13 @@ function isLowValueSocialCandidate({ relevantDms }) {
   return SOCIAL_NOISE_PATTERNS.some(pattern => pattern.test(directText))
 }
 
+function isMembershipAdministrationCandidate({ relevantDms }) {
+  const directText = (relevantDms || []).map(x => x.text || '').join(' ').toLowerCase()
+  if (!directText) return false
+  return /\b(membership|secondary member|join as secondary|how to apply|application process|member application)\b/i.test(directText)
+    && !/\b(introduc(?:e|tion)|warm intro|customer lead|commercial lead|partnership|investment|capital)\b/i.test(directText)
+}
+
 function isLowValueSocialGroup(group = {}, knownGroupDerived = false) {
   if (knownGroupDerived) return false
   const text = groupText(group).toLowerCase()
@@ -405,6 +412,7 @@ function detectCrossChannelProjectSignals(input = {}) {
         const expectedValueScore = useGroupDerivedProject ? 50 : 78
         const title = `${projectLabel}: direct follow-up with ${contactName} from ${group.name || group.wa_chat_id}`
         if (isLowValueAdminCandidate({ projectLabel, group, relevantDms, contact })) continue
+        if (useGroupDerivedProject && isMembershipAdministrationCandidate({ relevantDms })) continue
         if (isLowValueSocialGroup(group, knownGroupDerived)) continue
         if (isLowValueSocialCandidate({ relevantDms })) continue
         out.push({

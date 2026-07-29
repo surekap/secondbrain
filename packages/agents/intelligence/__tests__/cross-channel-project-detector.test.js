@@ -65,7 +65,7 @@ test('uses group context to connect direct tasks whose wording differs from proj
   assert.equal(opportunities[0].primary_contact_id, 10)
 })
 
-test('maps a named group message to a contact even when WhatsApp participant id is an unmapped LID', () => {
+test('does not turn an unmapped-LID group mention plus membership administration into a relationship action', () => {
   const opportunities = detectCrossChannelProjectSignals({
     projects: [{ id: 16, name: 'YPO Business Corridor', description: 'YPO introductions and business corridor networking' }],
     groups: [{ id: 17, wa_chat_id: 'ypo@g.us', name: 'YPO India Business Corridor', ai_summary: 'Members request business introductions, owner connects, YPO GIC referrals and project leads' }],
@@ -73,12 +73,10 @@ test('maps a named group message to a contact even when WhatsApp participant id 
     groupMessages: [{ chat_id: 'ypo@g.us', participant: '39522305876204@lid', body: 'Hi any lead / contact with Mokobara owners / management ? Rgds Vivek Gupta YPO GIC' }],
     directMessages: [{ contact_id: 85, chat_id: '919820722245@c.us', body: 'Process for a YPO BOM member to join as secondary member of GIC. How to apply' }],
   })
-  assert.equal(opportunities.length, 1)
-  assert.equal(opportunities[0].primary_contact_id, 85)
-  assert.match(opportunities[0].description, /Vivek Gupta|YPO/i)
+  assert.equal(opportunities.length, 0)
 })
 
-test('keeps only the best project candidate per group/contact pair', () => {
+test('keeps only the best actionable introduction candidate per group/contact pair', () => {
   const opportunities = detectCrossChannelProjectSignals({
     projects: [
       { id: 1, name: 'Generic YPO Project', description: 'YPO member networking' },
@@ -87,15 +85,15 @@ test('keeps only the best project candidate per group/contact pair', () => {
     groups: [{ id: 17, wa_chat_id: 'ypo@g.us', name: 'YPO India Business Corridor', ai_summary: 'Members request business introductions, owner connects, YPO GIC referrals and project leads' }],
     contacts: [{ id: 85, display_name: 'Vivek Gupta', wa_jids: ['919820722245@c.us'] }],
     groupMessages: [{ chat_id: 'ypo@g.us', participant: '39522305876204@lid', body: 'Hi any lead / contact with Mokobara owners / management ? Rgds Vivek Gupta YPO GIC' }],
-    directMessages: [{ contact_id: 85, chat_id: '919820722245@c.us', body: 'Process for a YPO BOM member to join as secondary member of GIC. How to apply' }],
+    directMessages: [{ contact_id: 85, chat_id: '919820722245@c.us', body: 'Can you introduce me to a Mokobara owner today? I have a concrete commercial lead to discuss.' }],
   })
   assert.equal(opportunities.length, 1)
-  assert.equal(opportunities[0].primary_project_id, null)
-  assert.match(opportunities[0].title, /relationship workflow/i)
-  assert.equal(opportunities[0].metadata.used_group_derived_project, true)
-  assert.equal(opportunities[0].opportunity_type, 'relationship_health')
-  assert.equal(opportunities[0].priority, 'medium')
-  assert.equal(opportunities[0].expected_value_score, 50)
+  assert.equal(opportunities[0].primary_project_id, 2)
+  assert.match(opportunities[0].title, /ypo business corridor/i)
+  assert.equal(opportunities[0].metadata.used_group_derived_project, false)
+  assert.equal(opportunities[0].opportunity_type, 'project_match')
+  assert.equal(opportunities[0].priority, 'high')
+  assert.equal(opportunities[0].expected_value_score, 78)
 })
 
 test('does not force YPO GIC evidence into unrelated HR project names', () => {
