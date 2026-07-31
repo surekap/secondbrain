@@ -236,6 +236,32 @@ test('does not promote Radhika Pitti / CA Toppers banter into a project join', (
   assert.equal(opportunities.length, 0)
 })
 
+test('does not promote generic committee acknowledgements as a relationship workflow', () => {
+  const opportunities = detectCrossChannelProjectSignals({
+    projects: [{ id: 91, name: 'YPO Governance', description: 'YPO committee coordination and membership administration' }],
+    groups: [{
+      id: 201,
+      wa_chat_id: 'ypo-excom@g.us',
+      name: 'YPO GIC Excom 2026-2027',
+      ai_summary: 'Committee discusses annual subscriptions, learning budget, investment committee policy, and member administration.',
+    }],
+    contacts: [{ id: 301, display_name: 'Anand Shah YPO GIC', relationship_tier: 'tier_1', strategic_importance_score: 81, wa_jids: ['919111111111@c.us'] }],
+    groupMessages: [{
+      chat_id: 'ypo-excom@g.us',
+      participant: '919111111111@c.us',
+      body: 'We need to keep learning budget to 6 crore. Please check with Siddhart.',
+      ts: '2026-07-20T12:30:00Z',
+    }],
+    directMessages: [{
+      contact_id: 301,
+      chat_id: '919111111111@c.us',
+      body: 'Ok. No problem. I will do it.',
+      ts: '2026-07-20T12:49:00Z',
+    }],
+  })
+  assert.equal(opportunities.length, 0)
+})
+
 test('uses longer adjacent context to keep real project follow-ups alive', () => {
   const opportunities = detectCrossChannelProjectSignals({
     projects: [{ id: 64, name: 'Real Estate and Investment Review', description: 'Review and evaluation of real estate investment opportunities including Dubai property and investment strategy discussions.' }],

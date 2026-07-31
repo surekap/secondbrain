@@ -122,6 +122,18 @@ function isMembershipAdministrationCandidate({ relevantDms }) {
     && !/\b(introduc(?:e|tion)|warm intro|customer lead|commercial lead|partnership|investment|capital)\b/i.test(directText)
 }
 
+function isGenericCommitteeAcknowledgement({ group, relevantDms }) {
+  const groupContext = groupText(group).toLowerCase()
+  const committeeAdmin = /\b(excom|committee|membership|annual subscription|learning budget|governance)\b/i.test(groupContext)
+  if (!committeeAdmin) return false
+  const directMessages = (relevantDms || []).map(x => compactText(x.text, 240).toLowerCase()).filter(Boolean)
+  if (!directMessages.length) return false
+  return directMessages.every(text => (
+    /^(?:ok|okay|yes|sure|noted|on call|will do|i will do it|no problem)[!.\s]*$/.test(text)
+    || /^(?:ok|okay|yes|sure|noted)[,.!\s]*(?:no problem[,.!\s]*)?(?:i )?will do (?:it|this)[.!\s]*$/.test(text)
+  ))
+}
+
 function isLowValueSocialGroup(group = {}, knownGroupDerived = false) {
   if (knownGroupDerived) return false
   const text = groupText(group).toLowerCase()
@@ -413,6 +425,7 @@ function detectCrossChannelProjectSignals(input = {}) {
         const title = `${projectLabel}: direct follow-up with ${contactName} from ${group.name || group.wa_chat_id}`
         if (isLowValueAdminCandidate({ projectLabel, group, relevantDms, contact })) continue
         if (useGroupDerivedProject && isMembershipAdministrationCandidate({ relevantDms })) continue
+        if (useGroupDerivedProject && isGenericCommitteeAcknowledgement({ group, relevantDms })) continue
         if (isLowValueSocialGroup(group, knownGroupDerived)) continue
         if (isLowValueSocialCandidate({ relevantDms })) continue
         out.push({
