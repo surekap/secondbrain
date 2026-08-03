@@ -262,6 +262,32 @@ test('does not promote generic committee acknowledgements as a relationship work
   assert.equal(opportunities.length, 0)
 })
 
+test('does not promote generic committee coordination into a relationship workflow', () => {
+  const opportunities = detectCrossChannelProjectSignals({
+    projects: [{ id: 92, name: 'YPO Governance', description: 'YPO committee coordination and member administration' }],
+    groups: [{
+      id: 202,
+      wa_chat_id: 'ypo-company-formation@g.us',
+      name: 'GIC company formation committee',
+      ai_summary: 'YPO GIC committee coordinating company-formation administration and member roster approvals.',
+    }],
+    contacts: [{ id: 302, display_name: 'Anand Shah YPO GIC', relationship_tier: 'tier_1', strategic_importance_score: 81, wa_jids: ['919111111111@c.us'] }],
+    groupMessages: [{
+      chat_id: 'ypo-company-formation@g.us',
+      participant: '919111111111@c.us',
+      body: 'Please confirm the committee roster before the next YPO GIC meeting.',
+      ts: '2026-07-21T12:30:00Z',
+    }],
+    directMessages: [{
+      contact_id: 302,
+      chat_id: '919111111111@c.us',
+      body: 'Need your approval for the committee roster.',
+      ts: '2026-07-21T12:49:00Z',
+    }],
+  })
+  assert.equal(opportunities.length, 0)
+})
+
 test('uses longer adjacent context to keep real project follow-ups alive', () => {
   const opportunities = detectCrossChannelProjectSignals({
     projects: [{ id: 64, name: 'Real Estate and Investment Review', description: 'Review and evaluation of real estate investment opportunities including Dubai property and investment strategy discussions.' }],

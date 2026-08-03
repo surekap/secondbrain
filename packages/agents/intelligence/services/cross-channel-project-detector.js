@@ -134,6 +134,15 @@ function isGenericCommitteeAcknowledgement({ group, relevantDms }) {
   ))
 }
 
+function isGenericCommitteeAdministrationCandidate({ group, relevantDms }) {
+  const groupContext = groupText(group).toLowerCase()
+  if (!/\b(excom|committee|membership|member roster|governance)\b/i.test(groupContext)) return false
+  const directText = (relevantDms || []).map(x => compactText(x.text, 500)).join(' ').toLowerCase()
+  if (!directText) return false
+  if (STRATEGIC_PATTERNS.some(pattern => pattern.test(directText))) return false
+  return /\b(roster|membership|member|committee|approval|meeting|coordination|admin(?:istration)?)\b/i.test(directText)
+}
+
 function isLowValueSocialGroup(group = {}, knownGroupDerived = false) {
   if (knownGroupDerived) return false
   const text = groupText(group).toLowerCase()
@@ -426,6 +435,7 @@ function detectCrossChannelProjectSignals(input = {}) {
         if (isLowValueAdminCandidate({ projectLabel, group, relevantDms, contact })) continue
         if (useGroupDerivedProject && isMembershipAdministrationCandidate({ relevantDms })) continue
         if (useGroupDerivedProject && isGenericCommitteeAcknowledgement({ group, relevantDms })) continue
+        if (useGroupDerivedProject && isGenericCommitteeAdministrationCandidate({ group, relevantDms })) continue
         if (isLowValueSocialGroup(group, knownGroupDerived)) continue
         if (isLowValueSocialCandidate({ relevantDms })) continue
         out.push({
