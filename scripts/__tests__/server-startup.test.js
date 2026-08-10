@@ -79,6 +79,23 @@ test('startup failure is handled and terminates with a nonzero status', async ()
   assert.deepEqual(exits, [1])
 })
 
+test('startup failure logs a useful aggregate connection error without serializing credentials', async () => {
+  const errors = []
+  const failure = Object.assign(new AggregateError([
+    Object.assign(new Error('connect ECONNREFUSED postgresql://user:secret@127.0.0.1:5432/secondbrain'), { code: 'ECONNREFUSED' }),
+  ]), { code: 'ECONNREFUSED' })
+
+  await terminateOnStartupFailure(Promise.reject(failure), {
+    logger: { error: (...args) => errors.push(args) },
+    exit: () => {},
+  })
+
+  assert.deepEqual(errors, [[
+    '[server] startup failed:',
+    'AggregateError (code=ECONNREFUSED; causes=Error: connect ECONNREFUSED postgresql://[REDACTED]@127.0.0.1:5432/secondbrain [code=ECONNREFUSED])',
+  ]])
+})
+
 test('successful startup preserves initialization order', async () => {
   const { calls, dependencies } = startupDependencies()
 
